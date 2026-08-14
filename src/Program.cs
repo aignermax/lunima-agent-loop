@@ -40,8 +40,11 @@ try
     var config = LoopConfig.Load(configPath);
     var state = new StateStore(Path.Combine(root, "state", "state.json"));
     var gh = new GitHubClient(config.GitHubRepo);
-    var kimi = await KimiRunner.CreateAsync();
-    var loop = new LoopOrchestrator(config, root, gh, state, kimi);
+    IAgentRunner worker = await KimiRunner.CreateAsync();
+    IAgentRunner owner = config.OwnerRunner.Equals("claude", StringComparison.OrdinalIgnoreCase)
+        ? await ClaudeRunner.CreateAsync()
+        : worker;
+    var loop = new LoopOrchestrator(config, root, gh, state, worker, owner);
 
     return command switch
     {

@@ -20,15 +20,18 @@ public sealed class LoopOrchestrator
     private readonly string _rootDir;
     private readonly GitHubClient _gh;
     private readonly StateStore _state;
-    private readonly KimiRunner _kimi;
+    private readonly IAgentRunner _worker;
+    private readonly IAgentRunner _owner;
 
-    public LoopOrchestrator(LoopConfig config, string rootDir, GitHubClient gh, StateStore state, KimiRunner kimi)
+    public LoopOrchestrator(LoopConfig config, string rootDir, GitHubClient gh, StateStore state,
+                            IAgentRunner worker, IAgentRunner owner)
     {
         _config = config;
         _rootDir = rootDir;
         _gh = gh;
         _state = state;
-        _kimi = kimi;
+        _worker = worker;
+        _owner = owner;
     }
 
     private string LogsDir => Path.Combine(_rootDir, "logs");
@@ -181,7 +184,7 @@ public sealed class LoopOrchestrator
                 "Every rule in that file is binding. Work fully autonomously until the task is done or clearly blocked.";
 
             var sw = Stopwatch.StartNew();
-            var result = await _kimi.RunAsync(_config.WorkerModel, shortPrompt, _config.ClonePath, logFile, _config.WorkerTimeoutMinutes);
+            var result = await _worker.RunAsync(_config.WorkerModel, shortPrompt, _config.ClonePath, logFile, _config.WorkerTimeoutMinutes);
             sw.Stop();
 
             _state.Today().Tasks++;
@@ -230,7 +233,7 @@ public sealed class LoopOrchestrator
             "Every rule in that file is binding. Work fully autonomously.";
 
         var sw = Stopwatch.StartNew();
-        var result = await _kimi.RunAsync(_config.OwnerModel, shortPrompt, _config.ClonePath, logFile, _config.OwnerTimeoutMinutes);
+        var result = await _owner.RunAsync(_config.OwnerModel, shortPrompt, _config.ClonePath, logFile, _config.OwnerTimeoutMinutes);
         sw.Stop();
 
         _state.Today().OwnerRuns++;

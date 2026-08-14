@@ -13,6 +13,9 @@ public sealed class LoopConfig
     public int OwnerIntervalMinutes { get; set; } = 60;
     public string WorkerModel { get; set; } = "moonshot-ai/kimi-k2.7-code";
     public string OwnerModel { get; set; } = "moonshot-ai/kimi-k3";
+    /// <summary>CLI for the Product-Owner pass: "kimi" or "claude". Claude gives the PO
+    /// premium model quality plus built-in web research (product-market-fit work).</summary>
+    public string OwnerRunner { get; set; } = "kimi";
     public int WorkerTimeoutMinutes { get; set; } = 120;
     public int OwnerTimeoutMinutes { get; set; } = 60;
     public string TaskLabel { get; set; } = "agent-task";
