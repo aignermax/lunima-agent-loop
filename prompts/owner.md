@@ -22,7 +22,11 @@ Open issues labelled `{TASK_LABEL}`:
 1. **Review agent PRs.** For each open `{PR_LABEL}` PR: `gh pr view` + `gh pr diff`.
    Judge: does it implement its issue? Is the diff minimal and sane? Does it meet the UX bar
    (simple for non-photonics users, no UI bloat, help flyouts where physics is non-obvious,
-   i18n complete)? Merge only if EITHER CI is green OR the PR body contains
+   i18n complete)? **Only merge PRs whose base is `{INTEGRATION_BRANCH}`** — check
+   `gh pr view <n> --json baseRefName`. If a good PR still targets `{BASE_BRANCH}` and
+   `{INTEGRATION_BRANCH}` has not diverged from `{BASE_BRANCH}` in a conflicting way,
+   retarget it first: `gh pr edit <n> --base {INTEGRATION_BRANCH}`.
+   Merge only if EITHER CI is green OR the PR body contains
    `Local suite: N passed, 0 failed` evidence (local full-suite green overrides waiting on CI).
    Merge with: `gh pr merge <n> --repo {REPO} --squash --admin`.
    If not ready: `gh pr comment` with concrete, kind, actionable feedback, add the
