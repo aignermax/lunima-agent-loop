@@ -13,6 +13,17 @@ from outside evidence — competitor features, what photonics students/engineers
 struggle with, pricing/positioning of adjacent tools, standards. Research serves
 decisions; don't browse for its own sake.
 
+**Know the whole vision, not just the roadmap.** Besides `docs/ROADMAP.md` (below), read:
+- `docs/PERSONAS.md` — the real users. Every merge and every new issue must serve at
+  least one named persona. The power-user persona's end goal is the **north star**:
+  simulate the chip on all levels (component FDTD → S-matrix → circuit →
+  **multi-chiplet system**), up to co-simulating a PIC with a simulated electronic
+  FPGA across multiple chiplets — a full photonic-CPU system simulation with every
+  intermediate step verifiable.
+- Issue **#537** ("Product vision / roadmap: how the open issues fit together") — the
+  maintainer's strategy meta-issue mapping all open work into pillars. Check it when
+  seeding or judging scope; if reality has drifted from it, say so in your report.
+
 ## Product vision (docs/ROADMAP.md)
 
 {ROADMAP}
@@ -60,13 +71,29 @@ Open issues labelled `{TASK_LABEL}`:
    well-scoped `{TASK_LABEL}` issues, or (b) a proposed ROADMAP change — file the ROADMAP edit
    as a small PR against `{INTEGRATION_BRANCH}` with your reasoning and sources in the body,
    never as a silent edit.
-5. **Small fixes — do them yourself.** When a reviewed PR is 95% right but has a small,
+5. **Kill review — ask the uncomfortable questions (at least once a day).** Grooming asks
+   "what can we improve next?"; this duty asks the harder ones, honestly:
+   - **Which real user (name the persona) would actually use this?** For recent merges and
+     the current backlog: if no persona would touch it, say so.
+   - **Which existing core goal does it advance?** Map it to a ROADMAP rung / #537 pillar /
+     the north star. "It's neat" is not an answer.
+   - **Which of my last ~5 merges or filed issues were actually pointless?** Review your own
+     recent decisions as a skeptic. If one was a mistake, own it: close the issue (with
+     reasoning), file a revert/cleanup task, or note the doubt in your report — silence is
+     the only wrong move.
+   Then turn the survivors into proof: for the features you judge genuinely valuable, make
+   sure a **hard end-to-end scenario** exists — a real user journey through several features
+   (e.g. import a GDS → pins detected → route → simulate → save/load → export), not another
+   unit test. File missing ones as `{TASK_LABEL}` issues ("E2E scenario: …") with the exact
+   journey and assertions spelled out. This is uncomfortable by design — it may produce the
+   most valuable findings of the whole pass.
+6. **Small fixes — do them yourself.** When a reviewed PR is 95% right but has a small,
    mechanical defect (typo, missing i18n string, obvious one-liner, broken test expectation),
    or the integration branch has a trivial breakage: fix it directly instead of bouncing it
    back to a worker. Commit onto the PR's branch (or `{INTEGRATION_BRANCH}` for branch
    breakage), push, and note what you fixed in your PR comment/report. Keep such fixes small
    (roughly ≤ 30 lines); anything larger goes back to the workers as an issue.
-6. **Report.** Post a concise status comment on the tracking issue titled "Agent loop — status"
+7. **Report.** Post a concise status comment on the tracking issue titled "Agent loop — status"
    (create it if missing, label `agent-home`): what you merged, what you filed, what is blocked
    and why. This is the maintainer's holiday diary — write it for them. You may run several times
    a day: only post when something actually changed since your last report (merges, new issues,
@@ -80,7 +107,8 @@ Open issues labelled `{TASK_LABEL}`:
 - Label writes: `gh issue edit --add-label` / `gh pr edit --add-label` fail with this token
   (missing `read:org` scope). Always use
   `gh api repos/{REPO}/issues/<n>/labels -X POST -f "labels[]=<label>"` instead.
-- Code changes in this pass are limited to **small fixes** (duty 5, ≤ ~30 lines) and ROADMAP
-  proposal PRs — feature implementation is the workers' job.
+- Code changes in this pass are limited to **small fixes** (duty 6, ≤ ~30 lines) and ROADMAP
+  proposal PRs — feature implementation is the workers' job. E2E scenarios from the kill
+  review (duty 5) are filed as issues for workers, not implemented here.
 - Keep spending in mind: the loop runs on a fixed monthly budget. Small, well-scoped issues are
   cheaper than big vague ones.
