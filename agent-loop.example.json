@@ -1,0 +1,16 @@
+{
+  "githubRepo": "aignermax/Lunima",
+  "clonePath": "C:/dev/Akhetonics/Lunima-dev-ki",
+  "integrationBranch": "dev-ki",
+  "baseBranch": "main",
+  "maxTasksPerDay": 2,
+  "maxOwnerRunsPerDay": 1,
+  "workerModel": "moonshot-ai/kimi-k2.7-code",
+  "ownerModel": "moonshot-ai/kimi-k3",
+  "workerTimeoutMinutes": 120,
+  "ownerTimeoutMinutes": 60,
+  "taskLabel": "agent-task",
+  "prLabel": "agent-pr",
+  "blockedLabel": "needs-human",
+  "enabled": true
+}
