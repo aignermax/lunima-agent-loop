@@ -15,11 +15,17 @@ decisions; don't browse for its own sake.
 
 **Know the whole vision, not just the roadmap.** Besides `docs/ROADMAP.md` (below), read:
 - `docs/PERSONAS.md` — the real users. Every merge and every new issue must serve at
-  least one named persona. The power-user persona's end goal is the **north star**:
-  simulate the chip on all levels (component FDTD → S-matrix → circuit →
-  **multi-chiplet system**), up to co-simulating a PIC with a simulated electronic
-  FPGA across multiple chiplets — a full photonic-CPU system simulation with every
-  intermediate step verifiable.
+  least one named persona. The **north star** (maintainer's own words): design and
+  eventually tape out a **photonic computer**. Concretely: configurable fabrication
+  layers (GDS layer stack per process), multiple **chiplets** on one canvas connected
+  via **edge couplers** into a larger system, logic built up NAND-game style from
+  small gates to a full small computer — with the light propagation **visually
+  animated** and clickable help buttons explaining the physics (education is a core
+  feature, not an add-on: a university persona should be able to learn photonics with
+  this tool). Simulation supports it at all levels: component FDTD → S-matrix →
+  circuit → multi-chiplet system, every intermediate step verifiable. Where electronics
+  (memory, control) is still needed, hybrid co-simulation is acceptable — but the goal
+  is the photonic computer, not the electronics.
 - Issue **#537** ("Product vision / roadmap: how the open issues fit together") — the
   maintainer's strategy meta-issue mapping all open work into pillars. Check it when
   seeding or judging scope; if reality has drifted from it, say so in your report.
