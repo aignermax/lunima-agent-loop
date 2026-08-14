@@ -129,6 +129,7 @@ public sealed class LoopOrchestrator
         var openPrs = await _gh.ListOpenPrsAsync(_config.PrLabel);
         var candidates = issues
             .Where(i => !i.Labels.Contains(_config.BlockedLabel))
+            .Where(i => !i.Labels.Contains(_config.RunningLabel)) // claimed by a worker (maybe on another machine)
             .Where(i => !openPrs.Any(p => p.HeadRef.StartsWith($"agent/issue-{i.Number}-", StringComparison.Ordinal)))
             .OrderBy(i => i.CreatedAt)
             .Take(capacity)
@@ -151,41 +152,56 @@ public sealed class LoopOrchestrator
         Log($"Task: issue #{issue.Number} — {issue.Title}");
         Log($"Branch: {branch}");
 
-        await Git("fetch origin");
-        var checkout = await Git($"checkout -B {branch} origin/{_config.IntegrationBranch}");
-        if (checkout.ExitCode != 0)
+        // Claim the issue first: with the claim label visible in GitHub, no second machine starts the same work.
+        var claimed = await _gh.AddLabelAsync(issue.Number, _config.RunningLabel);
+        if (!claimed)
         {
-            Console.Error.WriteLine("Branch setup failed: " + checkout.StdErr);
-            _state.RecordRun(new RunRecord { Kind = "task", Issue = issue.Number, Branch = branch, ExitCode = checkout.ExitCode, Note = "branch setup failed" });
+            Log($"Could not claim issue #{issue.Number} — skipping (another machine may be on it).");
             return;
         }
 
-        var promptFile = Path.Combine(_config.ClonePath, ".agent-loop", $"task-{issue.Number}.md");
-        Directory.CreateDirectory(Path.GetDirectoryName(promptFile)!);
-        File.WriteAllText(promptFile, RenderWorkerPrompt(issue, branch));
-
-        var logFile = Path.Combine(LogsDir, $"{DateTime.Now:yyyy-MM-dd_HHmmss}_task-{issue.Number}.jsonl");
-        var shortPrompt =
-            $"Read the file .agent-loop/task-{issue.Number}.md in the current repository and execute it exactly. " +
-            "Every rule in that file is binding. Work fully autonomously until the task is done or clearly blocked.";
-
-        var sw = Stopwatch.StartNew();
-        var result = await _kimi.RunAsync(_config.WorkerModel, shortPrompt, _config.ClonePath, logFile, _config.WorkerTimeoutMinutes);
-        sw.Stop();
-
-        _state.Today().Tasks++;
-        _state.RecordRun(new RunRecord
+        try
         {
-            Kind = "task",
-            Issue = issue.Number,
-            Branch = branch,
-            ExitCode = result.ExitCode,
-            DurationSec = sw.Elapsed.TotalSeconds,
-            Note = result.TimedOut ? "timeout" : null,
-        });
+            await Git("fetch origin");
+            var checkout = await Git($"checkout -B {branch} origin/{_config.IntegrationBranch}");
+            if (checkout.ExitCode != 0)
+            {
+                Console.Error.WriteLine("Branch setup failed: " + checkout.StdErr);
+                _state.RecordRun(new RunRecord { Kind = "task", Issue = issue.Number, Branch = branch, ExitCode = checkout.ExitCode, Note = "branch setup failed" });
+                return;
+            }
 
-        Log($"Task #{issue.Number} finished: exit={result.ExitCode}{(result.TimedOut ? " (TIMEOUT)" : "")}, " +
-            $"{sw.Elapsed.TotalMinutes:F1} min, log: {logFile}");
+            var promptFile = Path.Combine(_config.ClonePath, ".agent-loop", $"task-{issue.Number}.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(promptFile)!);
+            File.WriteAllText(promptFile, RenderWorkerPrompt(issue, branch));
+
+            var logFile = Path.Combine(LogsDir, $"{DateTime.Now:yyyy-MM-dd_HHmmss}_task-{issue.Number}.jsonl");
+            var shortPrompt =
+                $"Read the file .agent-loop/task-{issue.Number}.md in the current repository and execute it exactly. " +
+                "Every rule in that file is binding. Work fully autonomously until the task is done or clearly blocked.";
+
+            var sw = Stopwatch.StartNew();
+            var result = await _kimi.RunAsync(_config.WorkerModel, shortPrompt, _config.ClonePath, logFile, _config.WorkerTimeoutMinutes);
+            sw.Stop();
+
+            _state.Today().Tasks++;
+            _state.RecordRun(new RunRecord
+            {
+                Kind = "task",
+                Issue = issue.Number,
+                Branch = branch,
+                ExitCode = result.ExitCode,
+                DurationSec = sw.Elapsed.TotalSeconds,
+                Note = result.TimedOut ? "timeout" : null,
+            });
+
+            Log($"Task #{issue.Number} finished: exit={result.ExitCode}{(result.TimedOut ? " (TIMEOUT)" : "")}, " +
+                $"{sw.Elapsed.TotalMinutes:F1} min, log: {logFile}");
+        }
+        finally
+        {
+            await _gh.RemoveLabelAsync(issue.Number, _config.RunningLabel);
+        }
     }
 
     public async Task<int> OwnAsync()

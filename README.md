@@ -23,6 +23,7 @@ lunima-agent-loop run                      ← stateless; state lives in GitHub 
         │     status report on the "Agent loop — status" tracking issue (only on changes)
         │
         └─ up to N/day: worker pass (kimi, worker model, one run per issue)
+              claim the issue (agent-running label) so no other machine starts it too
               branch agent/issue-<n>-<ts> from dev-ki
               .agent-loop/task-<n>.md = the work contract (prompts/worker.md)
               kimi -p "...execute task file..." --output-format stream-json
@@ -31,15 +32,30 @@ lunima-agent-loop run                      ← stateless; state lives in GitHub 
 
 Guardrails: daily task cap, never push to `main`, no force-push/`--admin` by the worker,
 full test suite must be green before a PR, confidential data (customer PDKs) must never be
-committed. The real budget cap lives on the Kimi account (monthly quota); the daily caps here
-only pace the spend. Every run is logged to `logs/` and `state/state.json`.
+committed. Issues being worked on carry the `agent-running` claim label — safe to run the loop
+on more than one machine without duplicate work (but all machines share the same Kimi account
+quota, so two machines burn the budget roughly twice as fast). The real budget cap lives on the
+Kimi account (monthly quota); the daily caps here only pace the spend. Every run is logged to
+`logs/` and `state/state.json`.
 
 ## Setup (Windows)
 
 ```powershell
-dotnet build                                   # or let the register script publish for you
+git clone https://github.com/aignermax/lunima-agent-loop; cd lunima-agent-loop
+scripts\Setup-Machine.ps1    # checks deps, creates config (edit + re-run), builds, inits, registers
+```
+
+`Setup-Machine.ps1` verifies the prerequisites (.NET 10 SDK, `kimi` CLI logged in, `gh` CLI
+authenticated), creates `agent-loop.json` from the example on first run, then builds, runs
+`init` (clones Lunima → `clonePath`, creates `dev-ki` on origin if missing) and registers the
+hourly scheduled task. Use `-NoRegister` to skip the scheduler.
+
+Manual equivalent:
+
+```powershell
+dotnet build
 copy agent-loop.example.json agent-loop.json   # then edit: clonePath, caps, models
-.\publish\lunima-agent-loop.exe init           # clones Lunima → clonePath, creates dev-ki on origin
+.\bin\Release\net10.0\lunima-agent-loop.exe init
 scripts\Register-AgentLoop.ps1                 # scheduled task, hourly (first run after ~15 min)
 ```
 
@@ -58,6 +74,16 @@ Pause / stop:
 # pause:   set "enabled": false in agent-loop.json  (task stays, does nothing)
 # disable: Disable-ScheduledTask -TaskName LunimaAgentLoop
 # remove:  scripts\Unregister-AgentLoop.ps1
+```
+
+## Setup (Windows ARM64)
+
+Fully supported: install the **ARM64 .NET 10 SDK** natively; everything else (git, gh) has
+ARM64 Windows builds. If the Kimi CLI only offers an x64 build on your machine, it runs fine
+under Windows 11 emulation (Prism). Optional native single-file binary:
+
+```powershell
+dotnet publish -c Release -r win-arm64 --self-contained true -p:PublishSingleFile=true -o publish\win-arm64
 ```
 
 ## Setup (Linux)
@@ -83,7 +109,7 @@ Schedule with a systemd user timer or cron instead of the Windows-only register 
 | `ownerIntervalMinutes` | `60` | min minutes between Product-Owner passes; idle passes are skipped |
 | `workerModel` / `ownerModel` | `kimi-k2.7-code` / `kimi-k3` | model aliases (`kimi provider list`) |
 | `workerTimeoutMinutes` | `120` | hard kill per worker run |
-| `taskLabel` / `prLabel` / `blockedLabel` | `agent-task` / `agent-pr` / `needs-human` | GitHub labels that drive the loop |
+| `taskLabel` / `prLabel` / `blockedLabel` / `runningLabel` | `agent-task` / `agent-pr` / `needs-human` / `agent-running` | GitHub labels that drive the loop; `agent-running` is the cross-machine claim |
 | `enabled` | `true` | master switch |
 
 ## Requirements
@@ -100,3 +126,5 @@ Schedule with a systemd user timer or cron instead of the Windows-only register 
   need human eyes are labelled `needs-human` / documented in the PR body for after the vacation.
 - The worker contract and the Product-Owner contract live in `prompts/worker.md` and
   `prompts/owner.md` — edit those to tune behavior; no recompile needed.
+- A crashed worker can leave a stale `agent-running` claim behind; the Product-Owner pass
+  removes claims older than ~6 h so the issue is retried.

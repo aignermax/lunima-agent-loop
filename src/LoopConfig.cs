@@ -18,6 +18,8 @@ public sealed class LoopConfig
     public string TaskLabel { get; set; } = "agent-task";
     public string PrLabel { get; set; } = "agent-pr";
     public string BlockedLabel { get; set; } = "needs-human";
+    /// <summary>Claim label: set on an issue while a worker runs, so a second machine won't start the same issue.</summary>
+    public string RunningLabel { get; set; } = "agent-running";
     public bool Enabled { get; set; } = true;
 
     public static LoopConfig Load(string path)

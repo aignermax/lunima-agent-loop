@@ -39,6 +39,9 @@ Open issues labelled `{TASK_LABEL}`:
    work) into small self-contained issues with clear acceptance criteria; close duplicates
    (comment + close); label genuinely hard ones `complex`. Every issue must be headless-verifiable;
    parts that need real UI interaction get a "manual verification after vacation" note in the body.
+   Also clean up **stale claims**: issues labelled `agent-running` whose last activity is older
+   than ~6 hours and that have no open PR — the worker machine crashed mid-run. Remove the label
+   (`gh api repos/{REPO}/issues/<n>/labels/agent-running -X DELETE`) so another run can retry.
 4. **Seed the backlog.** If fewer than 5 open `{TASK_LABEL}` issues exist, create new ones from
    the next roadmap rungs — small, standalone, in roadmap priority order. Also valuable:
    animated help `(?)` flyouts with physics explanations across the app (education IS the product),

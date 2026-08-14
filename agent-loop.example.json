@@ -12,5 +12,6 @@
   "taskLabel": "agent-task",
   "prLabel": "agent-pr",
   "blockedLabel": "needs-human",
+  "runningLabel": "agent-running",
   "enabled": true
 }
