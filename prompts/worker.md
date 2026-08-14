@@ -47,12 +47,15 @@ Date: {DATE}
    - `git push -u origin {BRANCH}`
    - Open the PR:
      `gh pr create --repo {REPO} --base {INTEGRATION_BRANCH} --head {BRANCH} --label {PR_LABEL} --title "Agent: <short title> (#{ISSUE_NUMBER})" --body "..."`
+     If `--label` fails (this token lacks `read:org`), create the PR without it and add the label via
+     `gh api repos/{REPO}/issues/<PR#>/labels -X POST -f "labels[]={PR_LABEL}"`.
      The body must contain: what & why, how it was tested, the line
      `Local suite: <N> passed, 0 failed`, and the manual-verification section if needed.
    - Comment the PR link on the issue:
      `gh issue comment {ISSUE_NUMBER} --repo {REPO} --body "PR: <link>"`
 9. If you **cannot finish**: do NOT open a broken PR. Comment on the issue what blocked you, then
-   `gh issue edit {ISSUE_NUMBER} --repo {REPO} --add-label {BLOCKED_LABEL}`, and stop.
+   label it via `gh api repos/{REPO}/issues/{ISSUE_NUMBER}/labels -X POST -f "labels[]={BLOCKED_LABEL}"`
+   (plain `gh issue edit --add-label` fails with this token), and stop.
 10. **Forbidden, always:** pushing to `{BASE_BRANCH}` or `{INTEGRATION_BRANCH}` directly,
     force-push, `--admin` merges, deleting branches, editing GitHub labels/milestones, touching
     files outside this clone, and committing the `.agent-loop/` directory.

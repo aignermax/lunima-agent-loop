@@ -83,10 +83,35 @@ public sealed class LoopOrchestrator
             Log("Agent loop is disabled in agent-loop.json (enabled=false). Nothing to do.");
             return 0;
         }
-        if (_state.Today().OwnerRuns < _config.MaxOwnerRunsPerDay)
+        if (!OwnerDue())
+        {
+            Log($"Owner pass not due yet (interval {_config.OwnerIntervalMinutes} min, last {_state.LastOwnerRun:HH:mm:ss}).");
+        }
+        else if (await OwnerHasWorkAsync())
+        {
             await OwnAsync();
+        }
+        else
+        {
+            Log("Owner pass due, but nothing to do (no open agent PRs, backlog healthy) — skipped, no API cost.");
+        }
         await WorkAsync();
         return 0;
+    }
+
+    private bool OwnerDue()
+    {
+        if (_state.LastOwnerRun is null) return true;
+        return DateTime.Now - _state.LastOwnerRun.Value >= TimeSpan.FromMinutes(_config.OwnerIntervalMinutes);
+    }
+
+    /// <summary>Cheap pre-flight (two gh calls, no LLM): is there anything for the Product Owner to do?</summary>
+    private async Task<bool> OwnerHasWorkAsync()
+    {
+        var openPrs = await _gh.ListOpenPrsAsync(_config.PrLabel);
+        if (openPrs.Count > 0) return true;
+        var openIssues = await _gh.ListOpenIssuesAsync(_config.TaskLabel);
+        return openIssues.Count < 5; // thin backlog needs seeding
     }
 
     public async Task<int> WorkAsync()
@@ -166,6 +191,7 @@ public sealed class LoopOrchestrator
     public async Task<int> OwnAsync()
     {
         Log("Product-Owner pass starting.");
+        _state.MarkOwnerRun();
         await Git("fetch origin");
         await Git($"checkout {_config.IntegrationBranch}");
         await Git("pull --ff-only"); // best effort; the PO agent resolves/reports from there
@@ -213,7 +239,8 @@ public sealed class LoopOrchestrator
         Console.WriteLine($"Integration:       {_config.IntegrationBranch} (base: {_config.BaseBranch})");
         Console.WriteLine($"Enabled:           {_config.Enabled}");
         Console.WriteLine($"Models:            worker={_config.WorkerModel}, owner={_config.OwnerModel}");
-        Console.WriteLine($"Caps:              {_config.MaxTasksPerDay} tasks/day, {_config.MaxOwnerRunsPerDay} owner run/day");
+        Console.WriteLine($"Caps:              {_config.MaxTasksPerDay} tasks/day, owner every {_config.OwnerIntervalMinutes} min (idle passes skipped, no API cost)");
+        Console.WriteLine($"Last owner run:    {(_state.LastOwnerRun?.ToString("yyyy-MM-dd HH:mm:ss") ?? "never")}");
         Console.WriteLine($"Today:             {today.Tasks} task(s), {today.OwnerRuns} owner run(s)");
         Console.WriteLine("Recent runs:");
         foreach (var r in _state.RecentRuns(10))

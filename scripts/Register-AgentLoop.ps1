@@ -1,9 +1,10 @@
-# Registers a windowless scheduled task that runs `lunima-agent-loop run` every 4 hours.
+# Registers a windowless scheduled task that runs `lunima-agent-loop run` every hour.
 # Runs while the user is logged on — including on the lock screen. Survives reboots.
+# Idle runs are cheap: the Product-Owner pass is skipped when there is nothing to do.
 #Requires -Version 5.1
 [CmdletBinding()]
 param(
-    [int]$IntervalHours = 4
+    [int]$IntervalHours = 1
 )
 $ErrorActionPreference = 'Stop'
 
@@ -19,14 +20,16 @@ $action   = New-ScheduledTaskAction -Execute $exe -Argument 'run' -WorkingDirect
 $trigger  = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(15) `
               -RepetitionInterval (New-TimeSpan -Hours $IntervalHours) `
               -RepetitionDuration (New-TimeSpan -Days 3650)
+# A run can legitimately take hours (owner pass up to 1 h + workers up to 2 h each);
+# overlapping hourly fires are skipped (IgnoreNew). Internal timeouts handle real hangs.
 $settings = New-ScheduledTaskSettingsSet `
               -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
               -StartWhenAvailable -MultipleInstances IgnoreNew `
-              -ExecutionTimeLimit (New-TimeSpan -Hours ($IntervalHours + 1))
+              -ExecutionTimeLimit (New-TimeSpan -Hours 6)
 
 Register-ScheduledTask -TaskName 'LunimaAgentLoop' -Action $action -Trigger $trigger `
     -Settings $settings -Force `
-    -Description 'Autonomous Lunima agent loop (Kimi Code CLI): works agent-task issues into the dev-ki branch + one daily product-owner pass.' | Out-Null
+    -Description 'Autonomous Lunima agent loop (Kimi Code CLI): works agent-task issues into the dev-ki branch + hourly product-owner pass.' | Out-Null
 
 Write-Host ""
 Write-Host "Registered scheduled task 'LunimaAgentLoop' (every $IntervalHours h, first run in ~15 min)."

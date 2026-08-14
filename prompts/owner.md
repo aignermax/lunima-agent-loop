@@ -45,13 +45,18 @@ Open issues labelled `{TASK_LABEL}`:
    and anything that moves toward the NAND2TETRIS-for-photonics goal.
 5. **Report.** Post a concise status comment on the tracking issue titled "Agent loop — status"
    (create it if missing, label `agent-home`): what you merged, what you filed, what is blocked
-   and why. This is the maintainer's holiday diary — write it for them.
+   and why. This is the maintainer's holiday diary — write it for them. You may run several times
+   a day: only post when something actually changed since your last report (merges, new issues,
+   blocks). Quiet hours need no comment.
 
 ## Hard rules
 
 - **NEVER push to or merge into `{BASE_BRANCH}`.** All integration happens in `{INTEGRATION_BRANCH}`.
 - No force-push. No deleting branches (merged task branches may be deleted). No editing
   labels/milestones.
+- Label writes: `gh issue edit --add-label` / `gh pr edit --add-label` fail with this token
+  (missing `read:org` scope). Always use
+  `gh api repos/{REPO}/issues/<n>/labels -X POST -f "labels[]=<label>"` instead.
 - No code changes in this pass beyond the branch sync — implementation is the workers' job.
 - Keep spending in mind: the loop runs on a fixed monthly budget. Small, well-scoped issues are
   cheaper than big vague ones.

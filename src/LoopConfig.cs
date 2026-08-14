@@ -9,7 +9,8 @@ public sealed class LoopConfig
     public string IntegrationBranch { get; set; } = "dev-ki";
     public string BaseBranch { get; set; } = "main";
     public int MaxTasksPerDay { get; set; } = 2;
-    public int MaxOwnerRunsPerDay { get; set; } = 1;
+    /// <summary>Minimum minutes between Product-Owner passes. Idle passes are skipped entirely (no API cost).</summary>
+    public int OwnerIntervalMinutes { get; set; } = 60;
     public string WorkerModel { get; set; } = "moonshot-ai/kimi-k2.7-code";
     public string OwnerModel { get; set; } = "moonshot-ai/kimi-k3";
     public int WorkerTimeoutMinutes { get; set; } = 120;

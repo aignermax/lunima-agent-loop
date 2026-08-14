@@ -4,7 +4,7 @@
   "integrationBranch": "dev-ki",
   "baseBranch": "main",
   "maxTasksPerDay": 2,
-  "maxOwnerRunsPerDay": 1,
+  "ownerIntervalMinutes": 60,
   "workerModel": "moonshot-ai/kimi-k2.7-code",
   "ownerModel": "moonshot-ai/kimi-k3",
   "workerTimeoutMinutes": 120,

@@ -23,6 +23,7 @@ public sealed class LoopState
 {
     public Dictionary<string, DayCounters> Days { get; set; } = new();
     public List<RunRecord> LastRuns { get; set; } = new();
+    public DateTime? LastOwnerRun { get; set; }
 }
 
 /// <summary>
@@ -56,6 +57,14 @@ public sealed class StateStore
 
     public IReadOnlyList<RunRecord> RecentRuns(int count) =>
         _state.LastRuns.TakeLast(count).ToList();
+
+    public DateTime? LastOwnerRun => _state.LastOwnerRun;
+
+    public void MarkOwnerRun()
+    {
+        _state.LastOwnerRun = DateTime.Now;
+        Save();
+    }
 
     public void RecordRun(RunRecord record)
     {
