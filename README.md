@@ -112,6 +112,29 @@ Schedule with a systemd user timer or cron instead of the Windows-only register 
 | `taskLabel` / `prLabel` / `blockedLabel` / `runningLabel` | `agent-task` / `agent-pr` / `needs-human` / `agent-running` | GitHub labels that drive the loop; `agent-running` is the cross-machine claim |
 | `enabled` | `true` | master switch |
 
+A pause (see below) is stored separately in `state/state.json`, not here — so pausing never
+edits your config, and resuming can't accidentally re-enable a loop you turned off on purpose.
+
+## Pausing the loop
+
+Going on vacation, or just want the machine to stop thinking for a while? Pause it:
+
+```
+lunima-agent-loop pause                       # indefinitely, until you resume
+lunima-agent-loop pause 14 vacation           # 14 days, with a reason
+lunima-agent-loop pause 2026-09-01 vacation   # through the end of that day
+lunima-agent-loop resume
+lunima-agent-loop status                       # shows "Paused: …"
+```
+
+The pause lives in `state/state.json`, so it **survives reboots, Windows updates and
+re-registered scheduled tasks** — the scheduler may fire, but every pass (owner *and*
+worker) exits immediately, printing the pause reason. A dated pause lifts itself when
+it elapses; an indefinite one waits for `resume`.
+
+For a *hard* stop, combine it with the two other switches — they are independent by design:
+`enabled: false` in `agent-loop.json` and `Disable-ScheduledTask -TaskName LunimaAgentLoop`.
+
 ## Requirements
 
 - .NET 10 SDK (build machine only — published binaries are self-contained)

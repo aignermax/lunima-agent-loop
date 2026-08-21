@@ -52,6 +52,8 @@ try
         "work" => await loop.WorkAsync(),
         "own" => await loop.OwnAsync(),
         "run" => await loop.RunOnceAsync(),
+        "pause" => Pause(loop, args),
+        "resume" => loop.Resume(),
         "status" => loop.Status(),
         _ => Unknown(command),
     };
@@ -60,6 +62,34 @@ catch (Exception ex)
 {
     Console.Error.WriteLine($"agent-loop failed: {ex.Message}");
     return 1;
+}
+
+/// <summary>
+/// `pause [days|yyyy-MM-dd] [reason...]` — no date argument means "pause indefinitely".
+/// Examples: `pause`, `pause 14 vacation`, `pause 2026-09-01 vacation`.
+/// </summary>
+static int Pause(LoopOrchestrator loop, string[] args)
+{
+    var until = DateTime.MaxValue;
+    var reasonStart = 1;
+
+    if (args.Length > 1)
+    {
+        if (int.TryParse(args[1], out var days) && days > 0)
+        {
+            until = DateTime.Now.AddDays(days);
+            reasonStart = 2;
+        }
+        else if (DateTime.TryParse(args[1], out var date))
+        {
+            // a bare date means "paused through the end of that day"
+            until = date.TimeOfDay == TimeSpan.Zero ? date.AddDays(1) : date;
+            reasonStart = 2;
+        }
+    }
+
+    var reason = args.Length > reasonStart ? string.Join(' ', args[reasonStart..]) : null;
+    return loop.Pause(until, reason);
 }
 
 static int Unknown(string command)
@@ -94,6 +124,10 @@ static void PrintUsage()
           run      Product-Owner pass (if due today) + work agent-task issues — what the scheduler calls
           work     Work open 'agent-task' issues (within the daily cap), one kimi run per issue
           own      Single Product-Owner pass (review/merge agent PRs, groom + seed backlog)
-          status   Show config, today's counters and recent runs
+          pause    Suspend all passes — 'pause' (indefinitely), 'pause 14 vacation',
+                   'pause 2026-09-01 vacation'. Persists in state/state.json, so it
+                   survives reboots and Windows updates.
+          resume   Lift the pause
+          status   Show config, pause state, today's counters and recent runs
         """);
 }

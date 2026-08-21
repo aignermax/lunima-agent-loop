@@ -12,7 +12,9 @@ namespace AgentLoop;
 ///   work   — pick open `agent-task` issues (within the daily cap) and run one kimi worker per issue
 ///   own    — one Product-Owner kimi pass (review/merge agent PRs, groom + seed the backlog)
 ///   run    — own (if due today) then work; this is what the scheduler calls
-///   status — print config, today's counters and recent runs
+///   pause  — suspend all passes (optionally until a date); survives reboots via state.json
+///   resume — lift a pause
+///   status — print config, pause state, today's counters and recent runs
 /// </summary>
 public sealed class LoopOrchestrator
 {
@@ -86,6 +88,7 @@ public sealed class LoopOrchestrator
             Log("Agent loop is disabled in agent-loop.json (enabled=false). Nothing to do.");
             return 0;
         }
+        if (PausedSkip()) return 0;
         if (!OwnerDue())
         {
             Log($"Owner pass not due yet (interval {_config.OwnerIntervalMinutes} min, last {_state.LastOwnerRun:HH:mm:ss}).");
@@ -99,6 +102,33 @@ public sealed class LoopOrchestrator
             Log("Owner pass due, but nothing to do (no open agent PRs, backlog healthy) — skipped, no API cost.");
         }
         await WorkAsync();
+        return 0;
+    }
+
+    /// <summary>Logs and reports whether a pause is currently blocking this pass.</summary>
+    private bool PausedSkip()
+    {
+        if (!_state.IsPaused) return false;
+        Log($"Agent loop is PAUSED {_state.PauseDescription()} — nothing runs. Resume with: lunima-agent-loop resume");
+        return true;
+    }
+
+    public int Pause(DateTime until, string? reason)
+    {
+        _state.Pause(until, reason);
+        Log($"Paused {_state.PauseDescription()}. No owner or worker pass will run until then.");
+        return 0;
+    }
+
+    public int Resume()
+    {
+        if (!_state.IsPaused)
+        {
+            Log("Not paused — nothing to resume.");
+            return 0;
+        }
+        _state.Resume();
+        Log("Resumed. The next scheduled tick will run normally.");
         return 0;
     }
 
@@ -120,6 +150,7 @@ public sealed class LoopOrchestrator
     public async Task<int> WorkAsync()
     {
         if (!_config.Enabled) { Log("Disabled (enabled=false)."); return 0; }
+        if (PausedSkip()) return 0;
 
         var capacity = _config.MaxTasksPerDay - _state.Today().Tasks;
         if (capacity <= 0)
@@ -209,6 +240,7 @@ public sealed class LoopOrchestrator
 
     public async Task<int> OwnAsync()
     {
+        if (PausedSkip()) return 0;
         Log("Product-Owner pass starting.");
         _state.MarkOwnerRun();
         await Git("fetch origin");
@@ -257,6 +289,7 @@ public sealed class LoopOrchestrator
         Console.WriteLine($"Clone:             {_config.ClonePath}");
         Console.WriteLine($"Integration:       {_config.IntegrationBranch} (base: {_config.BaseBranch})");
         Console.WriteLine($"Enabled:           {_config.Enabled}");
+        Console.WriteLine($"Paused:            {_state.PauseDescription()}");
         Console.WriteLine($"Models:            worker={_config.WorkerModel}, owner={_config.OwnerModel}");
         Console.WriteLine($"Caps:              {_config.MaxTasksPerDay} tasks/day, owner every {_config.OwnerIntervalMinutes} min (idle passes skipped, no API cost)");
         Console.WriteLine($"Last owner run:    {(_state.LastOwnerRun?.ToString("yyyy-MM-dd HH:mm:ss") ?? "never")}");

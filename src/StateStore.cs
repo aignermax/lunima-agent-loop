@@ -24,6 +24,11 @@ public sealed class LoopState
     public Dictionary<string, DayCounters> Days { get; set; } = new();
     public List<RunRecord> LastRuns { get; set; } = new();
     public DateTime? LastOwnerRun { get; set; }
+    /// <summary>Pause end time. While in the future, no pass runs. Null = not paused.
+    /// <see cref="DateTime.MaxValue"/> means paused indefinitely (until an explicit resume).</summary>
+    public DateTime? PausedUntil { get; set; }
+    /// <summary>Why the loop was paused — echoed on every skipped run so the reason stays visible.</summary>
+    public string? PauseReason { get; set; }
 }
 
 /// <summary>
@@ -59,6 +64,36 @@ public sealed class StateStore
         _state.LastRuns.TakeLast(count).ToList();
 
     public DateTime? LastOwnerRun => _state.LastOwnerRun;
+
+    /// <summary>True while a pause is active. An elapsed pause is cleared automatically.</summary>
+    public bool IsPaused => _state.PausedUntil is { } until && until > DateTime.Now;
+
+    public DateTime? PausedUntil => _state.PausedUntil;
+    public string? PauseReason => _state.PauseReason;
+
+    /// <summary>Human-readable pause state, e.g. "indefinitely (vacation)" or "until 2026-09-01 (vacation)".</summary>
+    public string PauseDescription()
+    {
+        if (!IsPaused) return "not paused";
+        var when = _state.PausedUntil == DateTime.MaxValue
+            ? "indefinitely"
+            : $"until {_state.PausedUntil:yyyy-MM-dd HH:mm}";
+        return string.IsNullOrWhiteSpace(_state.PauseReason) ? when : $"{when} ({_state.PauseReason})";
+    }
+
+    public void Pause(DateTime until, string? reason)
+    {
+        _state.PausedUntil = until;
+        _state.PauseReason = reason;
+        Save();
+    }
+
+    public void Resume()
+    {
+        _state.PausedUntil = null;
+        _state.PauseReason = null;
+        Save();
+    }
 
     public void MarkOwnerRun()
     {
