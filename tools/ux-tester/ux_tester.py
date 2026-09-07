@@ -509,6 +509,8 @@ def run(args: argparse.Namespace) -> Session:
         session.cache_read += getattr(u, "cache_read_input_tokens", 0) or 0
         log.write(json.dumps({"turn": turns, "stop": resp.stop_reason, "content": [b.model_dump() for b in resp.content]}, default=str) + "\n")
         log.flush()
+        # Checkpoint after every model turn so a killed run still leaves a usable report.
+        write_outputs(session, report_dir, scenarios, partial=True)
 
         if resp.stop_reason == "refusal":
             session.summary = "Model refused to continue (stop_reason=refusal)."
@@ -587,14 +589,19 @@ def run(args: argparse.Namespace) -> Session:
 # Reporting
 # --------------------------------------------------------------------------------------
 
-def finish(session: Session, report_dir: Path, scenarios: list[str], app: AppHandle, args: argparse.Namespace) -> Session:
+def write_outputs(session: Session, report_dir: Path, scenarios: list[str], partial: bool = False) -> None:
     (report_dir / "findings.json").write_text(json.dumps({
-        "model": MODEL, "steps": session.steps, "findings": [asdict(f) for f in session.findings],
+        "model": MODEL, "steps": session.steps, "partial": partial,
+        "findings": [asdict(f) for f in session.findings],
         "scenarios": [asdict(s) for s in session.scenarios], "hangs": session.hangs,
         "usage": {"input": session.input_tokens, "output": session.output_tokens, "cache_read": session.cache_read},
         "summary": session.summary,
     }, indent=2, ensure_ascii=False), encoding="utf-8")
-    (report_dir / "report.md").write_text(render_report(session, scenarios, report_dir), encoding="utf-8")
+    (report_dir / "report.md").write_text(render_report(session, scenarios, report_dir, partial), encoding="utf-8")
+
+
+def finish(session: Session, report_dir: Path, scenarios: list[str], app: AppHandle, args: argparse.Namespace) -> Session:
+    write_outputs(session, report_dir, scenarios)
     print(f"\nReport: {report_dir / 'report.md'}")
     if args.file_issues:
         file_issues(session, report_dir, args)
@@ -606,14 +613,14 @@ def finish(session: Session, report_dir: Path, scenarios: list[str], app: AppHan
     return session
 
 
-def render_report(s: Session, scenarios: list[str], report_dir: Path) -> str:
+def render_report(s: Session, scenarios: list[str], report_dir: Path, partial: bool = False) -> str:
     sev_order = {"critical": 0, "major": 1, "minor": 2}
     findings = sorted(s.findings, key=lambda f: sev_order.get(f.severity, 9))
     counts = {k: sum(1 for f in findings if f.severity == k) for k in ("critical", "major", "minor")}
     verdicts = {k: sum(1 for n in s.scenarios if n.verdict == k) for k in ("pass", "fail", "blocked", "skipped")}
     worst_hang = max((h for _, h in s.hangs), default=0.0)
     lines = [
-        f"# Lunima UX test — {report_dir.name}",
+        f"# Lunima UX test — {report_dir.name}" + (" (in progress)" if partial else ""),
         "",
         f"Model `{MODEL}`, {s.steps} UI actions, {len(scenarios)} scenarios "
         f"(pass {verdicts['pass']} / fail {verdicts['fail']} / blocked {verdicts['blocked']} / skipped {verdicts['skipped']}).",
