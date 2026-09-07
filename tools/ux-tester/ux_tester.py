@@ -68,6 +68,7 @@ KEEP_LAST_IMAGES = 6
 HANG_POLL_SEC = 0.1
 HANG_MAX_WAIT_SEC = 12.0
 SETTLE_SEC = 0.35
+CLICK_HOLD_SEC = 0.09
 
 STANDING_CONCERNS = """\
 Standing concerns from the maintainer (check these *everywhere*, not as separate steps):
@@ -314,7 +315,18 @@ def execute_action(name: str, inp: dict, screen: Screen) -> str:
         button = {"left_click": "left", "right_click": "right", "middle_click": "middle",
                   "double_click": "left", "triple_click": "left"}[name]
         clicks = {"double_click": 2, "triple_click": 3}.get(name, 1)
-        with_mods(lambda: pyautogui.click(button=button, clicks=clicks, interval=0.08))
+
+        def human_click():
+            # A real click holds the button ~80-120 ms; a zero-length synthetic press can be
+            # dropped by toolkits that sample pointer state per frame. Emulate the human timing.
+            for i in range(clicks):
+                pyautogui.mouseDown(button=button)
+                time.sleep(CLICK_HOLD_SEC)
+                pyautogui.mouseUp(button=button)
+                if i < clicks - 1:
+                    time.sleep(0.08)
+
+        with_mods(human_click)
         return "OK"
     if name == "mouse_move":
         x, y = screen.to_screen(inp["coordinate"])
@@ -670,8 +682,19 @@ def render_report(s: Session, scenarios: list[str], report_dir: Path, partial: b
     return "\n".join(lines) + "\n"
 
 
+def gh_exe() -> str:
+    """`gh` is often not on PATH in scripted shells on Windows; fall back to the default install."""
+    import shutil
+    found = shutil.which("gh")
+    if found:
+        return found
+    default = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "GitHub CLI" / "gh.exe"
+    return str(default) if default.exists() else "gh"
+
+
 def file_issues(s: Session, report_dir: Path, args: argparse.Namespace) -> None:
     """Commit screenshots to a branch of the Lunima clone and open one issue per finding."""
+    gh = gh_exe()
     sev_rank = {"minor": 0, "major": 1, "critical": 2}
     picked = [f for f in s.findings if sev_rank[f.severity] >= sev_rank[args.min_severity]]
     if not picked:
@@ -703,14 +726,14 @@ def file_issues(s: Session, report_dir: Path, args: argparse.Namespace) -> None:
                 f"## Suggested fix (UX)\n{f.suggestion}{img}\n\n"
                 f"_Found by the computer-use UX tester (model `{MODEL}`) walking the release checklist on a real desktop session. "
                 f"Full report: `docs/ux-findings/{report_dir.name}/report.md` on branch `{branch}`._")
-        out = subprocess.run(["gh", "issue", "create", "--repo", args.repo, "--title", f"UX: {f.title}", "--body", body],
-                             capture_output=True, text=True)
+        out = subprocess.run([gh, "issue", "create", "--repo", args.repo, "--title", f"UX: {f.title}", "--body", body],
+                             capture_output=True, text=True, encoding="utf-8", errors="replace")
         url = out.stdout.strip()
         if url:
             num = url.rsplit("/", 1)[-1]
             for label in ("ux-finding", *(["agent-task"] if args.label_agent_task else [])):
-                subprocess.run(["gh", "api", f"repos/{args.repo}/issues/{num}/labels", "-X", "POST", "-f", f"labels[]={label}"],
-                               capture_output=True, text=True)
+                subprocess.run([gh, "api", f"repos/{args.repo}/issues/{num}/labels", "-X", "POST", "-f", f"labels[]={label}"],
+                               capture_output=True, text=True, encoding="utf-8", errors="replace")
             print(f"  filed {url}  [{f.severity}] {f.title}")
         else:
             print(f"  FAILED to file '{f.title}': {out.stderr.strip()[:200]}")
