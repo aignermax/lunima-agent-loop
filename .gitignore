@@ -5,3 +5,7 @@ logs/
 state/
 agent-loop.json
 .vs/
+
+# UX tester output (screenshots, transcripts)
+tools/ux-tester/reports/
+__pycache__/

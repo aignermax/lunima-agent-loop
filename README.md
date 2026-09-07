@@ -115,6 +115,34 @@ Schedule with a systemd user timer or cron instead of the Windows-only register 
 A pause (see below) is stored separately in `state/state.json`, not here — so pausing never
 edits your config, and resuming can't accidentally re-enable a loop you turned off on purpose.
 
+## UX tester — Claude clicks through the real app
+
+`tools/ux-tester/ux_tester.py` closes the gap the headless pipeline cannot: nobody in the
+worker → test-gate → PO chain ever *uses* the app. The tester launches Lunima on an unlocked
+desktop session and lets Claude (computer use, `computer_toolset_20260801`) walk the manual
+items of `docs/RELEASE-CHECKLIST.md` like a user — clicking, typing, zooming into small text —
+while judging like a UX designer: right-sidebar clutter, overlapping components/routes,
+walls of help text, missing feedback. After every action it measures whether the window is
+hung (Win32 `IsHungAppWindow`) and tells Claude how long, so "the UI hangs" becomes a number.
+
+```
+pip install anthropic pyautogui mss pygetwindow pillow
+set ANTHROPIC_API_KEY=...
+py -3 tools/ux-tester/ux_tester.py ^
+   --app "C:\...\Lunima-dev-ki\CAP.Avalonia\bin\Debug\net10.0\CAP.Avalonia.dll" ^
+   --checklist "C:\...\Lunima-dev-ki\docs\RELEASE-CHECKLIST.md" --max-steps 150
+```
+
+Output: `tools/ux-tester/reports/<stamp>/report.md` (+ `findings.json`, screenshots,
+`transcript.jsonl`). Add `--file-issues --lunima-clone <path>` to open one GitHub issue per
+finding (label `ux-finding`, `--min-severity major` by default); screenshots are pushed to a
+`ux-findings/<stamp>` branch so they render in the issue. `--attach` reuses a running window,
+`--scenarios file.txt` adds your own steps, `--limit N` trims the list.
+
+Do not touch mouse or keyboard while it runs; moving the mouse into the top-left corner aborts
+(pyautogui fail-safe). Budget: a 150-step run on Fable is roughly 20–40 minutes and a few dollars
+in screenshots; prompt caching is on.
+
 ## Pausing the loop
 
 Going on vacation, or just want the machine to stop thinking for a while? Pause it:
