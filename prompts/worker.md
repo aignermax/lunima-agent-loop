@@ -35,13 +35,24 @@ Date: {DATE}
 4. **Never commit scratch/probe/temp files** (e.g. `Scratch*.cs`, ad-hoc scripts). Delete them before committing.
 5. **Confidentiality:** never commit anything from `C:\Users\max_a\Downloads` or any customer/HHI PDK
    data — this is a public open-source repo. Generate your own small test fixtures instead.
-6. **Verification is headless only**: integration tests plus the existing screenshot-test
-   infrastructure. Real UI clicking is impossible (the machine is locked). If the change needs
-   manual UI verification, add a section `## Manual verification after vacation` to the PR body
-   with exact click-by-click steps.
-7. **UX bar:** Lunima's users are not photonics experts. Keep UI additions minimal and consistent
-   with existing dialogs. Where behavior is physically non-obvious, add a help `(?)` flyout with a
-   short, correct physics explanation (in all 5 locales).
+6. **Verification: headless tests + screenshots, always.** Integration tests are mandatory; for any
+   user-visible change you must ALSO render the affected UI with the existing screenshot-test
+   infrastructure (`UnitTests/UI/*ScreenshotTests` pattern) and **commit the PNGs under
+   `docs/pr-media/issue-{ISSUE_NUMBER}/`**, embedded in the PR body (before/after where it applies).
+   Look at your own screenshots before opening the PR: overlapping components or routes, clipped
+   text, walls of text, or a feature crammed into the right sidebar are defects — fix them first.
+   Real mouse-driven clicking is not available to you; if a step can only be verified by a human,
+   add `## Manual verification` to the PR body with exact click-by-click steps.
+7. **UX bar — placement is a design decision (see the repo's `CLAUDE.md` §5).** Lunima's users are
+   not photonics experts. **Never add a new feature to the right sidebar**; that panel is for
+   properties of the current selection only. Choose the surface like a UX designer would — own
+   window / tool window for workflows, dialog for short tasks, flyout for contextual info, canvas
+   overlay for spatial feedback, toolbar/context menu for frequent actions — and state
+   `Placement: … because …` in the PR body. Where behavior is physically non-obvious, add a help
+   `(?)` flyout via the shared `HelpFlyoutButton` with ≤ 3 short sentences per section **plus an
+   illustrative animation** (see `TransientHelpFlyout` / `EyeHelpFlyout`), in all 5 locales.
+   No UI interaction may block the UI thread > ~100 ms: heavy work runs async with a busy state.
+   Run DRC-lite (`DesignValidator`) on any design your change creates; unintended overlaps are bugs.
 8. When the implementation is done and the suite is green:
    - `git add -A && git commit` — match the commit-message style of recent history
    - `git push -u origin {BRANCH}`

@@ -47,7 +47,13 @@ Open issues labelled `{TASK_LABEL}`:
 1. **Review agent PRs.** For each open `{PR_LABEL}` PR: `gh pr view` + `gh pr diff`.
    Judge: does it implement its issue? Is the diff minimal and sane? Does it meet the UX bar
    (simple for non-photonics users, no UI bloat, help flyouts where physics is non-obvious,
-   i18n complete)? **Only merge PRs whose base is `{INTEGRATION_BRANCH}`** — check
+   i18n complete)? **Visual gate:** every PR with a user-visible change must carry screenshots
+   (`docs/pr-media/issue-<n>/`, embedded in the body). **Open and look at them** (Read the PNGs) and
+   judge like a UX designer: Is the feature on the right surface (own window / dialog / flyout /
+   canvas overlay — **not** another right-sidebar section)? Do components or routes overlap? Is help
+   text a wall of text instead of ≤ 3 sentences + animation? Is anything clipped or cramped? Any
+   "yes" → not ready: comment with the concrete defect and the surface it should use. A UI PR
+   without screenshots is not ready either. **Only merge PRs whose base is `{INTEGRATION_BRANCH}`** — check
    `gh pr view <n> --json baseRefName`. If a good PR still targets `{BASE_BRANCH}` and
    `{INTEGRATION_BRANCH}` has not diverged from `{BASE_BRANCH}` in a conflicting way,
    retarget it first: `gh pr edit <n> --base {INTEGRATION_BRANCH}`.
