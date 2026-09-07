@@ -255,10 +255,16 @@ class Screen:
         if region:
             x0, y0, x1, y1 = region
             img = img.crop((max(0, x0), max(0, y0), min(img.width, x1), min(img.height, y1)))
-            # zoomed crops may be upscaled for legibility, within the same limits
-            factor = min(2.0, MAX_LONG_EDGE / max(img.width, img.height))
+            # zoomed crops may be upscaled for legibility, but must stay inside BOTH vision
+            # limits (long edge and total pixels) — the API rejects oversized tool images.
+            factor = min(2.0, MAX_LONG_EDGE / max(img.width, img.height),
+                         math.sqrt(MAX_PIXELS / (img.width * img.height)))
             if factor > 1.0:
                 img = img.resize((int(img.width * factor), int(img.height * factor)), Image.LANCZOS)
+        # Final guard for any path: never hand the model an image over the limits.
+        limit = min(MAX_LONG_EDGE / max(img.width, img.height), math.sqrt(MAX_PIXELS / (img.width * img.height)))
+        if limit < 1.0:
+            img = img.resize((int(img.width * limit) - 1, int(img.height * limit) - 1), Image.LANCZOS)
         self.count += 1
         path = self.shots_dir / f"shot-{self.count:03d}.png"
         img.save(path, "PNG", optimize=True)
@@ -492,6 +498,9 @@ def run(args: argparse.Namespace) -> Session:
             try:
                 return client.beta.messages.create(betas=["server-side-fallback-2026-07-01"], fallbacks="default", **kwargs)
             except anthropic.BadRequestError as e:
+                msg = str(e).lower()
+                if "fallback" not in msg and "beta" not in msg:
+                    raise  # a real request problem — surface it, don't mask it by switching endpoints
                 print(f"[fallbacks beta rejected, using plain endpoint: {str(e)[:120]}]", flush=True)
                 call_model.plain = True
         return client.messages.create(**kwargs)
