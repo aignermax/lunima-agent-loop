@@ -700,32 +700,39 @@ def file_issues(s: Session, report_dir: Path, args: argparse.Namespace) -> None:
     if not picked:
         print("No findings at or above the severity threshold — no issues filed.")
         return
-    clone = Path(args.lunima_clone)
     branch = f"ux-findings/{report_dir.name}"
-    dest = clone / "docs" / "ux-findings" / report_dir.name
-    dest.mkdir(parents=True, exist_ok=True)
-    for f in picked:
-        if f.screenshot:
-            src = report_dir / "shots" / f"shot-{f.screenshot:03d}.png"
-            if src.exists():
-                (dest / src.name).write_bytes(src.read_bytes())
-    (dest / "report.md").write_text((report_dir / "report.md").read_text(encoding="utf-8"), encoding="utf-8")
-    g = lambda *a: subprocess.run(["git", "-C", str(clone), *a], check=True, capture_output=True, text=True)
-    g("fetch", "origin", args.base_branch)
-    g("checkout", "-B", branch, f"origin/{args.base_branch}")
-    g("add", str(dest))
-    g("commit", "-m", f"ux-tester: findings {report_dir.name} (screenshots + report)")
-    g("push", "-u", "origin", branch)
-    sha = g("rev-parse", "HEAD").stdout.strip()
+    sha = ""
+    if not args.no_screenshots:
+        # Full-desktop screenshots can expose the tester machine (taskbar, paths). Only publish
+        # them when the caller explicitly allows it — never by default for a public repo.
+        clone = Path(args.lunima_clone)
+        dest = clone / "docs" / "ux-findings" / report_dir.name
+        dest.mkdir(parents=True, exist_ok=True)
+        for f in picked:
+            if f.screenshot:
+                src = report_dir / "shots" / f"shot-{f.screenshot:03d}.png"
+                if src.exists():
+                    (dest / src.name).write_bytes(src.read_bytes())
+        (dest / "report.md").write_text((report_dir / "report.md").read_text(encoding="utf-8"), encoding="utf-8")
+        g = lambda *a: subprocess.run(["git", "-C", str(clone), *a], check=True, capture_output=True, text=True)
+        g("fetch", "origin", args.base_branch)
+        g("checkout", "-B", branch, f"origin/{args.base_branch}")
+        g("add", str(dest))
+        g("commit", "-m", f"ux-tester: findings {report_dir.name} (screenshots + report)")
+        g("push", "-u", "origin", branch)
+        sha = g("rev-parse", "HEAD").stdout.strip()
     for f in picked:
         img = ""
-        if f.screenshot:
+        if f.screenshot and sha:
             img = f"\n\n![screenshot](https://github.com/{args.repo}/blob/{sha}/docs/ux-findings/{report_dir.name}/shot-{f.screenshot:03d}.png?raw=true)"
+        elif f.screenshot:
+            img = f"\n\nScreenshot: `shot-{f.screenshot:03d}.png` in the local report `{report_dir}` (not published — desktop capture)."
+        source = (f"Full report: `docs/ux-findings/{report_dir.name}/report.md` on branch `{branch}`." if sha
+                  else f"Full report kept locally: `{report_dir / 'report.md'}`.")
         body = (f"**Category:** {f.category} · **Severity:** {f.severity} · **Where:** {f.where}\n\n"
                 f"## Steps to reproduce\n{f.steps}\n\n## Expected\n{f.expected}\n\n## Observed\n{f.observed}\n\n"
                 f"## Suggested fix (UX)\n{f.suggestion}{img}\n\n"
-                f"_Found by the computer-use UX tester (model `{MODEL}`) walking the release checklist on a real desktop session. "
-                f"Full report: `docs/ux-findings/{report_dir.name}/report.md` on branch `{branch}`._")
+                f"_Found by the computer-use UX tester (model `{MODEL}`) walking the release checklist on a real desktop session. {source}_")
         out = subprocess.run([gh, "issue", "create", "--repo", args.repo, "--title", f"UX: {f.title}", "--body", body],
                              capture_output=True, text=True, encoding="utf-8", errors="replace")
         url = out.stdout.strip()
@@ -758,14 +765,16 @@ def main() -> None:
     p.add_argument("--label-agent-task", action="store_true", help="Also label filed issues agent-task")
     p.add_argument("--repo", default="aignermax/Lunima")
     p.add_argument("--lunima-clone", help="Local Lunima clone used to publish screenshots (for --file-issues)")
+    p.add_argument("--no-screenshots", action="store_true",
+                   help="File issues without pushing screenshots (recommended for public repos: captures show the whole desktop)")
     p.add_argument("--base-branch", default="dev-ki")
     p.add_argument("--publish-report", metavar="REPORT_DIR",
                    help="Skip testing; file issues from an existing report directory (implies --file-issues)")
     args = p.parse_args()
     if args.publish_report:
         args.file_issues = True
-    if args.file_issues and not args.lunima_clone:
-        p.error("--file-issues needs --lunima-clone")
+    if args.file_issues and not args.lunima_clone and not args.no_screenshots:
+        p.error("--file-issues needs --lunima-clone (or --no-screenshots)")
     if args.publish_report:
         publish_existing(Path(args.publish_report), args)
         return
