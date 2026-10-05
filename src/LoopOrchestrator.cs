@@ -141,6 +141,8 @@ public sealed class LoopOrchestrator
     /// <summary>Cheap pre-flight (two gh calls, no LLM): is there anything for the Product Owner to do?</summary>
     private async Task<bool> OwnerHasWorkAsync()
     {
+        // Customer baseline reviews also find design debt with a healthy feature backlog.
+        if (_config.CustomerEnabled) return true;
         var openPrs = await _gh.ListOpenPrsAsync(_config.PrLabel);
         if (openPrs.Count > 0) return true;
         var openIssues = await _gh.ListOpenIssuesAsync(_config.TaskLabel);
@@ -240,7 +242,9 @@ public sealed class LoopOrchestrator
 
     public async Task<int> OwnAsync()
     {
+        if (!_config.Enabled) { Log("Disabled (enabled=false)."); return 0; }
         if (PausedSkip()) return 0;
+        await CustomerReview.RunAsync(_config, _rootDir);
         Log("Product-Owner pass starting.");
         _state.MarkOwnerRun();
         await Git("fetch origin");
@@ -257,7 +261,9 @@ public sealed class LoopOrchestrator
 
         var promptFile = Path.Combine(_config.ClonePath, ".agent-loop", "owner-pass.md");
         Directory.CreateDirectory(Path.GetDirectoryName(promptFile)!);
-        File.WriteAllText(promptFile, RenderOwnerPrompt(roadmap, prList, issueList));
+        File.WriteAllText(promptFile, RenderOwnerPrompt(roadmap, prList, issueList) +
+            "\n\n## Independent customer acceptance (required when enabled)\n\n" +
+            CustomerReview.OwnerContext(_config, _rootDir));
 
         var logFile = Path.Combine(LogsDir, $"{DateTime.Now:yyyy-MM-dd_HHmmss}_owner.jsonl");
         var shortPrompt =
@@ -289,6 +295,7 @@ public sealed class LoopOrchestrator
         Console.WriteLine($"Clone:             {_config.ClonePath}");
         Console.WriteLine($"Integration:       {_config.IntegrationBranch} (base: {_config.BaseBranch})");
         Console.WriteLine($"Enabled:           {_config.Enabled}");
+        Console.WriteLine($"Customer review:   {(_config.CustomerEnabled ? "enabled" : "disabled")} ({_config.CustomerModel}, max {_config.CustomerMaxReviewsPerCycle}/cycle)");
         Console.WriteLine($"Paused:            {_state.PauseDescription()}");
         Console.WriteLine($"Models:            worker={_config.WorkerModel}, owner={_config.OwnerModel}");
         Console.WriteLine($"Caps:              {_config.MaxTasksPerDay} tasks/day, owner every {_config.OwnerIntervalMinutes} min (idle passes skipped, no API cost)");

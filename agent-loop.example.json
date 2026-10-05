@@ -13,5 +13,14 @@
   "prLabel": "agent-pr",
   "blockedLabel": "needs-human",
   "runningLabel": "agent-running",
-  "enabled": true
+  "enabled": true,
+  "customerEnabled": false,
+  "customerPython": "python",
+  "customerModel": "claude-fable-5-1",
+  "customerProject": "CAP.Desktop/CAP.Desktop.csproj",
+  "customerMaxReviewsPerCycle": 2,
+  "customerMaxAgeHours": 24,
+  "customerMaxSteps": 80,
+  "customerMaxTurns": 60,
+  "customerTimeoutMinutes": 20
 }

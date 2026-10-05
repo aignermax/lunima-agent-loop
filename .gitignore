@@ -9,3 +9,4 @@ agent-loop.json
 # UX tester output (screenshots, transcripts)
 tools/ux-tester/reports/
 __pycache__/
+.customer-venv/

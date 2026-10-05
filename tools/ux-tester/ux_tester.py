@@ -32,6 +32,7 @@ maintainer's standing UX concerns (see ``STANDING_CONCERNS``).
 from __future__ import annotations
 
 import argparse
+import atexit
 import base64
 import ctypes
 import io
@@ -51,6 +52,9 @@ import mss
 import pyautogui
 import pygetwindow as gw
 from PIL import Image
+
+from customer_contract import CUSTOMER_PROMPT, load_goals
+from customer_desktop import app_environment, require_target_foreground, require_unlocked_desktop, validate_action, window_pid
 
 # --------------------------------------------------------------------------------------
 # Configuration
@@ -139,11 +143,12 @@ SCENARIO_TOOL = {
     "input_schema": {
         "type": "object",
         "additionalProperties": False,
-        "required": ["scenario", "verdict", "observation"],
+        "required": ["scenario", "verdict", "observation", "screenshot"],
         "properties": {
             "scenario": {"type": "string", "description": "The scenario text (or its number)."},
             "verdict": {"type": "string", "enum": ["pass", "fail", "blocked", "skipped"]},
             "observation": {"type": "string", "description": "One line: what you saw."},
+            "screenshot": {"type": "integer", "description": "Latest shot=N showing this scenario's outcome."},
         },
     },
 }
@@ -191,17 +196,17 @@ class AppHandle:
     hwnd: int
 
 
-def find_window(timeout: float = 60.0, title_hint: str = WINDOW_TITLE_HINT) -> gw.Win32Window:
+def find_window(timeout: float = 60.0, title_hint: str = WINDOW_TITLE_HINT, pid: int | None = None) -> gw.Win32Window:
     deadline = time.time() + timeout
     while time.time() < deadline:
         for w in gw.getWindowsWithTitle(title_hint):
-            if w.width > 200 and w.height > 200:
+            if w.width > 200 and w.height > 200 and (pid is None or window_pid(w._hWnd) == pid):
                 return w
         time.sleep(0.5)
     raise RuntimeError(f"No window with title containing '{title_hint}' appeared within {timeout}s")
 
 
-def launch_app(app_path: str | None, attach: bool, title_hint: str) -> AppHandle:
+def launch_app(app_path: str | None, attach: bool, title_hint: str, profile: Path | None = None) -> AppHandle:
     """Start the app (an .exe directly, a .dll via `dotnet`) unless attaching to a running window."""
     proc = None
     if not attach:
@@ -209,8 +214,14 @@ def launch_app(app_path: str | None, attach: bool, title_hint: str) -> AppHandle
             raise SystemExit("--app <path to CAP.Desktop.exe or .dll> is required unless --attach is given")
         workdir = str(Path(app_path).parent)
         cmd = [app_path] if app_path.lower().endswith(".exe") else ["dotnet", app_path]
-        proc = subprocess.Popen(cmd, cwd=workdir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    win = find_window(title_hint=title_hint)
+        proc = subprocess.Popen(cmd, cwd=workdir, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                env=app_environment(profile) if profile else None)
+    try:
+        win = find_window(title_hint=title_hint, pid=proc.pid if proc else None)
+    except Exception:
+        if proc:
+            proc.terminate()
+        raise
     try:
         win.activate()
     except Exception:
@@ -229,11 +240,15 @@ def launch_app(app_path: str | None, attach: bool, title_hint: str) -> AppHandle
 # --------------------------------------------------------------------------------------
 
 class Screen:
-    def __init__(self, shots_dir: Path):
+    def __init__(self, shots_dir: Path, window=None):
         self.shots_dir = shots_dir
         self.count = 0
         with mss.MSS() as sct:
             mon = sct.monitors[1]
+        self.window = window
+        if window:
+            mon = {"left": window.left, "top": window.top, "width": window.width, "height": window.height}
+        self.bounds = mon
         self.width, self.height = mon["width"], mon["height"]
         self.scale = self._scale_factor(self.width, self.height)
 
@@ -244,12 +259,19 @@ class Screen:
         return min(1.0, long_edge_scale, pixel_scale)
 
     def to_screen(self, xy) -> tuple[int, int]:
-        return int(round(xy[0] / self.scale)), int(round(xy[1] / self.scale))
+        return (self.bounds["left"] + int(round(xy[0] / self.scale)),
+                self.bounds["top"] + int(round(xy[1] / self.scale)))
 
     def grab(self, region: list[int] | None = None) -> tuple[str, int]:
         """Capture (optionally a region in screenshot coordinates) → (base64 png, shot index)."""
+        if self.window:
+            require_target_foreground(self.window._hWnd)
+            bounds = {"left": self.window.left, "top": self.window.top,
+                      "width": self.window.width, "height": self.window.height}
+            if bounds != self.bounds:
+                raise RuntimeError("Target window moved/resized; end this session and retry")
         with mss.MSS() as sct:
-            raw = sct.grab(sct.monitors[1])
+            raw = sct.grab(self.bounds)
         img = Image.frombytes("RGB", raw.size, raw.bgra, "raw", "BGRX")
         if self.scale < 1.0:
             img = img.resize((int(self.width * self.scale), int(self.height * self.scale)), Image.LANCZOS)
@@ -405,6 +427,8 @@ class ScenarioNote:
     scenario: str
     verdict: str
     observation: str
+    screenshot: int = 0
+    actions: int = 0
 
 
 @dataclass
@@ -417,6 +441,8 @@ class Session:
     output_tokens: int = 0
     cache_read: int = 0
     summary: str = ""
+    identity: dict = field(default_factory=dict)
+    interrupted: bool = True
 
 
 def prune_images(messages: list[dict]) -> None:
@@ -472,18 +498,26 @@ def run(args: argparse.Namespace) -> Session:
     pyautogui.PAUSE = 0.05
 
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    report_dir = Path(args.report_dir) / stamp
+    report_dir = Path(args.exact_report_dir) if args.exact_report_dir else Path(args.report_dir) / stamp
     shots_dir = report_dir / "shots"
     shots_dir.mkdir(parents=True, exist_ok=True)
 
-    scenarios = load_scenarios(args.checklist, args.scenarios, not args.include_auto, args.limit)
+    goals = load_goals(Path(args.customer_goals)) if args.customer_goals else []
+    scenarios = ([f"{g.get('customer_context', '')}\nid={g['id']} | Persona: {g['persona']} | Goal: {g['goal']} | Success: {g['success']}" for g in goals]
+                 if goals else load_scenarios(args.checklist, args.scenarios, not args.include_auto, args.limit))
     if not scenarios:
         raise SystemExit("No scenarios — pass --checklist and/or --scenarios")
 
-    app = launch_app(args.app, args.attach, args.window_title)
-    screen = Screen(shots_dir)
-    client = anthropic.Anthropic()
-    session = Session()
+    if goals:
+        require_unlocked_desktop()
+    app = launch_app(args.app, args.attach, args.window_title, report_dir / "profile" if goals else None)
+    if app.proc and not args.keep_open:
+        atexit.register(stop_app, app)
+    screen = Screen(shots_dir, app.window if goals else None)
+    client = anthropic.Anthropic(timeout=90, max_retries=1)
+    identity = json.loads(Path(args.customer_identity).read_text(encoding="utf-8")) if args.customer_identity else {}
+    session = Session(identity=identity)
+    actions_since_note = 0
 
     scenario_text = "\n".join(f"{i + 1}. {s}" for i, s in enumerate(scenarios))
     first_shot_b64, idx = screen.grab()
@@ -499,9 +533,10 @@ def run(args: argparse.Namespace) -> Session:
 
     tools = [{"type": "computer_toolset_20260801"}, FINDING_TOOL, SCENARIO_TOOL]
     log = (report_dir / "transcript.jsonl").open("a", encoding="utf-8")
+    atexit.register(log.close)
 
     def call_model():
-        kwargs = dict(model=MODEL, max_tokens=MAX_TOKENS, system=SYSTEM_PROMPT, tools=tools,
+        kwargs = dict(model=MODEL, max_tokens=MAX_TOKENS, system=SYSTEM_PROMPT + (CUSTOMER_PROMPT if goals else ""), tools=tools,
                       messages=messages, output_config={"effort": EFFORT},
                       cache_control={"type": "ephemeral"})
         # Refusal fallbacks are opt-in on Fable; if this account/endpoint rejects the beta,
@@ -520,7 +555,7 @@ def run(args: argparse.Namespace) -> Session:
     call_model.plain = False
 
     turns = 0
-    while session.steps < args.max_steps:
+    while session.steps < args.max_steps and turns < args.max_turns:
         turns += 1
         prune_images(messages)
         resp = call_model()
@@ -544,6 +579,7 @@ def run(args: argparse.Namespace) -> Session:
             print(f"\n[turn {turns}] " + " ".join(text_parts)[:600], flush=True)
         if not tool_uses:
             session.summary = "\n".join(text_parts)
+            session.interrupted = resp.stop_reason != "end_turn"
             break
 
         results: list[dict] = []
@@ -561,6 +597,8 @@ def run(args: argparse.Namespace) -> Session:
                     continue
                 session.steps += 1
                 try:
+                    if goals:
+                        validate_action(tu.name, tu.input, screen, app.window)
                     if tu.name in ("screenshot", "zoom"):
                         time.sleep(SETTLE_SEC)
                         b64, idx = screen.grab(tu.input.get("region") if tu.name == "zoom" else None)
@@ -572,6 +610,8 @@ def run(args: argparse.Namespace) -> Session:
                     else:
                         t0 = time.perf_counter()
                         text = execute_action(tu.name, tu.input, screen)
+                        if tu.name not in ("wait", "cursor_position", "mouse_move"):
+                            actions_since_note += 1
                         time.sleep(0.15)
                         hung = measure_hang(app.hwnd)
                         if hung > 0.2:
@@ -579,13 +619,22 @@ def run(args: argparse.Namespace) -> Session:
                             text += f" — UI was hung for {hung:.1f}s after this action" + (" (still hung!)" if hung >= HANG_MAX_WAIT_SEC else "")
                         else:
                             text += f" — UI responsive ({(time.perf_counter() - t0) * 1000:.0f} ms)"
-                        results.append({"type": "tool_result", "tool_use_id": tu.id, "toolset_name": "computer",
-                                        "content": [{"type": "text", "text": text}]})
+                        content = [{"type": "text", "text": text}]
+                        if goals:
+                            b64, idx = screen.grab()
+                            content += [{"type": "text", "text": f"shot={idx}"},
+                                        {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}}]
+                        results.append({"type": "tool_result", "tool_use_id": tu.id, "toolset_name": "computer", "content": content})
                     print(f"  step {session.steps}: {tu.name} {json.dumps(tu.input)[:80]}", flush=True)
                 except pyautogui.FailSafeException:
                     session.summary = "Aborted by fail-safe (mouse moved to screen corner)."
+                    log.close()
                     return finish(session, report_dir, scenarios, app, args)
                 except Exception as e:  # keep the loop alive, tell Claude what broke
+                    if goals:
+                        session.summary = f"Customer interaction blocked: {e}"
+                        log.close()
+                        return finish(session, report_dir, scenarios, app, args)
                     halted = True
                     results.append({"type": "tool_result", "tool_use_id": tu.id, "toolset_name": "computer", "is_error": True,
                                     "content": f"Action failed: {e}"})
@@ -595,14 +644,23 @@ def run(args: argparse.Namespace) -> Session:
                 print(f"  ! FINDING [{f.severity}/{f.category}] {f.title}", flush=True)
                 results.append({"type": "tool_result", "tool_use_id": tu.id, "content": f"Recorded finding #{len(session.findings)}."})
             elif tu.name == "note_scenario":
-                session.scenarios.append(ScenarioNote(**tu.input))
+                if goals and (tu.input.get("scenario") not in {g["id"] for g in goals}
+                              or any(n.scenario == tu.input["scenario"] for n in session.scenarios)
+                              or tu.input.get("screenshot") != screen.count):
+                    results.append({"type": "tool_result", "tool_use_id": tu.id, "is_error": True,
+                                    "content": "Use one unique exact goal id and the latest screenshot index."})
+                    continue
+                session.scenarios.append(ScenarioNote(**tu.input, actions=actions_since_note))
+                actions_since_note = 0
                 results.append({"type": "tool_result", "tool_use_id": tu.id, "content": "Noted."})
             else:
                 results.append({"type": "tool_result", "tool_use_id": tu.id, "is_error": True, "content": f"Unknown tool {tu.name}"})
         messages.append({"role": "user", "content": results})
+        write_outputs(session, report_dir, scenarios, partial=True)
 
     if not session.summary:
         session.summary = f"Stopped after {session.steps} actions (budget {args.max_steps})."
+    log.close()
     return finish(session, report_dir, scenarios, app, args)
 
 
@@ -613,6 +671,7 @@ def run(args: argparse.Namespace) -> Session:
 def write_outputs(session: Session, report_dir: Path, scenarios: list[str], partial: bool = False) -> None:
     (report_dir / "findings.json").write_text(json.dumps({
         "model": MODEL, "steps": session.steps, "partial": partial,
+        "identity": session.identity, "interrupted": session.interrupted,
         "findings": [asdict(f) for f in session.findings],
         "scenarios": [asdict(s) for s in session.scenarios], "hangs": session.hangs,
         "usage": {"input": session.input_tokens, "output": session.output_tokens, "cache_read": session.cache_read},
@@ -627,11 +686,19 @@ def finish(session: Session, report_dir: Path, scenarios: list[str], app: AppHan
     if args.file_issues:
         file_issues(session, report_dir, args)
     if app.proc and not args.keep_open:
+        stop_app(app)
+    return session
+
+
+def stop_app(app: AppHandle) -> None:
+    """Only the process created for this test is ours to stop."""
+    if app.proc and app.proc.poll() is None:
         try:
             app.proc.terminate()
-        except Exception:
-            pass
-    return session
+            app.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            app.proc.kill()
+            app.proc.wait(timeout=5)
 
 
 def render_report(s: Session, scenarios: list[str], report_dir: Path, partial: bool = False) -> str:
@@ -749,6 +816,7 @@ def file_issues(s: Session, report_dir: Path, args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------------------
 
 def main() -> None:
+    global MODEL
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--app", help="Path to CAP.Desktop.exe (or a .dll, launched with dotnet)")
     p.add_argument("--attach", action="store_true", help="Use an already running Lunima window instead of launching")
@@ -758,6 +826,11 @@ def main() -> None:
     p.add_argument("--include-auto", action="store_true", help="Also walk checklist items marked (auto)")
     p.add_argument("--limit", type=int, help="Only the first N scenarios")
     p.add_argument("--max-steps", type=int, default=120, help="Budget of UI actions")
+    p.add_argument("--max-turns", type=int, default=100, help="Also bound model-only turns")
+    p.add_argument("--model", default=MODEL)
+    p.add_argument("--customer-goals", help="Independent persona goals JSON")
+    p.add_argument("--customer-identity", help="Requested repo, PR, commit and policy JSON")
+    p.add_argument("--exact-report-dir", help="Write evidence here without adding a timestamp")
     p.add_argument("--report-dir", default=str(Path(__file__).parent / "reports"))
     p.add_argument("--keep-open", action="store_true", help="Leave the app running afterwards")
     p.add_argument("--file-issues", action="store_true", help="Open GitHub issues for findings")
@@ -771,6 +844,12 @@ def main() -> None:
     p.add_argument("--publish-report", metavar="REPORT_DIR",
                    help="Skip testing; file issues from an existing report directory (implies --file-issues)")
     args = p.parse_args()
+    MODEL = args.model
+    if min(args.max_steps, args.max_turns) < 1:
+        p.error("Step and turn budgets must be positive")
+    if args.customer_goals and (args.attach or args.file_issues or args.publish_report or args.keep_open
+                               or not args.customer_identity or not args.exact_report_dir):
+        p.error("Customer mode requires an isolated app, identity and exact report directory; no attach or automatic publication")
     if args.publish_report:
         args.file_issues = True
     if args.file_issues and not args.lunima_clone and not args.no_screenshots:

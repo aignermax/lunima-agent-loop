@@ -1,0 +1,16 @@
+name: Customer review checks
+on: [push, pull_request]
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: dotnet build --nologo
+      - run: dotnet run --project tests/CustomerIntegration
+      - run: python -m unittest discover -s tests -p "test_customer*.py" -v

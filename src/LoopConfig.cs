@@ -24,6 +24,16 @@ public sealed class LoopConfig
     /// <summary>Claim label: set on an issue while a worker runs, so a second machine won't start the same issue.</summary>
     public string RunningLabel { get; set; } = "agent-running";
     public bool Enabled { get; set; } = true;
+    /// <summary>Opt in on an unlocked dedicated desktop with the UX Python dependencies.</summary>
+    public bool CustomerEnabled { get; set; }
+    public string CustomerPython { get; set; } = "python";
+    public string CustomerModel { get; set; } = "claude-fable-5-1";
+    public string CustomerProject { get; set; } = "CAP.Desktop/CAP.Desktop.csproj";
+    public int CustomerMaxReviewsPerCycle { get; set; } = 2;
+    public int CustomerMaxAgeHours { get; set; } = 24;
+    public int CustomerMaxSteps { get; set; } = 80;
+    public int CustomerMaxTurns { get; set; } = 60;
+    public int CustomerTimeoutMinutes { get; set; } = 20;
 
     public static LoopConfig Load(string path)
     {
@@ -36,6 +46,11 @@ public sealed class LoopConfig
         if (config is null) throw new InvalidOperationException($"Could not parse config: {path}");
         if (string.IsNullOrWhiteSpace(config.ClonePath))
             throw new InvalidOperationException($"clonePath is not set in {path}");
+        if (config.CustomerEnabled && (config.CustomerMaxReviewsPerCycle is < 1 or > 10 ||
+            config.CustomerMaxAgeHours is < 1 or > 168 || config.CustomerMaxSteps is < 1 or > 500 ||
+            config.CustomerMaxTurns is < 1 or > 500 || config.CustomerTimeoutMinutes is < 1 or > 120 ||
+            string.IsNullOrWhiteSpace(config.CustomerPython) || string.IsNullOrWhiteSpace(config.CustomerModel)))
+            throw new InvalidOperationException("Invalid customer configuration: check positive budgets and Python/model settings.");
         return config;
     }
 }

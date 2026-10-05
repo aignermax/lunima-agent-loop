@@ -143,6 +143,132 @@ Do not touch mouse or keyboard while it runs; moving the mouse into the top-left
 (pyautogui fail-safe). Budget: a 150-step run on Fable is roughly 20–40 minutes and a few dollars
 in screenshots; prompt caching is on.
 
+## Independent customer role → Product Owner
+
+The existing desktop tester is now part of `run` and `own` when `customerEnabled` is
+true. The customer role uses Claude's [computer-use toolset](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool)
+to operate the real Windows app. It receives persona goals, not source code or a
+developer's click recipe. It assesses task completion **and** visual hierarchy,
+consistency, typography, spacing, discoverability, feedback and recovery.
+
+```
+scheduled run / own
+  → independent customer: new PR head(s) + integration baseline
+  → evidence and scenario verdicts in state/customer/feedback.md + .json
+  → PO reads customer evidence before merge / prioritization
+  → deduplicated, outcome-based issues for the existing Autonomous Issue Agent
+  → worker PR / updated commit → new customer review
+```
+
+Every review checks out the requested commit into a fresh directory, builds
+`CAP.Desktop/CAP.Desktop.csproj`, and launches that output. The working Lunima clone
+is never checked out, reset or cleaned by the customer. Drafts, forks and unrelated
+PRs are excluded; eligible PRs target the integration branch and carry `agent-pr`
+or an `Agent:` title. Reviews use least-recently-attempted order, with new commits
+first and the baseline winning ties. A failing baseline or older PR cannot keep
+later PRs waiting indefinitely, even with a one-review budget.
+
+The bundled goals in `tools/ux-tester/customer_scenarios.json` cover Ingrid's first
+use, Jonas learning and composing logic, Peter editing precisely and inspecting
+the manufacturing path, and a design coherence review. The customer reads a brief
+derived from issue #537's latest North star and the integration commit's
+`docs/ROADMAP.md` and `docs/PERSONAS.md`: education-first **NAND2TETRIS for photonics**,
+gates → circuits → systems, visible computation and eventual fabrication.
+The complete versioned sources are saved in `state/customer/strategy.json`; their
+fingerprint participates in acceptance identity. Unavailable sources block the
+cycle, and source changes during a run invalidate its acceptance. The customer
+gets product intent and persona definitions, without implementation/rung notes
+or prescribed clicks. It restates its understanding in the transcript for the
+PO to check. Future roadmap ambitions are not treated as shipped features, and
+simulation/DRC-lite/GDS export are never proof of foundry readiness.
+Edit the **trusted runner-side** scenarios to add a targeted journey for a new
+feature; the six default journeys do not cover every possible feature.
+For each PR, the PO must also write `state/customer/goals/pr-<number>.json` with
+`sha` set to the current PR head and a nonempty `goals` array using the same
+`id/persona/goal/success` schema. The PO receives these instructions automatically.
+Missing/stale PR-specific goals block acceptance: generic smoke journeys alone
+cannot approve a feature they never exercise. The next scheduled pass tests the
+combined goals; no human needs to copy the report between roles. These are simulated
+users, not human research or a guarantee that a redesign is good.
+
+### Set up once, after merging
+
+Use a dedicated, unlocked Windows test desktop/account or VM, Python 3.11+, .NET 10,
+`git`, authenticated `gh`, and `ANTHROPIC_API_KEY` in the scheduled task's environment.
+Do not use the mouse/keyboard while the customer runs. A shared everyday desktop
+can contain notifications and user data even when captures are cropped to the app.
+The test process supplies fresh profile environment directories to Lunima, but
+this is **not an OS sandbox**: Windows known-folder APIs can still resolve the
+account's normal folders. Use a dedicated account with only public test fixtures.
+
+```powershell
+scripts\Setup-CustomerReview.ps1
+publish\lunima-agent-loop.exe customer   # test only; no PO, issues, merges or workers
+publish\lunima-agent-loop.exe own        # customer evidence, then the PO
+```
+
+The setup script creates `.customer-venv`, installs dependencies, publishes the
+loop and updates only the customer fields in `agent-loop.json`. It does not store
+an API key, start a test or change Task Scheduler. Keep the existing task's working
+directory pointed at this checkout. Python tools must accompany the executable;
+deploying only the `.exe` is insufficient. Existing installations stay opted out
+until configured; no running service is silently changed by this PR.
+
+Manual configuration:
+
+| key | default | meaning |
+|---|---|---|
+| `customerEnabled` | `false` | opt in to desktop customer reviews before every due PO pass |
+| `customerPython` | `python` | Python executable with `tools/ux-tester/requirements.txt` installed |
+| `customerModel` | `claude-fable-5-1` | configurable computer-use model; independent of worker/PO model |
+| `customerProject` | `CAP.Desktop/CAP.Desktop.csproj` | project to build in each fresh checkout |
+| `customerMaxReviewsPerCycle` | `2` | at most two due targets; cache hits consume no slot |
+| `customerMaxAgeHours` | `24` | acceptance expiry, even for an unchanged commit |
+| `customerMaxSteps` / `customerMaxTurns` | `80` / `60` | per-review action and model-turn budgets |
+| `customerTimeoutMinutes` | `20` | desktop-run limit; checkout/build have separate bounds |
+
+Both pause and the master `enabled` switch also apply to `customer`. State caches
+are keyed by repo, PR, commit, goals, strategy sources, model and harness policy. New commits invalidate
+old results; a push during a review blocks the result. Infrastructure blocks retry
+after an hour; normal verdicts expire at the configured age. A per-cycle lock
+prevents two customer sessions sharing the same state directory from using the
+desktop concurrently. Use one runner/state directory per test desktop.
+
+### Evidence and acceptance
+
+- `PASSED`: every goal has an interaction, an observation and an existing screenshot;
+  no failed goals or major/critical findings; the model ended normally.
+- `NEEDS_CHANGES`: observed failed goal or major/critical friction.
+- `BLOCKED`: locked desktop, missing key/dependency, wrong build, failed launch,
+  interrupted/budget-exhausted run, incomplete coverage or missing evidence.
+- `PENDING`: not run yet because the per-cycle budget was reached.
+
+Every meaningful action receives a fresh screenshot. Customer input is bounded to
+the launched app's process/window; a focus change ends the session rather than
+clicking another app. Reports, model transcripts and screenshots remain local in
+`state/customer/runs/`. Nothing is automatically uploaded or filed by this role.
+Run directories include builds and can grow large; archive/remove old completed
+runs during maintenance, while retaining evidence for any accepted current PR.
+
+The PO is instructed to accept only fresh `PASSED` evidence for the current PR head,
+compare the SHA immediately before merging, and use `--match-head-commit`. This is
+a **PO workflow rule**, not a GitHub branch-protection check: human/admin merges
+outside the loop are unaffected. Baseline evidence never approves a PR. Blocked
+test infrastructure is not filed as a product defect. The PO converts actual UX
+findings into deduplicated issues for the existing worker, with persona, goal,
+reproduction and retest criteria, and may choose to create no new feature tasks.
+
+### Validate the integration without a desktop or API calls
+
+```powershell
+dotnet build
+dotnet run --project tests/CustomerIntegration
+python -m unittest discover -s tests -p "test_customer*.py" -v
+```
+
+The tests drive the real report loop with scripted API/desktop adapters and exercise
+the C# → Python handoff. They do not substitute for a live customer run after setup.
+
 ## Pausing the loop
 
 Going on vacation, or just want the machine to stop thinking for a while? Pause it:
@@ -172,9 +298,8 @@ For a *hard* stop, combine it with the two other switches — they are independe
 
 ## Notes & limitations
 
-- **Headless verification only.** UI changes are verified via integration tests and the existing
-  screenshot-test infrastructure; real clicking is impossible on a locked machine. Issues that
-  need human eyes are labelled `needs-human` / documented in the PR body for after the vacation.
+- **Desktop availability.** Mechanical tests can run headlessly. The optional customer role
+  requires an unlocked test desktop; locked sessions are explicitly `BLOCKED`, never UX-passed.
 - The worker contract and the Product-Owner contract live in `prompts/worker.md` and
   `prompts/owner.md` — edit those to tune behavior; no recompile needed.
 - A crashed worker can leave a stale `agent-running` claim behind; the Product-Owner pass
