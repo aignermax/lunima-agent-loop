@@ -18,6 +18,10 @@ class CycleTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name)
+        strategy = patch.object(cycle, "strategy_snapshot", return_value={
+            "fingerprint": "strategy-v1", "brief": "NAND2TETRIS for photonics; Jonas learns gates", "sources": {}})
+        self.strategy = strategy.start()
+        self.addCleanup(strategy.stop)
         self.args = argparse.Namespace(state_dir=self.path, feedback=self.path / "feedback.md", repo="owner/repo",
             base="dev-ki", label="agent-pr", scenarios=cycle.ROOT / "customer_scenarios.json", model="test-model",
             max_reviews=1, max_age=86400, max_steps=10, max_turns=10, timeout=1, project="App/App.csproj")
@@ -49,6 +53,36 @@ class CycleTests(unittest.TestCase):
             cycle.cycle(self.args)
         data = json.loads(self.args.feedback.with_suffix(".json").read_text())
         self.assertEqual(data["reviews"][1]["status"], "blocked")
+
+    def test_blocked_retries_cannot_starve_later_prs(self):
+        for number in (2, 3):
+            self.targets.append(dict(self.targets[0], key=f"pr-{number}", pr=number))
+            (self.path / "goals" / f"pr-{number}.json").write_text(
+                (self.path / "goals" / "pr-1.json").read_text())
+        visited = []
+        def blocked(args, target, identity, path):
+            visited.append(target["key"])
+            return {"identity": identity, "status": "blocked", "finished_at": time.time()}
+        with patch.object(cycle, "targets", return_value=self.targets), patch.object(cycle, "review", side_effect=blocked):
+            for now in (10000, 14000, 18000, 22000):
+                with patch.object(cycle.time, "time", return_value=now):
+                    cycle.cycle(self.args)
+        self.assertEqual(visited, ["baseline", "pr-1", "pr-2", "pr-3"])
+
+    def test_strategy_refresh_invalidates_cache_and_midrun_changes(self):
+        with patch.object(cycle, "targets", return_value=self.targets), patch.object(cycle, "review", side_effect=self.fake_review) as review:
+            cycle.cycle(self.args)
+            first = json.loads((self.path / "reviews.json").read_text())["baseline"]["identity"]
+            self.strategy.return_value = dict(self.strategy.return_value, fingerprint="strategy-v2")
+            self.args.max_reviews = 2
+            cycle.cycle(self.args)
+            second = json.loads((self.path / "reviews.json").read_text())["baseline"]["identity"]
+            self.assertNotEqual(first["policy"], second["policy"])
+            self.assertEqual(review.call_count, 3)
+            self.strategy.side_effect = [self.strategy.return_value, dict(self.strategy.return_value, fingerprint="v3")]
+            cycle.cycle(self.args)
+            data = json.loads(self.args.feedback.with_suffix(".json").read_text())
+            self.assertTrue(all(r["status"] == "blocked" for r in data["reviews"]))
 
     def test_locked_desktop_does_not_build_or_call_model(self):
         with patch.object(cycle, "require_unlocked_desktop", side_effect=RuntimeError("Desktop locked")), patch.object(cycle, "prepare") as build:
@@ -100,12 +134,17 @@ class CycleTests(unittest.TestCase):
         window = argparse.Namespace(_hWnd=1, left=100, right=200, top=100, bottom=200)
         screen = argparse.Namespace(to_screen=lambda xy: xy)
         with patch("customer_desktop.require_target_foreground"):
-            for key in ("Super+r", "Win-r", "Alt+Tab", "Ctrl+Shift+Escape"):
+            for key in ("Super+r", "Win-r", "Alt+Tab", "Ctrl+Shift+Escape", "Win + r", "Alt + Tab", "Ctrl + Shift + Escape"):
                 with self.assertRaises(ValueError):
                     validate_action("key", {"text": key}, screen, window)
             with self.assertRaises(ValueError):
                 validate_action("left_click", {"coordinate": [0, 0]}, screen, window)
             validate_action("left_click", {"coordinate": [150, 150]}, screen, window)
+            for action in ("left_click", "right_click", "double_click", "scroll", "left_click_drag"):
+                with self.assertRaises(ValueError):
+                    validate_action(action, {}, screen, window)
+            with self.assertRaises(ValueError):
+                validate_action("left_click", {"coordinate": [150, 150], "text": " Win "}, screen, window)
 
     def test_lock_excludes_another_cycle_and_releases_after_exception(self):
         with self.assertRaisesRegex(ValueError, "test"):

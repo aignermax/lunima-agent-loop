@@ -14,6 +14,8 @@ Assert(await CustomerReview.RunAsync(config, root) == 0 && !Directory.Exists(Pat
     "disabled customer role does not launch a process or write acceptance");
 Assert(CustomerReview.OwnerContext(config, root).Contains("disabled"), "disabled role disclosed to PO");
 config.CustomerEnabled = true;
+Assert(CustomerReview.OwnerContext(config, root).Contains(Path.Combine(root, "state", "customer", "strategy.json")),
+    "PO receives absolute strategy snapshot path outside its working clone");
 config.CustomerPython = Path.Combine(root, "missing-python");
 Assert(await CustomerReview.RunAsync(config, root) == 1, "missing Python is a blocked review");
 Assert(File.ReadAllText(CustomerReview.FeedbackPath(root)).Contains("BLOCKED"), "failure replaces stale feedback");

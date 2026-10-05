@@ -88,6 +88,12 @@ public static class CustomerReview
             "with {\"sha\":\"<current headRefOid>\",\"goals\":[{\"id\":\"pr-specific-goal\",\"persona\":\"Jonas\"," +
             "\"goal\":\"<user outcome affected by this PR>\",\"success\":\"<observable outcome>\"}]}. " +
             "Choose the appropriate existing persona, unique goal IDs and outcome-based tasks without click recipes. " +
+            $"Read `{Path.Combine(root, "state", "customer", "strategy.json")}`, docs/ROADMAP.md, docs/PERSONAS.md and issue #537 first. " +
+            "In each goal/success explain its connection to the current roadmap rung: education-first NAND2TETRIS " +
+            "for photonics, composing gates into systems, watch it compute, and an honest path to fabrication. " +
+            "Use the latest North star rather than superseded single-chip restrictions; report source conflicts. " +
+            "Check the customer's initial strategy restatement in its transcript; misunderstanding requires new goals and a retest. " +
+            "Do not demand future rungs or treat simulation, DRC-lite or GDS export as foundry sign-off. " +
             "Do not merely repeat the generic smoke goals. Update these goals on every new head commit; " +
             "the next customer cycle runs them alongside the shared goals. Do not merge while awaiting this retest.";
     }

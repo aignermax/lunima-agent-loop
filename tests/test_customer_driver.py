@@ -86,6 +86,14 @@ class DriverTests(unittest.TestCase):
         self.assertEqual(data["scenarios"][0]["actions"], 1)
         self.assertTrue((self.path / "evidence" / "report.md").exists())
 
+    def test_strategy_and_persona_brief_reaches_customer(self):
+        self.goals[0]["customer_context"] = "NAND2TETRIS for photonics; Jonas is a student new to photonics"
+        (self.path / "goals.json").write_text(json.dumps(self.goals))
+        _, client = self.drive([response([], "end_turn")])
+        prompt = str(client.beta.messages.create.call_args.kwargs)
+        self.assertIn("Jonas is a student", prompt)
+        self.assertIn("NAND2TETRIS for photonics", prompt)
+
     def test_refusal_is_blocked(self):
         data, _ = self.drive([response([], "refusal")])
         self.assertEqual(assess(data, self.goals, self.path / "evidence", self.identity)[0], "blocked")

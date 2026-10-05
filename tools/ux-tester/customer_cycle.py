@@ -14,6 +14,7 @@ from pathlib import Path
 
 from customer_contract import assess, load_goals, policy_hash
 from customer_desktop import require_unlocked_desktop
+from customer_strategy import strategy_snapshot
 from customer_workspace import command, cycle_lock, fresh, prepare, targets, write_json
 
 ROOT = Path(__file__).parent
@@ -97,6 +98,10 @@ def reusable(record: dict, identity: dict, args) -> bool:
 def scenarios_for(args, target: dict) -> Path:
     """The PO supplies a user outcome for this PR; the customer discovers the path."""
     goals = load_goals(args.scenarios)
+    strategy = getattr(args, "strategy", None)
+    if strategy:
+        goals[0]["customer_context"] = strategy["brief"]
+        goals[0]["strategy_revision"] = strategy["fingerprint"]
     if target["pr"]:
         request_path = args.state_dir / "goals" / f"pr-{target['pr']}.json"
         if not request_path.is_file():
@@ -123,10 +128,18 @@ def cycle(args) -> int:
         state_file = args.state_dir / "reviews.json"
         cache = json.loads(state_file.read_text(encoding="utf-8")) if state_file.exists() else {}
         current = targets(args.repo, args.base, args.label)
+        baseline = next(t for t in current if t["pr"] is None)
+        args.strategy = strategy_snapshot(args.repo, baseline["sha"])
+        write_json(args.state_dir / "strategy.json", args.strategy)
         records = []
         remaining = args.max_reviews
-        # Give the baseline a slot so design debt is assessed even during a busy PR queue.
-        for target in sorted(current, key=lambda t: (t["pr"] is not None, t["pr"] or 0)):
+        # Least recently attempted first, including baseline: persistent failures
+        # must not starve new PRs even when the budget is one and all TTLs expire.
+        def queue_order(target):
+            old = cache.get(target["key"], {})
+            attempted = old.get("finished_at", 0) if old.get("identity", {}).get("sha") == target["sha"] else 0
+            return (attempted, target["pr"] is not None, target["pr"] or 0)
+        for target in sorted(current, key=queue_order):
             scoped = copy.copy(args)
             try:
                 scoped.scenarios = scenarios_for(args, target)
@@ -151,12 +164,14 @@ def cycle(args) -> int:
             records.append(item)
         # A push during a long UI run invalidates acceptance immediately.
         latest = {t["key"]: t["sha"] for t in targets(args.repo, args.base, args.label)}
+        latest_strategy = strategy_snapshot(args.repo, latest["baseline"])
         for index, item in enumerate(records):
             key = f"pr-{item['identity']['pr']}" if item['identity']['pr'] else "baseline"
-            if latest.get(key) != item["identity"]["sha"]:
+            if latest.get(key) != item["identity"]["sha"] or latest_strategy["fingerprint"] != args.strategy["fingerprint"]:
                 item = item.copy()
                 records[index] = item
-                item.update(status="blocked", reason="Target changed or closed during the customer run")
+                item.update(status="blocked", reason="Target or strategy changed during the customer run")
+        records.sort(key=lambda item: (item["identity"]["pr"] is not None, item["identity"]["pr"] or 0))
         args.feedback.parent.mkdir(parents=True, exist_ok=True)
         args.feedback.write_text(render(records), encoding="utf-8")
         write_json(args.feedback.with_suffix(".json"), {"repo": args.repo, "generated_at": time.time(), "reviews": records})

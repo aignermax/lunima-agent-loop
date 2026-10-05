@@ -41,7 +41,7 @@ def validate_action(name: str, inp: dict, screen, window) -> None:
     """Reject system shortcuts and coordinates outside the tested application."""
     require_target_foreground(window._hWnd)
     if name in ("key", "hold_key"):
-        keys = re.split(r"[+\-]", inp.get("text", "").lower())
+        keys = [key.strip() for key in re.split(r"[+\-]", inp.get("text", "").lower())]
         if any(k in ("super", "win", "windows", "meta", "cmd") or k.startswith(("super_", "meta_", "win_")) for k in keys):
             raise ValueError("System shortcuts are unavailable to the customer role")
         if any(k.startswith("alt") for k in keys) and any(k in ("tab", "f4", "escape", "esc", "space") for k in keys):
@@ -53,6 +53,10 @@ def validate_action(name: str, inp: dict, screen, window) -> None:
     if name.endswith("click") and inp.get("text"):
         # Click modifiers go through the same shortcut validation as keys.
         validate_action("key", {"text": inp["text"]}, screen, window)
+    if (name.endswith("click") or name in ("scroll", "mouse_move", "left_click_drag")) and not inp.get("coordinate"):
+        raise ValueError("Customer pointer actions require explicit in-window coordinates")
+    if name == "left_click_drag" and not inp.get("start_coordinate"):
+        raise ValueError("Customer drags require explicit in-window start coordinates")
     for field in ("coordinate", "start_coordinate"):
         if field in inp:
             x, y = screen.to_screen(inp[field])

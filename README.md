@@ -164,13 +164,25 @@ Every review checks out the requested commit into a fresh directory, builds
 `CAP.Desktop/CAP.Desktop.csproj`, and launches that output. The working Lunima clone
 is never checked out, reset or cleaned by the customer. Drafts, forks and unrelated
 PRs are excluded; eligible PRs target the integration branch and carry `agent-pr`
-or an `Agent:` title. The baseline has a reserved first slot when due, so a busy
-feature queue cannot hide existing design debt.
+or an `Agent:` title. Reviews use least-recently-attempted order, with new commits
+first and the baseline winning ties. A failing baseline or older PR cannot keep
+later PRs waiting indefinitely, even with a one-review budget.
 
 The bundled goals in `tools/ux-tester/customer_scenarios.json` cover Ingrid's first
-use, Jonas learning logic, Peter editing precisely and recovering, and a design
-coherence review. Edit this **trusted runner-side** file to add a targeted journey
-for a new feature; the four default journeys do not cover every possible feature.
+use, Jonas learning and composing logic, Peter editing precisely and inspecting
+the manufacturing path, and a design coherence review. The customer reads a brief
+derived from issue #537's latest North star and the integration commit's
+`docs/ROADMAP.md` and `docs/PERSONAS.md`: education-first **NAND2TETRIS for photonics**,
+gates → circuits → systems, visible computation and eventual fabrication.
+The complete versioned sources are saved in `state/customer/strategy.json`; their
+fingerprint participates in acceptance identity. Unavailable sources block the
+cycle, and source changes during a run invalidate its acceptance. The customer
+gets product intent and persona definitions, without implementation/rung notes
+or prescribed clicks. It restates its understanding in the transcript for the
+PO to check. Future roadmap ambitions are not treated as shipped features, and
+simulation/DRC-lite/GDS export are never proof of foundry readiness.
+Edit the **trusted runner-side** scenarios to add a targeted journey for a new
+feature; the six default journeys do not cover every possible feature.
 For each PR, the PO must also write `state/customer/goals/pr-<number>.json` with
 `sha` set to the current PR head and a nonempty `goals` array using the same
 `id/persona/goal/success` schema. The PO receives these instructions automatically.
@@ -210,13 +222,13 @@ Manual configuration:
 | `customerPython` | `python` | Python executable with `tools/ux-tester/requirements.txt` installed |
 | `customerModel` | `claude-fable-5-1` | configurable computer-use model; independent of worker/PO model |
 | `customerProject` | `CAP.Desktop/CAP.Desktop.csproj` | project to build in each fresh checkout |
-| `customerMaxReviewsPerCycle` | `2` | baseline plus one PR by default; cache hits consume no slot |
+| `customerMaxReviewsPerCycle` | `2` | at most two due targets; cache hits consume no slot |
 | `customerMaxAgeHours` | `24` | acceptance expiry, even for an unchanged commit |
 | `customerMaxSteps` / `customerMaxTurns` | `80` / `60` | per-review action and model-turn budgets |
 | `customerTimeoutMinutes` | `20` | desktop-run limit; checkout/build have separate bounds |
 
 Both pause and the master `enabled` switch also apply to `customer`. State caches
-are keyed by repo, PR, commit, goals, model and harness policy. New commits invalidate
+are keyed by repo, PR, commit, goals, strategy sources, model and harness policy. New commits invalidate
 old results; a push during a review blocks the result. Infrastructure blocks retry
 after an hour; normal verdicts expire at the configured age. A per-cycle lock
 prevents two customer sessions sharing the same state directory from using the

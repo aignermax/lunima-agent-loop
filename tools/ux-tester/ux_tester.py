@@ -503,7 +503,7 @@ def run(args: argparse.Namespace) -> Session:
     shots_dir.mkdir(parents=True, exist_ok=True)
 
     goals = load_goals(Path(args.customer_goals)) if args.customer_goals else []
-    scenarios = ([f"id={g['id']} | Persona: {g['persona']} | Goal: {g['goal']} | Success: {g['success']}" for g in goals]
+    scenarios = ([f"{g.get('customer_context', '')}\nid={g['id']} | Persona: {g['persona']} | Goal: {g['goal']} | Success: {g['success']}" for g in goals]
                  if goals else load_scenarios(args.checklist, args.scenarios, not args.include_auto, args.limit))
     if not scenarios:
         raise SystemExit("No scenarios — pass --checklist and/or --scenarios")
