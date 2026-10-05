@@ -69,12 +69,19 @@ Open issues labelled `{TASK_LABEL}`:
 3. **Backlog health.** Review open `{TASK_LABEL}` issues: split anything oversized (> ~1 day of
    work) into small self-contained issues with clear acceptance criteria; close duplicates
    (comment + close); label genuinely hard ones `complex`. Every issue must be headless-verifiable;
-   parts that need real UI interaction get a "manual verification after vacation" note in the body.
+   user-visible work additionally needs an outcome-based customer goal and acceptance through
+   the independent customer role. Headless tests and worker screenshots cannot prove discoverability.
    Also clean up **stale claims**: issues labelled `agent-running` whose last activity is older
    than ~6 hours and that have no open PR — the worker machine crashed mid-run. Remove the label
    (`gh api repos/{REPO}/issues/<n>/labels/agent-running -X DELETE`) so another run can retry.
-4. **Seed the backlog.** If fewer than 5 open `{TASK_LABEL}` issues exist, create new ones from
-   the next roadmap rungs — small, standalone, in roadmap priority order. Also valuable:
+4. **Prioritize customer outcomes.** Review the independent customer report before proposing work.
+   Fix blocked journeys, confusing interactions and coherent design problems before adding features.
+   A backlog below five tasks is a capacity signal, not a quota: creating zero issues is valid.
+   Only seed a new task for an evidenced user need, small and standalone, in roadmap priority order.
+   For design work, explain the observed friction and proposed hierarchy/navigation/interaction,
+   preserve expert precision, and require the same customer goal to be retested on the PR.
+   Search existing issues first; update one matching issue instead of refiling each hourly finding.
+   Also valuable when justified:
    animated help `(?)` flyouts with physics explanations across the app (education IS the product),
    and anything that moves toward the NAND2TETRIS-for-photonics goal.
    **Product-market-fit lens:** now and then (not every pass — at most once a day), step back

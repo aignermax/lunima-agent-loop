@@ -39,6 +39,16 @@ try
 {
     var config = LoopConfig.Load(configPath);
     var state = new StateStore(Path.Combine(root, "state", "state.json"));
+    if (command == "customer")
+    {
+        if (!config.Enabled || state.IsPaused)
+        {
+            Console.WriteLine("Customer pass skipped: loop disabled or paused.");
+            return 0;
+        }
+        if (!config.CustomerEnabled) Console.WriteLine("Customer pass disabled: set customerEnabled=true after desktop setup.");
+        return await CustomerReview.RunAsync(config, root);
+    }
     var gh = new GitHubClient(config.GitHubRepo);
     IAgentRunner worker = await KimiRunner.CreateAsync();
     IAgentRunner owner = config.OwnerRunner.Equals("claude", StringComparison.OrdinalIgnoreCase)
@@ -124,6 +134,7 @@ static void PrintUsage()
           run      Product-Owner pass (if due today) + work agent-task issues — what the scheduler calls
           work     Work open 'agent-task' issues (within the daily cap), one kimi run per issue
           own      Single Product-Owner pass (review/merge agent PRs, groom + seed backlog)
+          customer Run independent customer UX reviews only (respects pause and enable switches)
           pause    Suspend all passes — 'pause' (indefinitely), 'pause 14 vacation',
                    'pause 2026-09-01 vacation'. Persists in state/state.json, so it
                    survives reboots and Windows updates.
