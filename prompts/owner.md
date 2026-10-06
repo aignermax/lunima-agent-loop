@@ -122,10 +122,10 @@ Open issues labelled `{TASK_LABEL}`:
 
 - **No background commands — ever.** This is a headless one-shot session: the moment you end your
   turn to "wait for a notification", the pass is over and the result is lost. Run every command
-  (builds, test suites, bakes) in the **foreground** and bound it with a timeout, e.g.
-  `timeout 1500 dotnet test ...`. Never use `run_in_background`, `&`, `nohup` or polling loops on
-  a background job. If something cannot finish in the foreground within ~25 minutes, don't start
-  it: leave a PR comment saying what still needs verifying, and pick it up in the next pass.
+  (builds, test suites, bakes) in the **foreground** and wait for it; a single command may take up
+  to 30 minutes. Never use `run_in_background`, `&`, `nohup` or polling loops on a background job.
+  If a verification would take longer, don't start it: leave a PR comment saying what still
+  needs verifying, and pick it up in the next pass.
 - **NEVER push to or merge into `{BASE_BRANCH}`.** All integration happens in `{INTEGRATION_BRANCH}`.
 - No force-push. No deleting branches (merged task branches may be deleted). No editing
   labels/milestones.

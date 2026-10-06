@@ -23,12 +23,9 @@ Date: {DATE}
 - Build: `dotnet build CAP.Desktop/CAP.Desktop.csproj`
 - Test: `dotnet test UnitTests/UnitTests.csproj --filter "Category!=Slow"`
   (the full filtered suite, ~3 minutes — always run it before opening the PR; never run the suite unfiltered)
-- **No background commands — ever.** This is a headless one-shot session: the moment you end your
-  turn to "wait for a notification", the pass is over and the result is lost. Run every command
-  (builds, test suites, bakes) in the **foreground** and bound it with a timeout, e.g.
-  `timeout 1500 dotnet test ...`. Never use `run_in_background`, `&`, `nohup` or polling loops on
-  a background job. If something cannot finish in the foreground within ~25 minutes, don't start
-  it: leave a PR comment saying what still needs verifying, and pick it up in the next pass.
+- **Run builds and tests in the foreground and wait for them.** This is a headless one-shot
+  session: if you start a command in the background and end your turn to wait for it, the
+  session is over and your work is lost. Never background, detach or poll a build or test run.
 
 ## Binding rules
 

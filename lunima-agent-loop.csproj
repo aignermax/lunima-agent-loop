@@ -11,6 +11,8 @@
     <!-- `dotnet publish` produces one native executable: no .NET runtime needed on the target,
          fast start. Needs the platform C/C++ toolchain on the build machine (MSVC on Windows). -->
     <PublishAot>true</PublishAot>
+    <!-- no ICU at runtime (minimal Linux hosts); the tool only formats/parses ISO dates and numbers -->
+    <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>

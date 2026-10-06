@@ -10,15 +10,28 @@ namespace AgentLoop;
 /// </summary>
 public sealed class ClaudeRunner : IAgentRunner
 {
+    /// <summary>
+    /// A headless -p session ends as soon as the model ends its turn, so a command left running
+    /// in the background loses its result. Disable background tasks and let foreground Bash
+    /// commands run up to 30 min (the tool's default cap is 2 min, max 10 min) — long enough
+    /// for a full test suite or bake.
+    /// </summary>
+    private static readonly Dictionary<string, string> HeadlessEnvironment = new()
+    {
+        ["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] = "1",
+        ["BASH_DEFAULT_TIMEOUT_MS"] = "1800000",
+        ["BASH_MAX_TIMEOUT_MS"] = "1800000",
+    };
+
     private readonly string _claudeExe;
 
     private ClaudeRunner(string claudeExe) => _claudeExe = claudeExe;
 
-    public static async Task<ClaudeRunner> CreateAsync()
+    public static Task<ClaudeRunner> CreateAsync()
     {
-        var exe = await Proc.FindOnPathAsync("claude")
+        var exe = Proc.FindOnPath("claude")
             ?? throw new InvalidOperationException("claude CLI not found on PATH.");
-        return new ClaudeRunner(exe);
+        return Task.FromResult(new ClaudeRunner(exe));
     }
 
     public Task<ProcResult> RunAsync(
@@ -32,6 +45,6 @@ public sealed class ClaudeRunner : IAgentRunner
         // stream-json in -p mode requires --verbose; --max-turns bounds runaway passes.
         var args = $"-p \"{shortPrompt}\" --model \"{model}\" --output-format stream-json --verbose " +
                    "--max-turns 150 --dangerously-skip-permissions";
-        return Proc.RunAsync(_claudeExe, args, workingDirectory, TimeSpan.FromMinutes(timeoutMinutes), logFile);
+        return Proc.RunAsync(_claudeExe, args, workingDirectory, TimeSpan.FromMinutes(timeoutMinutes), logFile, HeadlessEnvironment);
     }
 }

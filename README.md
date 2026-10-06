@@ -88,12 +88,14 @@ config are compiled in; files in a `prompts/` folder next to the config override
 then live in `%LOCALAPPDATA%\lunima-agent-loop` (untouched by upgrades and uninstall):
 
 ```powershell
-lunima-agent-loop init    # 1st run: writes %LOCALAPPDATA%\lunima-agent-loop\agent-loop.json — edit clonePath/models
+lunima-agent-loop init    # 1st run: writes %LOCALAPPDATA%\lunima-agent-loop\agent-loop.json — edit clonePath/models, set "enabled": true
 lunima-agent-loop init    # 2nd run: clones the repo, ensures the integration branch
 ```
 
 **Zip / tar.gz:** unzip anywhere and run the same two `init` calls in that folder — an
 `agent-loop.json` in the current folder (or next to the exe) takes precedence over the data folder.
+Without one, Linux uses `~/.local/share/lunima-agent-loop`, macOS `~/Library/Application Support/lunima-agent-loop`.
+A freshly created config ships with `"enabled": false`, so a scheduler firing early does nothing.
 
 The target machine still needs the tools the loop drives: `git`, `gh` (logged in), `kimi`
 and — for `ownerRunner: "claude"` — the `claude` CLI, plus the .NET SDK the *Lunima* build needs.
