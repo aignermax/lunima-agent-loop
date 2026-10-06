@@ -1,0 +1,79 @@
+# Builds lunima-agent-loop as a NativeAOT single executable for every platform.
+#   Windows targets additionally get an MSI (installer/, WiX) that installs to Program Files + PATH.
+#   push a tag `v*` (e.g. `git tag v0.2.0 && git push origin v0.2.0`) → GitHub release with all binaries
+#   manual run (Actions → Release → Run workflow)                    → binaries as workflow artifacts only
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { rid: win-x64,     os: windows-latest,   ext: .exe, msi: x64 }
+          - { rid: win-arm64,   os: windows-11-arm,   ext: .exe, msi: arm64 }
+          - { rid: linux-x64,   os: ubuntu-latest,    ext: '' }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm, ext: '' }
+          - { rid: osx-arm64,   os: macos-latest,     ext: '' }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Version from tag
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF#refs/tags/v}"; else v="0.0.${GITHUB_RUN_NUMBER}"; fi
+          echo "VERSION=$v" >> "$GITHUB_ENV"
+
+      - name: Publish (NativeAOT)
+        shell: bash
+        run: dotnet publish lunima-agent-loop.csproj -c Release -r ${{ matrix.rid }} -p:Version=$VERSION -o out --nologo
+
+      - name: Package
+        shell: bash
+        run: |
+          name="lunima-agent-loop-${VERSION}-${{ matrix.rid }}"
+          mkdir -p "dist/$name"
+          cp "out/lunima-agent-loop${{ matrix.ext }}" agent-loop.example.json README.md "dist/$name/"
+          cd dist
+          if [[ "${{ matrix.ext }}" == ".exe" ]]; then pwsh -NoProfile -Command "Compress-Archive -Path '$name' -DestinationPath '$name.zip'"; else tar czf "$name.tar.gz" "$name"; fi
+          rm -rf "$name"
+
+      - name: Build MSI
+        if: matrix.msi
+        shell: bash
+        run: |
+          dotnet build installer/lunima-agent-loop.wixproj -c Release --nologo -p:InstallerPlatform=${{ matrix.msi }} -p:AgentVersion=$VERSION
+          cp installer/bin/Release/*.msi dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.rid }}
+          path: dist/*
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes

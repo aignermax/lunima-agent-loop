@@ -7,6 +7,15 @@ public sealed record ProcResult(int ExitCode, string StdOut, string StdErr, bool
 
 public static class Proc
 {
+    /// <summary>Full path of <paramref name="command"/> on PATH (where.exe on Windows, which elsewhere), or null.</summary>
+    public static async Task<string?> FindOnPathAsync(string command)
+    {
+        var result = await RunAsync(OperatingSystem.IsWindows() ? "where.exe" : "which", command);
+        if (result.ExitCode != 0) return null;
+        return result.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .FirstOrDefault();
+    }
+
     public static async Task<ProcResult> RunAsync(
         string fileName,
         string arguments,

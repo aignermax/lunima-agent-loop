@@ -10,3 +10,6 @@ agent-loop.json
 tools/ux-tester/reports/
 __pycache__/
 .customer-venv/
+out/
+installer/bin/
+installer/obj/

@@ -1,0 +1,23 @@
+<!-- Per-machine install of the single NativeAOT exe into Program Files, added to the system PATH.
+     Config, state and logs are NOT installed: the exe keeps them in %LOCALAPPDATA%\lunima-agent-loop
+     (created by the first 'lunima-agent-loop init'), so upgrades and uninstalls never touch them. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package Name="Lunima Agent Loop"
+           Manufacturer="Lunima"
+           Version="$(AgentVersion)"
+           UpgradeCode="{5B151487-3B93-4F4E-A46C-3C0B2D0549AE}"
+           Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of [ProductName] is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <StandardDirectory Id="ProgramFiles6432Folder">
+      <Directory Id="INSTALLFOLDER" Name="Lunima Agent Loop">
+        <Component Id="AgentExe">
+          <File Source="$(AgentBinDir)lunima-agent-loop.exe" KeyPath="yes" />
+          <Environment Id="AddToPath" Name="PATH" Value="[INSTALLFOLDER]"
+                       Part="last" Action="set" System="yes" Permanent="no" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+  </Package>
+</Wix>

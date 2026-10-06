@@ -13,26 +13,21 @@ if (command is "--help" or "-h" or "help")
     return 0;
 }
 
-// locate the tool root: walk up from cwd until agent-loop.json (or the example) appears
-var root = FindRoot(Environment.CurrentDirectory);
-if (root is null)
-{
-    Console.Error.WriteLine("agent-loop.json not found (searched upward from current directory).");
-    Console.Error.WriteLine("Run lunima-agent-loop from within the agent-loop repository.");
-    return 1;
-}
+// locate the tool root: walk up from cwd, then from the executable's folder, until
+// agent-loop.json (or the example) appears. Otherwise (installed binary, e.g. via MSI into
+// read-only Program Files) config, state and logs live in the per-user data folder.
+var root = FindRoot(Environment.CurrentDirectory)
+    ?? FindRoot(AppContext.BaseDirectory)
+    ?? DefaultDataDir();
+Directory.CreateDirectory(root);
 
 var configPath = Path.Combine(root, "agent-loop.json");
 if (!File.Exists(configPath))
 {
-    var example = Path.Combine(root, "agent-loop.example.json");
-    if (!File.Exists(example))
-    {
-        Console.Error.WriteLine($"No config and no example config in {root}.");
-        return 1;
-    }
-    File.Copy(example, configPath);
-    Console.WriteLine($"Created {configPath} from the example — review it before real runs.");
+    // the example ships inside the binary; a copy on disk (repo checkout) wins
+    File.WriteAllText(configPath, EmbeddedFiles.Read(root, "agent-loop.example.json"));
+    Console.WriteLine($"Created {configPath} from the example — review it (clonePath, models), then run again.");
+    return 0;
 }
 
 try
@@ -121,6 +116,10 @@ static string? FindRoot(string start)
     }
     return null;
 }
+
+/// <summary>%LOCALAPPDATA%\lunima-agent-loop on Windows, ~/.local/share/lunima-agent-loop elsewhere.</summary>
+static string DefaultDataDir() =>
+    Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "lunima-agent-loop");
 
 static void PrintUsage()
 {

@@ -37,7 +37,6 @@ public sealed class LoopState
 /// </summary>
 public sealed class StateStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly string _path;
     private readonly LoopState _state;
 
@@ -45,7 +44,7 @@ public sealed class StateStore
     {
         _path = path;
         _state = File.Exists(path)
-            ? JsonSerializer.Deserialize<LoopState>(File.ReadAllText(path)) ?? new LoopState()
+            ? JsonSerializer.Deserialize(File.ReadAllText(path), JsonContext.Default.LoopState) ?? new LoopState()
             : new LoopState();
     }
 
@@ -119,6 +118,6 @@ public sealed class StateStore
     public void Save()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        File.WriteAllText(_path, JsonSerializer.Serialize(_state, JsonOptions));
+        File.WriteAllText(_path, JsonSerializer.Serialize(_state, JsonContext.Default.LoopState));
     }
 }

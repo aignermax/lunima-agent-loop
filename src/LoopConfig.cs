@@ -38,11 +38,7 @@ public sealed class LoopConfig
     public static LoopConfig Load(string path)
     {
         var json = File.ReadAllText(path);
-        var config = JsonSerializer.Deserialize<LoopConfig>(json, new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true,
-            ReadCommentHandling = JsonCommentHandling.Skip,
-        });
+        var config = JsonSerializer.Deserialize(json, JsonContext.Default.LoopConfig);
         if (config is null) throw new InvalidOperationException($"Could not parse config: {path}");
         if (string.IsNullOrWhiteSpace(config.ClonePath))
             throw new InvalidOperationException($"clonePath is not set in {path}");

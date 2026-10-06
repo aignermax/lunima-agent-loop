@@ -37,7 +37,6 @@ public sealed class LoopOrchestrator
     }
 
     private string LogsDir => Path.Combine(_rootDir, "logs");
-    private string PromptsDir => Path.Combine(_rootDir, "prompts");
 
     public async Task<int> InitAsync()
     {
@@ -308,7 +307,7 @@ public sealed class LoopOrchestrator
     }
 
     private string RenderWorkerPrompt(IssueSummary issue, string branch) =>
-        File.ReadAllText(Path.Combine(PromptsDir, "worker.md"))
+        EmbeddedFiles.Read(_rootDir, "prompts/worker.md")
             .Replace("{REPO}", _config.GitHubRepo)
             .Replace("{ISSUE_NUMBER}", issue.Number.ToString())
             .Replace("{ISSUE_TITLE}", issue.Title)
@@ -321,7 +320,7 @@ public sealed class LoopOrchestrator
             .Replace("{DATE}", DateTime.Now.ToString("yyyy-MM-dd"));
 
     private string RenderOwnerPrompt(string roadmap, string prList, string issueList) =>
-        File.ReadAllText(Path.Combine(PromptsDir, "owner.md"))
+        EmbeddedFiles.Read(_rootDir, "prompts/owner.md")
             .Replace("{REPO}", _config.GitHubRepo)
             .Replace("{INTEGRATION_BRANCH}", _config.IntegrationBranch)
             .Replace("{BASE_BRANCH}", _config.BaseBranch)
