@@ -23,6 +23,9 @@ Date: {DATE}
 - Build: `dotnet build CAP.Desktop/CAP.Desktop.csproj`
 - Test: `dotnet test UnitTests/UnitTests.csproj --filter "Category!=Slow"`
   (the full filtered suite, ~3 minutes — always run it before opening the PR; never run the suite unfiltered)
+- **Run builds and tests in the foreground and wait for them.** This is a headless one-shot
+  session: if you start a command in the background and end your turn to wait for it, the
+  session is over and your work is lost. Never background, detach or poll a build or test run.
 
 ## Binding rules
 

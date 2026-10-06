@@ -7,12 +7,34 @@ public sealed record ProcResult(int ExitCode, string StdOut, string StdErr, bool
 
 public static class Proc
 {
+    /// <summary>
+    /// Full path of <paramref name="command"/> on PATH, or null. Searched in-process (PATH order,
+    /// then PATHEXT order on Windows — same result as where.exe) so no `which` binary is needed.
+    /// </summary>
+    public static string? FindOnPath(string command)
+    {
+        const StringSplitOptions split = StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries;
+        string[] extensions = OperatingSystem.IsWindows()
+            ? (Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD").Split(';', split)
+            : [""];
+        foreach (var dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, split))
+        {
+            foreach (var extension in extensions)
+            {
+                var candidate = Path.Combine(dir.Trim('"'), command + extension);
+                if (File.Exists(candidate)) return candidate;
+            }
+        }
+        return null;
+    }
+
     public static async Task<ProcResult> RunAsync(
         string fileName,
         string arguments,
         string? workingDirectory = null,
         TimeSpan? timeout = null,
-        string? stdOutFile = null)
+        string? stdOutFile = null,
+        IReadOnlyDictionary<string, string>? environment = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -24,6 +46,8 @@ public static class Proc
             UseShellExecute = false,
             CreateNoWindow = true,
         };
+        foreach (var (key, value) in environment ?? new Dictionary<string, string>())
+            psi.Environment[key] = value;
 
         using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var stdout = new StringBuilder();

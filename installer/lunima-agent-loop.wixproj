@@ -1,0 +1,13 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <!-- Builds lunima-agent-loop-<version>-<arch>.msi from an already published NativeAOT exe:
+         dotnet publish ..\lunima-agent-loop.csproj -c Release -r win-arm64 -o ..\out
+         dotnet build lunima-agent-loop.wixproj -c Release -p:InstallerPlatform=arm64 -p:AgentVersion=0.2.0 -->
+  <PropertyGroup>
+    <!-- MSI versions must be numeric (major.minor.build); AgentLabel may carry a pre-release suffix -->
+    <AgentVersion Condition="'$(AgentVersion)' == ''">0.1.0</AgentVersion>
+    <AgentLabel Condition="'$(AgentLabel)' == ''">$(AgentVersion)</AgentLabel>
+    <AgentBinDir Condition="'$(AgentBinDir)' == ''">$(MSBuildThisFileDirectory)..\out\</AgentBinDir>
+    <OutputName>lunima-agent-loop-$(AgentLabel)-win-$(InstallerPlatform)</OutputName>
+    <DefineConstants>AgentVersion=$(AgentVersion);AgentBinDir=$(AgentBinDir)</DefineConstants>
+  </PropertyGroup>
+</Project>

@@ -13,7 +13,7 @@
   "prLabel": "agent-pr",
   "blockedLabel": "needs-human",
   "runningLabel": "agent-running",
-  "enabled": true,
+  "enabled": false,
   "customerEnabled": false,
   "customerPython": "python",
   "customerModel": "claude-fable-5-1",

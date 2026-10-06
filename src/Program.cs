@@ -13,30 +13,31 @@ if (command is "--help" or "-h" or "help")
     return 0;
 }
 
-// locate the tool root: walk up from cwd until agent-loop.json (or the example) appears
-var root = FindRoot(Environment.CurrentDirectory);
-if (root is null)
-{
-    Console.Error.WriteLine("agent-loop.json not found (searched upward from current directory).");
-    Console.Error.WriteLine("Run lunima-agent-loop from within the agent-loop repository.");
-    return 1;
-}
-
-var configPath = Path.Combine(root, "agent-loop.json");
-if (!File.Exists(configPath))
-{
-    var example = Path.Combine(root, "agent-loop.example.json");
-    if (!File.Exists(example))
-    {
-        Console.Error.WriteLine($"No config and no example config in {root}.");
-        return 1;
-    }
-    File.Copy(example, configPath);
-    Console.WriteLine($"Created {configPath} from the example — review it before real runs.");
-}
+string[] knownCommands = ["init", "work", "own", "run", "customer", "pause", "resume", "status"];
+if (!knownCommands.Contains(command))
+    return Unknown(command);
 
 try
 {
+    // locate the tool root: walk up from cwd, then from the executable's folder, until
+    // agent-loop.json (or the example) appears. Otherwise (installed binary, e.g. via MSI into
+    // read-only Program Files) config, state and logs live in the per-user data folder.
+    var root = FindRoot(Environment.CurrentDirectory)
+        ?? FindRoot(AppContext.BaseDirectory)
+        ?? DefaultDataDir();
+    Directory.CreateDirectory(root);
+
+    var configPath = Path.Combine(root, "agent-loop.json");
+    if (!File.Exists(configPath))
+    {
+        // the example ships inside the binary (a copy on disk wins) with "enabled": false,
+        // so nothing runs until a human has reviewed it — even if a scheduler keeps firing.
+        File.WriteAllText(configPath, EmbeddedFiles.Read(root, "agent-loop.example.json"));
+        Console.WriteLine($"Created {configPath} from the example.");
+        Console.WriteLine("Review githubRepo, clonePath and models, set \"enabled\": true, then run again.");
+        return command == "init" ? 0 : 1;
+    }
+
     var config = LoopConfig.Load(configPath);
     var state = new StateStore(Path.Combine(root, "state", "state.json"));
     if (command == "customer")
@@ -120,6 +121,20 @@ static string? FindRoot(string start)
         dir = dir.Parent;
     }
     return null;
+}
+
+/// <summary>
+/// Per-user data folder: %LOCALAPPDATA%\lunima-agent-loop on Windows, ~/.local/share/lunima-agent-loop
+/// on Linux, ~/Library/Application Support/lunima-agent-loop on macOS.
+/// </summary>
+static string DefaultDataDir()
+{
+    var baseDir = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+    if (string.IsNullOrEmpty(baseDir))
+        throw new InvalidOperationException(
+            "agent-loop.json not found and no per-user data folder is available (HOME unset?). " +
+            "Run from a folder that contains agent-loop.json.");
+    return Path.Combine(baseDir, "lunima-agent-loop");
 }
 
 static void PrintUsage()

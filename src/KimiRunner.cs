@@ -13,14 +13,11 @@ public sealed class KimiRunner : IAgentRunner
 
     private KimiRunner(string kimiExe) => _kimiExe = kimiExe;
 
-    public static async Task<KimiRunner> CreateAsync()
+    public static Task<KimiRunner> CreateAsync()
     {
-        var where = await Proc.RunAsync("where.exe", "kimi");
-        var exe = where.StdOut.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-            .FirstOrDefault();
-        if (where.ExitCode != 0 || exe is null)
-            throw new InvalidOperationException("kimi CLI not found on PATH (where.exe kimi failed).");
-        return new KimiRunner(exe);
+        var exe = Proc.FindOnPath("kimi")
+            ?? throw new InvalidOperationException("kimi CLI not found on PATH.");
+        return Task.FromResult(new KimiRunner(exe));
     }
 
     public Task<ProcResult> RunAsync(

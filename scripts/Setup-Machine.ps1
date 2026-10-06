@@ -29,7 +29,7 @@ if (-not (Test-Path $config)) {
     Copy-Item (Join-Path $root 'agent-loop.example.json') $config
     Write-Host ""
     Write-Host "Created agent-loop.json from the example."
-    Write-Host "Edit it if this machine needs a different clonePath/caps, then re-run this script."
+    Write-Host "Edit it (clonePath/caps/models), set "enabled": true, then re-run this script."
     exit 0
 }
 

@@ -9,7 +9,10 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $root = Split-Path -Parent $PSScriptRoot
-Write-Host "Publishing lunima-agent-loop ..."
+Write-Host "Publishing lunima-agent-loop (NativeAOT) ..."
+# The NativeAOT link step shells out to vswhere.exe, which is not on PATH by default.
+$vsInstaller = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer'
+if (Test-Path $vsInstaller) { $env:PATH = "$vsInstaller;$env:PATH" }
 dotnet publish (Join-Path $root 'lunima-agent-loop.csproj') -c Release -o (Join-Path $root 'publish') --nologo | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "dotnet publish failed" }
 

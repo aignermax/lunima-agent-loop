@@ -15,6 +15,16 @@ public static class CustomerReview
         // An interrupted invocation must never leave yesterday's acceptance visible.
         File.WriteAllText(feedback, "# Customer review BLOCKED\n\nCustomer cycle has not completed. No UX acceptance available.\n");
         File.Delete(Path.ChangeExtension(feedback, ".json"));
+        var script = Path.Combine(root, "tools", "ux-tester", "customer_cycle.py");
+        if (!File.Exists(script))
+        {
+            // the desktop customer is Python tooling from the repo, not part of the standalone binary
+            var reason = $"Customer review needs a repository checkout: {script} not found " +
+                "(standalone/MSI installs don't ship tools/ux-tester). Set customerEnabled=false or run from the repo.";
+            File.WriteAllText(feedback, $"# Customer review BLOCKED\n\n{reason}\n\nNo UX acceptance available.\n");
+            Console.Error.WriteLine(reason);
+            return 1;
+        }
         var psi = new ProcessStartInfo
         {
             FileName = config.CustomerPython,
@@ -27,7 +37,7 @@ public static class CustomerReview
         psi.Environment["PYTHONUTF8"] = "1";
         foreach (var argument in new[]
         {
-            Path.Combine(root, "tools", "ux-tester", "customer_cycle.py"),
+            script,
             "--repo", config.GitHubRepo, "--base", config.IntegrationBranch, "--label", config.PrLabel,
             "--state-dir", Path.Combine(root, "state", "customer"), "--feedback", feedback,
             "--project", config.CustomerProject, "--model", config.CustomerModel,

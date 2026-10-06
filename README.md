@@ -76,24 +76,41 @@ Pause / stop:
 # remove:  scripts\Unregister-AgentLoop.ps1
 ```
 
-## Setup (Windows ARM64)
+## Install from a release (any PC, no SDK)
 
-Fully supported: install the **ARM64 .NET 10 SDK** natively; everything else (git, gh) has
-ARM64 Windows builds. If the Kimi CLI only offers an x64 build on your machine, it runs fine
-under Windows 11 emulation (Prism). Optional native single-file binary:
+Every `v*` tag builds a **NativeAOT** single executable (~4 MB, no .NET runtime needed) for
+`win-x64`, `win-arm64`, `linux-x64`, `linux-arm64` and `osx-arm64` — see
+[Releases](https://github.com/aignermax/lunima-agent-loop/releases). Prompts and the example
+config are compiled in; files in a `prompts/` folder next to the config override them.
+
+**Windows: MSI** (`lunima-agent-loop-<version>-x64.msi` / `-arm64.msi`) installs the exe to
+`C:\Program Files\Lunima Agent Loop` and adds it to the system PATH. Config, state and logs
+then live in `%LOCALAPPDATA%\lunima-agent-loop` (untouched by upgrades and uninstall):
 
 ```powershell
-dotnet publish -c Release -r win-arm64 --self-contained true -p:PublishSingleFile=true -o publish\win-arm64
+lunima-agent-loop init    # 1st run: writes %LOCALAPPDATA%\lunima-agent-loop\agent-loop.json — edit clonePath/models, set "enabled": true
+lunima-agent-loop init    # 2nd run: clones the repo, ensures the integration branch
 ```
+
+**Zip / tar.gz:** unzip anywhere and run the same two `init` calls in that folder — an
+`agent-loop.json` in the current folder (or next to the exe) takes precedence over the data folder.
+Without one, Linux uses `~/.local/share/lunima-agent-loop`, macOS `~/Library/Application Support/lunima-agent-loop`.
+A freshly created config ships with `"enabled": false`, so a scheduler firing early does nothing.
+
+The target machine still needs the tools the loop drives: `git`, `gh` (logged in), `kimi`
+and — for `ownerRunner: "claude"` — the `claude` CLI, plus the .NET SDK the *Lunima* build needs.
+To cut a release: `git tag v0.2.0 && git push origin v0.2.0`.
+
+## Building locally
+
+`dotnet publish` produces the NativeAOT binary (`-r win-arm64`, `-r linux-x64`, … for other
+targets). It needs the platform C/C++ toolchain: on Windows *Visual Studio / Build Tools with
+"Desktop development with C++"* (`Register-AgentLoop.ps1` puts `vswhere.exe` on PATH for the link
+step); on Linux `clang` + `zlib1g-dev`. ARM64 Windows is fully supported natively.
 
 ## Setup (Linux)
 
-Self-contained single-file publish — no .NET runtime needed on the target machine:
-
-```bash
-dotnet publish -c Release -r linux-x64 --self-contained true -p:PublishSingleFile=true -o publish/linux
-./publish/linux/lunima-agent-loop init
-```
+Use a release binary (or `dotnet publish -c Release -r linux-x64`), then run `init` as above.
 
 Schedule with a systemd user timer or cron instead of the Windows-only register script, e.g.
 `7 * * * * /opt/lunima-agent-loop/lunima-agent-loop run >> /var/log/agent-loop.log 2>&1`.
