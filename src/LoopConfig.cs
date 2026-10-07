@@ -6,7 +6,7 @@ public sealed class LoopConfig
 {
     public string GitHubRepo { get; set; } = "aignermax/Lunima";
     public string ClonePath { get; set; } = "";
-    public string IntegrationBranch { get; set; } = "dev-ki";
+    public string IntegrationBranch { get; set; } = "dev";
     public string BaseBranch { get; set; } = "main";
     public int MaxTasksPerDay { get; set; } = 2;
     /// <summary>Minimum minutes between Product-Owner passes. Idle passes are skipped entirely (no API cost).</summary>

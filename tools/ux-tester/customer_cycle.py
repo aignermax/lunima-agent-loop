@@ -181,7 +181,7 @@ def cycle(args) -> int:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repo", required=True)
-    p.add_argument("--base", default="dev-ki")
+    p.add_argument("--base", default="dev")
     p.add_argument("--label", default="agent-pr")
     p.add_argument("--state-dir", type=Path, required=True)
     p.add_argument("--feedback", type=Path, required=True)

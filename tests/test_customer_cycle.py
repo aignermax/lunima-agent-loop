@@ -23,10 +23,10 @@ class CycleTests(unittest.TestCase):
         self.strategy = strategy.start()
         self.addCleanup(strategy.stop)
         self.args = argparse.Namespace(state_dir=self.path, feedback=self.path / "feedback.md", repo="owner/repo",
-            base="dev-ki", label="agent-pr", scenarios=cycle.ROOT / "customer_scenarios.json", model="test-model",
+            base="dev", label="agent-pr", scenarios=cycle.ROOT / "customer_scenarios.json", model="test-model",
             max_reviews=1, max_age=86400, max_steps=10, max_turns=10, timeout=1, project="App/App.csproj")
         self.targets = [{"key": "pr-1", "pr": 1, "sha": "a" * 40, "ref": "refs/pull/1/head"},
-                        {"key": "baseline", "pr": None, "sha": "b" * 40, "ref": "refs/heads/dev-ki"}]
+                        {"key": "baseline", "pr": None, "sha": "b" * 40, "ref": "refs/heads/dev"}]
         (self.path / "goals").mkdir()
         (self.path / "goals" / "pr-1.json").write_text(json.dumps({"sha": "a" * 40, "goals": [
             {"id": "pr-export", "persona": "Peter", "goal": "Export changed design", "success": "Saved output visible"}]}))
@@ -120,7 +120,7 @@ class CycleTests(unittest.TestCase):
         prs = [base, dict(base, number=2, isDraft=True), dict(base, number=3, isCrossRepository=True),
                dict(base, number=4, title="Unrelated")]
         with patch("customer_workspace.gh_json", return_value=prs), patch("customer_workspace.command", return_value='{"sha":"bbb"}'):
-            result = targets("owner/repo", "dev-ki", "agent-pr")
+            result = targets("owner/repo", "dev", "agent-pr")
         self.assertEqual([r["pr"] for r in result], [1, None])
 
     def test_app_profile_drops_runner_credentials(self):

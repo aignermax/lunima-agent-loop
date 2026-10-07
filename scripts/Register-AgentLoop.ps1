@@ -32,7 +32,7 @@ $settings = New-ScheduledTaskSettingsSet `
 
 Register-ScheduledTask -TaskName 'LunimaAgentLoop' -Action $action -Trigger $trigger `
     -Settings $settings -Force `
-    -Description 'Autonomous Lunima agent loop (Kimi Code CLI): works agent-task issues into the dev-ki branch + hourly product-owner pass.' | Out-Null
+    -Description 'Autonomous Lunima agent loop (Kimi Code CLI): works agent-task issues into the dev branch + hourly product-owner pass.' | Out-Null
 
 Write-Host ""
 Write-Host "Registered scheduled task 'LunimaAgentLoop' (every $IntervalHours h, first run in ~15 min)."

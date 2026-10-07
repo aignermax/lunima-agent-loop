@@ -1,7 +1,7 @@
 {
   "githubRepo": "aignermax/Lunima",
   "clonePath": "C:/dev/Akhetonics/Lunima-dev-ki",
-  "integrationBranch": "dev-ki",
+  "integrationBranch": "dev",
   "baseBranch": "main",
   "maxTasksPerDay": 2,
   "ownerIntervalMinutes": 60,
