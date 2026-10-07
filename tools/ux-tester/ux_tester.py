@@ -840,7 +840,7 @@ def main() -> None:
     p.add_argument("--lunima-clone", help="Local Lunima clone used to publish screenshots (for --file-issues)")
     p.add_argument("--no-screenshots", action="store_true",
                    help="File issues without pushing screenshots (recommended for public repos: captures show the whole desktop)")
-    p.add_argument("--base-branch", default="dev-ki")
+    p.add_argument("--base-branch", default="dev")
     p.add_argument("--publish-report", metavar="REPORT_DIR",
                    help="Skip testing; file issues from an existing report directory (implies --file-issues)")
     args = p.parse_args()

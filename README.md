@@ -4,7 +4,7 @@ Autonomous issue → PR loop for the [Lunima](https://github.com/aignermax/Lunim
 A small .NET console app that runs on a schedule (e.g. while the maintainer is on vacation),
 picks up GitHub issues labelled `agent-task`, implements them headlessly with the
 [Kimi Code CLI](https://www.kimi.com/code/docs/en/), and opens PRs into a dedicated integration
-branch (`dev-ki`) — never into `main`. A Product-Owner pass reviews and merges those PRs
+branch (`dev`) — never into `main`. A Product-Owner pass reviews and merges those PRs
 and keeps the backlog aligned with `docs/ROADMAP.md`.
 
 ## How it works
@@ -18,16 +18,16 @@ lunima-agent-loop run                      ← stateless; state lives in GitHub 
         ├─ Product-Owner pass (kimi, owner model) — due every `ownerIntervalMinutes`,
         │  but skipped entirely when there is nothing to do (no open agent PRs and a
         │  healthy backlog) → idle hours cost no API calls
-        │     review open agent-pr PRs → squash-merge into dev-ki when green
+        │     review open agent-pr PRs → squash-merge into dev when green
         │     groom + split + seed agent-task issues from docs/ROADMAP.md
         │     status report on the "Agent loop — status" tracking issue (only on changes)
         │
         └─ up to N/day: worker pass (kimi, worker model, one run per issue)
               claim the issue (agent-running label) so no other machine starts it too
-              branch agent/issue-<n>-<ts> from dev-ki
+              branch agent/issue-<n>-<ts> from dev
               .agent-loop/task-<n>.md = the work contract (prompts/worker.md)
               kimi -p "...execute task file..." --output-format stream-json
-              agent implements, runs the test suite, pushes, opens PR → dev-ki
+              agent implements, runs the test suite, pushes, opens PR → dev
 ```
 
 Guardrails: daily task cap, never push to `main`, no force-push/`--admin` by the worker,
@@ -47,7 +47,7 @@ scripts\Setup-Machine.ps1    # checks deps, creates config (edit + re-run), buil
 
 `Setup-Machine.ps1` verifies the prerequisites (.NET 10 SDK, `kimi` CLI logged in, `gh` CLI
 authenticated), creates `agent-loop.json` from the example on first run, then builds, runs
-`init` (clones Lunima → `clonePath`, creates `dev-ki` on origin if missing) and registers the
+`init` (clones Lunima → `clonePath`, creates `dev` on origin if missing) and registers the
 hourly scheduled task. Use `-NoRegister` to skip the scheduler.
 
 Manual equivalent:
@@ -121,7 +121,7 @@ Schedule with a systemd user timer or cron instead of the Windows-only register 
 |---|---|---|
 | `githubRepo` | `aignermax/Lunima` | target repo |
 | `clonePath` | — | dedicated local clone the agent works in (kept separate from your dev checkout) |
-| `integrationBranch` | `dev-ki` | branch all PRs target; `main` is never touched |
+| `integrationBranch` | `dev` | branch all PRs target; `main` is never touched |
 | `maxTasksPerDay` | `2` | worker-run budget per day |
 | `ownerIntervalMinutes` | `60` | min minutes between Product-Owner passes; idle passes are skipped |
 | `workerModel` / `ownerModel` | `kimi-k2.7-code` / `kimi-k3` | model aliases (`kimi provider list`) |
