@@ -1,6 +1,7 @@
 //! Health checks: turns a snapshot into a traffic light plus concrete, fixable findings.
 //! Each check exists because its failure once stopped the loop unnoticed.
 
+use super::logs::{is_newest_run_log, Outcome};
 use super::snapshot::{relative, Snapshot};
 use super::state::{parse_time, Pause};
 use chrono::{DateTime, Duration, Local};
@@ -114,26 +115,26 @@ fn owner_check(s: &Snapshot, now: DateTime<Local>) -> Option<Check> {
         return Some(check(Level::Info, "Product Owner", "Noch kein PO-Lauf protokolliert."));
     };
     let when = latest.file.started.map(|t| relative(t, now)).unwrap_or_default();
-    let p = &latest.pass;
-    if !p.finished {
-        return Some(if s.loop_running {
-            check(Level::Info, "Product Owner arbeitet", format!("Lauf gestartet {when} · {} Aktionen bisher", p.actions.len()))
-        } else {
-            check(Level::Warn, "PO-Lauf abgebrochen", format!("Lauf {when} endete ohne Abschluss (Timeout oder Absturz)."))
-        });
-    }
-    if p.is_error {
-        let msg = p.summary.clone().unwrap_or_default();
-        let hint = if msg.to_lowercase().contains("authenticat") {
-            "\n→ Claude-Anmeldung abgelaufen: in einem Terminal `claude` starten und /login ausführen."
-        } else {
-            ""
-        };
-        return Some(with_fix(check(Level::Error, "Letzter PO-Lauf fehlgeschlagen", format!("{when}: {msg}{hint}")), "Erneut starten", Fix::RunOwner));
-    }
-    let stale = latest.file.started.is_some_and(|t| now - t > Duration::hours(24));
-    let level = if stale { Level::Warn } else { Level::Ok };
-    Some(check(level, "Product Owner", format!("letzter Lauf {when} · {} Aktionen", p.actions.len())))
+    let actions = latest.pass.actions.len();
+    let running = s.loop_running && is_newest_run_log(&s.logs, &latest.file);
+    Some(match latest.outcome(running) {
+        Outcome::Running => check(Level::Info, "Product Owner arbeitet", format!("Lauf gestartet {when} · {actions} Aktionen bisher")),
+        Outcome::Aborted => check(Level::Warn, "PO-Lauf abgebrochen", format!("Lauf {when} endete ohne Abschluss (Timeout oder Absturz).")),
+        Outcome::Failed(msg) => {
+            let hint = if msg.to_lowercase().contains("authenticat") {
+                "\n→ Claude-Anmeldung abgelaufen: in einem Terminal `claude` starten und /login ausführen."
+            } else {
+                ""
+            };
+            // no restart offer while another loop process runs (no locking in the loop)
+            let c = check(Level::Error, "Letzter PO-Lauf fehlgeschlagen", format!("{when}: {msg}{hint}"));
+            if s.loop_running { c } else { with_fix(c, "Erneut starten", Fix::RunOwner) }
+        }
+        Outcome::Succeeded => {
+            let stale = latest.file.started.is_some_and(|t| now - t > Duration::hours(24));
+            check(if stale { Level::Warn } else { Level::Ok }, "Product Owner", format!("letzter Lauf {when} · {actions} Aktionen"))
+        }
+    })
 }
 
 fn worker_check(s: &Snapshot) -> Option<Check> {
@@ -156,6 +157,8 @@ fn clone_check(s: &Snapshot) -> Option<Check> {
     Some(match s.clone.as_ref()? {
         Err(e) => check(Level::Warn, "Clone", e.clone()),
         Ok(c) if !c.exists => check(Level::Error, "Clone fehlt", "clonePath ist kein Git-Repo — `lunima-agent-loop init` ausführen."),
+        // a running pass works in the clone: changes there are expected, never "rescue" them
+        Ok(c) if !c.dirty.is_empty() && s.loop_running => check(Level::Info, "Clone in Benutzung", format!("Ein Lauf arbeitet gerade darin ({} geänderte Dateien).", c.dirty.len())),
         Ok(c) if !c.dirty.is_empty() => with_fix(
             check(Level::Error, "Clone blockiert", format!("{} uncommittete Dateien verhindern jeden Worker-Lauf (z. B. {}).", c.dirty.len(), c.dirty[0])),
             "Als WIP sichern",

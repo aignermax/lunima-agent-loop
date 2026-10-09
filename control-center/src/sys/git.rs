@@ -43,21 +43,32 @@ pub fn status(clone: &Path) -> Result<CloneStatus, String> {
 /// Saves all uncommitted changes as a commit on a new local branch `wip/control-center-<stamp>`
 /// and returns to the previous branch with a clean tree. Nothing is pushed or deleted.
 pub fn rescue_wip(clone: &Path) -> Result<String, String> {
-    let mut cmd = git(clone);
-    cmd.args(["rev-parse", "--abbrev-ref", "HEAD"]);
-    let previous = run(cmd)?.trim().to_string();
-    let branch = format!("wip/control-center-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"));
-    let steps: [&[&str]; 4] = [
-        &["switch", "-c", &branch],
-        &["add", "-A"],
-        &["-c", "user.name=lunima-po-center", "-c", "user.email=noreply@localhost", "commit", "-q", "-m", "WIP rescued by the Control Center (was blocking the loop)"],
-        &["switch", &previous],
-    ];
-    for args in steps {
+    let git_run = |args: &[&str]| {
         let mut cmd = git(clone);
         cmd.args(args);
-        run(cmd).map_err(|e| format!("git {}: {e}", args.join(" ")))?;
+        run(cmd).map_err(|e| format!("git {}: {e}", args.join(" ")))
+    };
+    let previous = git_run(&["rev-parse", "--abbrev-ref", "HEAD"])?.trim().to_string();
+    if previous == "HEAD" {
+        return Err("Der Clone steht auf keinem Branch (detached HEAD) — bitte von Hand prüfen.".into());
     }
+    let branch = format!("wip/control-center-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+    git_run(&["switch", "-c", &branch])?;
+    let saved = git_run(&["add", "-A"]).and_then(|_| {
+        // hooks or signing must not leave the loop's clone stranded on the wip branch
+        git_run(&[
+            "-c", "user.name=lunima-po-center", "-c", "user.email=noreply@localhost", "-c", "commit.gpgsign=false",
+            "commit", "--no-verify", "-q", "-m", "WIP rescued by the Control Center (was blocking the loop)",
+        ])
+    });
+    if let Err(e) = saved {
+        // back to where we were, changes still in the working tree; drop the empty branch
+        let _ = git_run(&["reset", "-q"]);
+        let _ = git_run(&["switch", &previous]);
+        let _ = git_run(&["branch", "-D", &branch]);
+        return Err(e);
+    }
+    git_run(&["switch", &previous])?;
     Ok(branch)
 }
 
@@ -72,6 +83,25 @@ mod tests {
         assert_eq!(clean.branch_line, "dev...origin/dev");
         let dirty = parse_status("## dev-ki...origin/dev-ki [behind 57]\n M src/a.cs\n?? \"docs/x y.md\"\n");
         assert_eq!(dirty.dirty, ["src/a.cs", "docs/x y.md"]);
+    }
+
+    #[test]
+    fn rescue_refuses_detached_head_and_leaves_tree_alone() {
+        let tmp = tempfile::tempdir().unwrap();
+        let p = tmp.path();
+        let g = |args: &[&str]| {
+            let mut c = git(p);
+            c.args(args);
+            run(c).unwrap()
+        };
+        g(&["init", "-q", "-b", "dev"]);
+        std::fs::write(p.join("a.txt"), "1").unwrap();
+        g(&["add", "-A"]);
+        g(&["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init"]);
+        g(&["switch", "-q", "--detach"]);
+        std::fs::write(p.join("a.txt"), "2").unwrap();
+        assert!(rescue_wip(p).unwrap_err().contains("detached"));
+        assert_eq!(status(p).unwrap().dirty, ["a.txt"]);
     }
 
     #[test]

@@ -3,7 +3,7 @@
 use super::theme::{self, MUTED};
 use super::widgets::{card, link, muted, page_title, pill};
 use crate::core::activity::{ActionKind, Pass};
-use crate::core::logs::PassEntry;
+use crate::core::logs::{is_newest_run_log, Outcome, PassEntry};
 use crate::core::snapshot::{relative, Snapshot};
 use crate::sys;
 use chrono::Local;
@@ -22,24 +22,24 @@ impl ActivityPage {
         let entries: Vec<&PassEntry> = s
             .passes
             .iter()
-            .filter(|e| !self.only_with_actions || !e.pass.actions.is_empty() || e.pass.is_error)
+            .filter(|e| !self.only_with_actions || !e.pass.actions.is_empty() || matches!(e.outcome(false), Outcome::Failed(_)))
             .collect();
         if entries.is_empty() {
             muted(ui, "Keine PO-Läufe gefunden.");
         }
         for (i, entry) in entries.into_iter().enumerate() {
-            pass_card(ui, entry, i == 0, s.loop_running && i == 0);
+            pass_card(ui, entry, i == 0, s.loop_running && is_newest_run_log(&s.logs, &entry.file));
             ui.add_space(10.0);
         }
     }
 }
 
-fn status(pass: &Pass, running: bool) -> (&'static str, egui::Color32) {
-    match (pass.finished, pass.is_error) {
-        (false, _) if running => ("läuft", theme::INFO),
-        (false, _) => ("abgebrochen", theme::WARN),
-        (true, true) => ("Fehler", theme::ERROR),
-        (true, false) => ("erfolgreich", theme::OK),
+fn status(entry: &PassEntry, running: bool) -> (&'static str, egui::Color32) {
+    match entry.outcome(running) {
+        Outcome::Running => ("läuft", theme::INFO),
+        Outcome::Aborted => ("abgebrochen", theme::WARN),
+        Outcome::Failed(_) => ("Fehler", theme::ERROR),
+        Outcome::Succeeded => ("erfolgreich", theme::OK),
     }
 }
 
@@ -59,7 +59,7 @@ fn counts(pass: &Pass) -> String {
 fn pass_card(ui: &mut Ui, entry: &PassEntry, open: bool, running: bool) {
     let pass = &entry.pass;
     let now = Local::now();
-    let (label, color) = status(pass, running);
+    let (label, color) = status(entry, running);
     card(ui, None, |ui| {
         ui.horizontal(|ui| {
             let when = entry.file.started.map(|t| format!("{} · {}", t.format("%d.%m. %H:%M"), relative(t, now))).unwrap_or_else(|| entry.file.name.clone());

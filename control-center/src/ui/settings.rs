@@ -76,6 +76,9 @@ impl SettingsPage {
             if dirty {
                 ui.label(RichText::new(format!("{} ungespeicherte Änderung(en)", self.edits.len())).color(theme::WARN));
             }
+            if doc.had_comments {
+                ui.label(RichText::new("Hinweis: Kommentare in agent-loop.json gehen beim Speichern verloren.").color(MUTED).size(12.0));
+            }
             if let Some(e) = &self.error {
                 ui.label(RichText::new(e).color(theme::ERROR));
             }
@@ -91,6 +94,10 @@ impl SettingsPage {
                     return;
                 }
             }
+        }
+        if let Err(e) = updated.validate() {
+            self.error = Some(e);
+            return;
         }
         handle.send(Action::SaveConfig(updated));
         self.edits.clear();

@@ -27,6 +27,8 @@ pub enum Action {
     SetAutostart(bool),
     SaveConfig(ConfigDoc),
     SavePrompt(PathBuf, String),
+    /// Back to the built-in prompt: remove the override file.
+    DeletePrompt(PathBuf),
     RefreshAll,
 }
 
@@ -110,7 +112,10 @@ impl Worker {
         let config = ConfigDoc::load(&self.root.join(CONFIG_FILE));
         let state = LoopState::load(&self.root.join("state").join("state.json"));
         let files = logs::list(&self.root.join("logs"));
-        let passes = self.cache.passes(&files, PASSES_SHOWN);
+        let mut passes = self.cache.passes(&files, PASSES_SHOWN);
+        if let Ok(st) = &state {
+            logs::attach_records(&mut passes, &st.last_runs);
+        }
         let running = cli::loop_running();
         self.update(|s| {
             s.config = config;
@@ -158,20 +163,29 @@ impl Worker {
         match action {
             Action::Pause => cli::run_cli(&cli()?, &self.root, &["pause", "Control Center"]).map(|_| "Loop pausiert".into()),
             Action::Resume => cli::run_cli(&cli()?, &self.root, &["resume"]).map(|_| "Loop läuft wieder".into()),
+            // the loop has no locking: two concurrent passes would fight over clone and state
+            Action::RunOwner if cli::loop_running() => Err("Es läuft bereits ein Loop-Prozess — bitte warten.".into()),
             Action::RunOwner => cli::spawn_cli(&cli()?, &self.root, &["own"]).map(|_| "PO-Lauf gestartet — Fortschritt unter Aktivität".into()),
             Action::SetTaskEnabled(on) => schedtask::set_enabled(*on).map(|_| if *on { "Zeitplan eingeschaltet" } else { "Zeitplan ausgeschaltet" }.into()),
             Action::EnableConfig => self.enable_config(),
+            Action::RescueWip if cli::loop_running() => Err("Ein Lauf arbeitet gerade im Clone — nichts angefasst.".into()),
             Action::RescueWip => self.rescue(),
-            Action::SetAutostart(on) => autostart::set_enabled(*on).map(|_| if *on { "Startet mit Windows" } else { "Autostart aus" }.into()),
-            Action::SaveConfig(doc) => doc.save().map(|_| "Einstellungen gespeichert".into()),
+            Action::SetAutostart(on) => autostart::set_enabled(*on, &self.root).map(|_| if *on { "Startet mit Windows" } else { "Autostart aus" }.into()),
+            Action::SaveConfig(doc) => doc.validate().and_then(|_| doc.save()).map(|_| "Einstellungen gespeichert".into()),
             Action::SavePrompt(path, text) => save_prompt(path, text),
+            Action::DeletePrompt(path) => match std::fs::remove_file(path) {
+                Ok(()) => Ok("Eingebaute Regeln aktiv (Override gelöscht)".into()),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("Eingebaute Regeln sind bereits aktiv".into()),
+                Err(e) => Err(e.to_string()),
+            },
             Action::RefreshAll => Ok("Aktualisiert".into()),
         }
     }
 
     fn enable_config(&self) -> Result<String, String> {
         let mut doc = ConfigDoc::load(&self.root.join(CONFIG_FILE))?;
-        doc.map.insert("enabled".into(), true.into());
+        let spec = crate::core::config::FIELDS.iter().find(|f| f.key == "enabled").ok_or("enabled fehlt")?;
+        doc.set_from_text(spec, "true")?;
         doc.save().map(|_| "Loop aktiviert".into())
     }
 

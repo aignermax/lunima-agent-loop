@@ -1,11 +1,12 @@
-//! Rules: edit the Product-Owner and worker prompts (prompts/*.md override the built-in ones).
+//! Rules: edit the Product-Owner and worker prompts. A file in prompts/ overrides the
+//! prompt built into the CLI; without one the built-in rules are in effect.
 
 use super::theme::{self, MUTED};
 use super::widgets::{card, page_title, pill, primary, secondary};
 use crate::collector::{Action, Handle};
 use crate::core::snapshot::Snapshot;
 use eframe::egui::{self, RichText, Ui};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const DEFAULT_OWNER: &str = include_str!("../../../prompts/owner.md");
 const DEFAULT_WORKER: &str = include_str!("../../../prompts/worker.md");
@@ -40,10 +41,19 @@ impl Which {
     }
 }
 
+/// Editor state for one prompt file.
+struct Buffer {
+    path: PathBuf,
+    /// What is in effect: the override file, or the built-in default when there is none.
+    saved: String,
+    text: String,
+    /// An override file exists in prompts/ (it wins over the prompt built into the CLI).
+    overridden: bool,
+}
+
 pub struct RulesPage {
     which: Which,
-    /// (file the buffer belongs to, text on disk when loaded, edited text)
-    buffer: Option<(PathBuf, String, String)>,
+    buffer: Option<Buffer>,
 }
 
 impl Default for RulesPage {
@@ -54,7 +64,7 @@ impl Default for RulesPage {
 
 impl RulesPage {
     pub fn show(&mut self, ui: &mut Ui, s: &Snapshot, handle: &Handle) {
-        page_title(ui, "Regeln", "Die Anweisungen, nach denen Product Owner und Worker arbeiten.");
+        page_title(ui, "Regeln", "Die Anweisungen, nach denen Product Owner und Worker arbeiten. Änderungen gelten ab dem nächsten Lauf.");
         ui.horizontal(|ui| {
             for (w, label) in [(Which::Owner, "Product Owner"), (Which::Worker, "Worker")] {
                 if ui.selectable_label(self.which == w, label).clicked() && self.which != w {
@@ -65,10 +75,11 @@ impl RulesPage {
         });
         ui.add_space(8.0);
         let path = s.prompts_dir().join(self.which.file());
-        if self.buffer.as_ref().is_none_or(|(p, _, _)| p != &path) {
-            let on_disk = std::fs::read_to_string(&path).unwrap_or_default();
-            let text = if on_disk.is_empty() { self.which.default_text().to_string() } else { on_disk.clone() };
-            self.buffer = Some((path.clone(), on_disk, text));
+        if self.buffer.as_ref().is_none_or(|b| b.path != path) {
+            let on_disk = std::fs::read_to_string(&path).ok();
+            let overridden = on_disk.is_some();
+            let saved = on_disk.unwrap_or_else(|| self.which.default_text().to_string());
+            self.buffer = Some(Buffer { path: path.clone(), text: saved.clone(), saved, overridden });
         }
         self.toolbar(ui, &path, handle);
         ui.add_space(6.0);
@@ -77,22 +88,32 @@ impl RulesPage {
         self.editor(ui);
     }
 
-    fn toolbar(&mut self, ui: &mut Ui, path: &std::path::Path, handle: &Handle) {
-        let Some((_, saved, text)) = self.buffer.as_mut() else { return };
-        let dirty = saved != text;
+    fn toolbar(&mut self, ui: &mut Ui, path: &Path, handle: &Handle) {
+        let default_text = self.which.default_text();
+        let Some(b) = self.buffer.as_mut() else { return };
+        let dirty = b.saved != b.text;
         ui.horizontal(|ui| {
             ui.add_enabled_ui(dirty, |ui| {
                 if primary(ui, "Speichern") {
-                    handle.send(Action::SavePrompt(path.to_path_buf(), text.clone()));
-                    *saved = text.clone();
+                    handle.send(Action::SavePrompt(path.to_path_buf(), b.text.clone()));
+                    b.saved = b.text.clone();
+                    b.overridden = true;
                 }
                 if secondary(ui, "Verwerfen") {
-                    *text = saved.clone();
+                    b.text = b.saved.clone();
                 }
             });
-            if secondary(ui, "Standard wiederherstellen") {
-                *text = self.which.default_text().to_string();
+            let reset = ui
+                .add_enabled(b.overridden, egui::Button::new("Eingebaute Regeln verwenden"))
+                .on_hover_text("Löscht die eigene Datei — der Loop nutzt dann wieder seine eingebauten Regeln.");
+            if reset.clicked() {
+                handle.send(Action::DeletePrompt(path.to_path_buf()));
+                b.overridden = false;
+                b.saved = default_text.to_string();
+                b.text = b.saved.clone();
             }
+            let (state, color) = if b.overridden { ("Eigene Regeln aktiv", theme::ACCENT) } else { ("Eingebaute Regeln aktiv", theme::OK) };
+            pill(ui, state, color);
             if dirty {
                 ui.label(RichText::new("● ungespeichert").color(theme::WARN));
             }
@@ -112,10 +133,10 @@ impl RulesPage {
     }
 
     fn editor(&mut self, ui: &mut Ui) {
-        let Some((_, _, text)) = self.buffer.as_mut() else { return };
+        let Some(b) = self.buffer.as_mut() else { return };
         card(ui, None, |ui| {
             egui::ScrollArea::vertical().id_salt("rules-editor").max_height(ui.available_height().max(420.0)).show(ui, |ui| {
-                ui.add(egui::TextEdit::multiline(text).font(egui::TextStyle::Monospace).code_editor().desired_width(f32::INFINITY).desired_rows(30).lock_focus(true));
+                ui.add(egui::TextEdit::multiline(&mut b.text).font(egui::TextStyle::Monospace).code_editor().desired_width(f32::INFINITY).desired_rows(30).lock_focus(true));
             });
         });
     }

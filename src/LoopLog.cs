@@ -6,7 +6,7 @@ namespace AgentLoop;
 /// Mirrors everything the loop prints (stdout + stderr) into logs/loop-yyyy-MM-dd.log.
 /// The scheduled task runs windowless, so without this the actual failure reason
 /// (e.g. the git error behind "branch setup failed") would be lost. The Control Center
-/// shows these files.
+/// shows these files. Logging never stops the loop: file errors just disable the mirror.
 /// </summary>
 public static class LoopLog
 {
@@ -19,35 +19,60 @@ public static class LoopLog
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, $"loop-{DateTime.Now:yyyy-MM-dd}.log");
             var file = new StreamWriter(new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite),
-                new UTF8Encoding(false)) { AutoFlush = true };
-            file.WriteLine($"[{DateTime.Now:HH:mm:ss}] ===== lunima-agent-loop {command} (pid {Environment.ProcessId}) =====");
-            Console.SetOut(new TeeWriter(Console.Out, file, null));
-            Console.SetError(new TeeWriter(Console.Error, file, "[stderr] "));
+                new UTF8Encoding(false));
+            var sink = new FileSink(file);
+            sink.WriteLine($"[{DateTime.Now:HH:mm:ss}] ===== lunima-agent-loop {command} (pid {Environment.ProcessId}) =====");
+            Console.SetOut(new TeeWriter(Console.Out, sink, ""));
+            Console.SetError(new TeeWriter(Console.Error, sink, "[stderr] "));
         }
-        catch (IOException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            // logging must never stop the loop
-        }
-        catch (UnauthorizedAccessException)
-        {
+            // no mirror this run
         }
     }
 
-    private sealed class TeeWriter(TextWriter console, TextWriter file, string? prefix) : TextWriter
+    /// <summary>Whole-line writes (one syscall per line, so concurrent processes don't interleave mid-line).</summary>
+    private sealed class FileSink(StreamWriter file)
     {
-        private static readonly object Gate = new();
-        private bool _lineStart = true;
+        private readonly object _gate = new();
+        private bool _broken;
+
+        public void WriteLine(string line)
+        {
+            lock (_gate)
+            {
+                if (_broken) return;
+                try
+                {
+                    file.Write(line + Environment.NewLine);
+                    file.Flush();
+                }
+                catch (Exception e) when (e is IOException or ObjectDisposedException or UnauthorizedAccessException)
+                {
+                    _broken = true;
+                }
+            }
+        }
+    }
+
+    /// <summary>Passes everything to the console and buffers it into complete lines for the file.</summary>
+    private sealed class TeeWriter(TextWriter console, FileSink sink, string prefix) : TextWriter
+    {
+        private readonly StringBuilder _line = new();
 
         public override Encoding Encoding => console.Encoding;
 
         public override void Write(char value)
         {
             console.Write(value);
-            lock (Gate)
+            if (value == '\n')
             {
-                if (_lineStart && prefix is not null) file.Write(prefix);
-                file.Write(value);
-                _lineStart = value == '\n';
+                sink.WriteLine(prefix + _line.ToString().TrimEnd('\r'));
+                _line.Clear();
+            }
+            else
+            {
+                _line.Append(value);
             }
         }
 
@@ -60,7 +85,9 @@ public static class LoopLog
         public override void WriteLine(string? value)
         {
             Write(value);
-            Write(Environment.NewLine);
+            Write('\n');
         }
+
+        public override void Flush() => console.Flush();
     }
 }

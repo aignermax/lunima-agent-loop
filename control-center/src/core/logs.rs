@@ -30,6 +30,50 @@ pub struct LogFile {
 pub struct PassEntry {
     pub file: LogFile,
     pub pass: Pass,
+    /// Exit code the loop recorded for this pass (state.json) — works for any runner.
+    pub record_exit: Option<i32>,
+}
+
+/// How a PO pass ended, combining its log with the loop's own run record.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Outcome {
+    Running,
+    Succeeded,
+    Failed(String),
+    Aborted,
+}
+
+impl PassEntry {
+    /// `running`: a loop process is active *and* this is the newest log.
+    pub fn outcome(&self, running: bool) -> Outcome {
+        match (self.pass.finished, self.pass.is_error, self.record_exit) {
+            (true, true, _) => Outcome::Failed(self.pass.summary.clone().unwrap_or_default()),
+            (true, false, _) | (false, _, Some(0)) => Outcome::Succeeded,
+            (false, _, Some(code)) => Outcome::Failed(format!("Exit-Code {code}")),
+            (false, _, None) if running => Outcome::Running,
+            (false, _, None) => Outcome::Aborted,
+        }
+    }
+}
+
+/// Matches each pass (newest first) to the owner run record written while it ran.
+pub fn attach_records(passes: &mut [PassEntry], runs: &[crate::core::state::RunRecord]) {
+    let mut until: Option<DateTime<Local>> = None;
+    for entry in passes.iter_mut() {
+        let Some(start) = entry.file.started else { continue };
+        entry.record_exit = runs
+            .iter()
+            .filter(|r| r.kind == "owner")
+            .filter_map(|r| crate::core::state::parse_time(&r.timestamp).map(|t| (t, r.exit_code)))
+            .find(|(t, _)| *t >= start && until.is_none_or(|u| *t < u))
+            .map(|(_, code)| code);
+        until = Some(start);
+    }
+}
+
+/// True if `file` is the newest PO or worker log — i.e. a running loop is in that pass.
+pub fn is_newest_run_log(files: &[LogFile], file: &LogFile) -> bool {
+    files.iter().find(|f| matches!(f.kind, LogKind::Owner | LogKind::Task(_))).is_some_and(|f| f.path == file.path)
 }
 
 /// "2026-10-09_083052_owner.jsonl" → kind + start time.
@@ -82,7 +126,7 @@ impl PassCache {
             .iter()
             .filter(|f| f.kind == LogKind::Owner)
             .take(limit)
-            .map(|f| PassEntry { file: f.clone(), pass: self.get(f) })
+            .map(|f| PassEntry { file: f.clone(), pass: self.get(f), record_exit: None })
             .collect()
     }
 

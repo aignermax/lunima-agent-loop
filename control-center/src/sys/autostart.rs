@@ -14,11 +14,12 @@ pub fn is_enabled() -> bool {
     run(cmd).is_ok()
 }
 
-pub fn set_enabled(enabled: bool) -> Result<(), String> {
+/// Registers `"exe" --tray --root "<root>"` so autostart watches the same loop folder.
+pub fn set_enabled(enabled: bool, root: &std::path::Path) -> Result<(), String> {
     let mut cmd = hidden("reg.exe");
     if enabled {
         let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-        let data = format!("\"{}\" --tray", exe.display());
+        let data = format!("\"{}\" --tray --root \"{}\"", exe.display(), root.display());
         cmd.args(["add", RUN_KEY, "/v", VALUE, "/t", "REG_SZ", "/d", &data, "/f"]);
     } else {
         cmd.args(["delete", RUN_KEY, "/v", VALUE, "/f"]);
