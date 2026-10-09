@@ -159,11 +159,12 @@ impl Worker {
         let gh_data = if repo.is_empty() { Err("githubRepo fehlt".into()) } else { github::fetch(&repo) };
         let autostart = autostart::is_enabled();
         let mut team = snap.team.clone();
-        crate::team_ops::refresh_slow(&mut team);
+        crate::team_ops::refresh_slow(&mut team, &snap.config_str("githubRepo"));
         self.update(|s| {
             s.team.units = team.units;
             s.team.claude_version = team.claude_version;
             s.team.wsl_offset = team.wsl_offset;
+            s.team.agent_tomls = team.agent_tomls;
             s.team.log = team.log;
             s.task = Some(task);
             s.clone = Some(clone);

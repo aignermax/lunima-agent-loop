@@ -23,6 +23,10 @@ pub struct TeamSnapshot {
     pub heartbeats: BTreeMap<String, Heartbeat>,
     pub pauses: BTreeMap<String, String>,
     pub history: Vec<HistoryEntry>,
+    /// Repos found by the agent's org discovery.
+    pub discovered: Vec<String>,
+    /// repo → roles enabled by its .agent.toml (Err: not readable / no file)
+    pub agent_tomls: BTreeMap<String, Result<Vec<String>, String>>,
     pub env: Option<EnvFile>,
     pub units: Probe<BTreeMap<String, String>>,
     pub claude_version: Probe<String>,

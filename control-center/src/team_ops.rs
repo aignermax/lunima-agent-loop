@@ -18,6 +18,8 @@ pub fn refresh_fast(loop_root: &Path, prev: &TeamSnapshot) -> TeamSnapshot {
         heartbeats: issue_agent::read_heartbeats(&dir),
         pauses: issue_agent::read_pauses(&dir, Local::now()),
         history: issue_agent::read_history(&dir, HISTORY_SHOWN),
+        discovered: crate::core::projects::read_discovered(&dir),
+        agent_tomls: prev.agent_tomls.clone(),
         env: EnvFile::load(&dir.join(".env")).ok(),
         units: prev.units.clone(),
         claude_version: prev.claude_version.clone(),
@@ -27,9 +29,18 @@ pub fn refresh_fast(loop_root: &Path, prev: &TeamSnapshot) -> TeamSnapshot {
     }
 }
 
-/// wsl.exe calls and the log scan, every 90 s.
-pub fn refresh_slow(team: &mut TeamSnapshot) {
+/// wsl.exe calls, the log scan and each project's .agent.toml, every 90 s.
+pub fn refresh_slow(team: &mut TeamSnapshot, po_repo: &str) {
     let Some(dir) = team.dir.clone() else { return };
+    if let Some(env) = &team.env {
+        team.agent_tomls = crate::core::projects::list(env, &team.discovered, po_repo)
+            .into_iter()
+            .map(|p| {
+                let roles = crate::sys::github::fetch_raw(&p.repo, ".agent.toml").map(|t| crate::core::projects::parse_agents_enabled(&t));
+                (p.repo, roles)
+            })
+            .collect();
+    }
     team.units = Some(wsl::unit_states());
     let probe = wsl::probe();
     team.wsl_offset = probe.as_ref().ok().and_then(|(_, o)| *o).or(team.wsl_offset);

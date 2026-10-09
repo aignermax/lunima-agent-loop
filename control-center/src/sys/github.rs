@@ -62,6 +62,11 @@ pub fn fetch(repo: &str) -> Result<GithubData, String> {
     Ok(GithubData { recent_issues, open_prs })
 }
 
+/// A file from the repo's default branch, raw (e.g. `.agent.toml`).
+pub fn fetch_raw(repo: &str, path: &str) -> Result<String, String> {
+    gh(&["api", "-H", "Accept: application/vnd.github.raw", &format!("repos/{repo}/contents/{path}")])
+}
+
 /// `gh auth status` — Ok when logged in.
 pub fn auth_status() -> Result<(), String> {
     gh(&["auth", "status"]).map(|_| ()).map_err(|e| e.lines().next().unwrap_or("gh nicht angemeldet").to_string())
