@@ -29,6 +29,7 @@ pub struct Snapshot {
     pub autostart: bool,
     pub refreshed: DateTime<Local>,
     pub slow_refreshed: Option<DateTime<Local>>,
+    pub team: super::team::TeamSnapshot,
 }
 
 impl Snapshot {
@@ -48,6 +49,7 @@ impl Snapshot {
             autostart: false,
             refreshed: Local::now(),
             slow_refreshed: None,
+            team: Default::default(),
         }
     }
 

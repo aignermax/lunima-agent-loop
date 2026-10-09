@@ -24,6 +24,10 @@ public sealed class LoopConfig
     /// <summary>Claim label: set on an issue while a worker runs, so a second machine won't start the same issue.</summary>
     public string RunningLabel { get; set; } = "agent-running";
     public bool Enabled { get; set; } = true;
+    /// <summary>False = Product-Owner only: this loop's own workers stay idle because another
+    /// coder (the autonomous issue agent) implements the agent-task issues. The PO still reviews
+    /// and merges every agent-pr PR.</summary>
+    public bool WorkersEnabled { get; set; } = true;
     /// <summary>Opt in on an unlocked dedicated desktop with the UX Python dependencies.</summary>
     public bool CustomerEnabled { get; set; }
     public string CustomerPython { get; set; } = "python";

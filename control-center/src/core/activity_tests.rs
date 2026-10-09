@@ -49,6 +49,45 @@ fn merges_labels_and_closes_are_recognised() {
 }
 
 #[test]
+fn rest_api_issue_creation_is_recognised_with_link() {
+    let cmd = r#"cat > /c/tmp/i.md <<'EOF'
+body mentions gh pr merge 1 but is only text
+EOF
+gh api repos/aignermax/Lunima/issues -X POST -f title="ISA playground: recognize the ACC" -F body=@/c/tmp/i.md -f "labels[]=agent-task" -q '.number+0|tostring'"#;
+    let pass = parse_pass(&log(&[tool_use("r", cmd), tool_result("r", "1479\nShell cwd was reset", false)]));
+    assert_eq!(pass.actions.len(), 1);
+    let a = &pass.actions[0];
+    assert_eq!(a.kind, ActionKind::IssueCreated);
+    assert_eq!(a.text, "ISA playground: recognize the ACC");
+    assert_eq!(a.url.as_deref(), Some("https://github.com/aignermax/Lunima/issues/1479"));
+}
+
+#[test]
+fn rest_creation_variants() {
+    let quoted_pair = r#"gh api repos/o/r/issues -X POST -f "title=Two words here" -f body=x"#;
+    let method_first = r#"gh api --method POST repos/o/r/issues -f title='Single quoted'"#;
+    for (cmd, title) in [(quoted_pair, "Two words here"), (method_first, "Single quoted")] {
+        let pass = parse_pass(&tool_use("c", cmd));
+        assert_eq!(pass.actions[0].kind, ActionKind::IssueCreated, "{cmd}");
+        assert_eq!(pass.actions[0].text, title);
+    }
+}
+
+#[test]
+fn a_get_listing_next_to_a_label_post_is_not_a_creation() {
+    let cmd = r#"gh api repos/o/r/issues --jq '.[].number'; gh api repos/o/r/issues/5/labels -X POST -f "labels[]=x""#;
+    let pass = parse_pass(&tool_use("g", cmd));
+    assert_eq!(pass.actions.len(), 1);
+    assert_eq!(pass.actions[0].kind, ActionKind::LabelAdded);
+}
+
+#[test]
+fn rest_labels_on_existing_issue_are_not_creations() {
+    let pass = parse_pass(&tool_use("l", r#"gh api repos/o/r/issues/12/labels -X POST -f "labels[]=x""#));
+    assert_eq!(pass.actions[0].kind, ActionKind::LabelAdded);
+}
+
+#[test]
 fn failed_tool_call_is_marked() {
     let pass = parse_pass(&log(&[
         tool_use("x", "gh issue edit 5 --add-label agent-task && gh pr merge 7"),

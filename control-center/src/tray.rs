@@ -60,7 +60,7 @@ pub fn install(handle: Handle) {
     let _ = menu.append_items(&[&open, &PredefinedMenuItem::separator(), &pause, &owner, &PredefinedMenuItem::separator(), &quit]);
     let icon = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("Lunima PO — wird geprüft …")
+        .with_tooltip("Lunima Team — wird geprüft …")
         .with_icon(icon_for(Level::Pending))
         .with_menu_on_left_click(false)
         .build()
@@ -91,7 +91,7 @@ pub fn sync(handle: &Handle) {
     let snap = handle.snapshot();
     let h = health::evaluate(&snap, Local::now());
     let paused = snap.state.as_ref().map(|s| s.pause(Local::now()) != Pause::None).unwrap_or(false);
-    let tooltip = format!("Lunima PO — {}{}", h.headline, if h.subline.is_empty() { String::new() } else { format!("\n{}", h.subline) });
+    let tooltip = format!("Lunima Team — {}{}", h.headline, if h.subline.is_empty() { String::new() } else { format!("\n{}", h.subline) });
     TRAY.with(|t| {
         let mut t = t.borrow_mut();
         let Some(tray) = t.as_mut() else { return };

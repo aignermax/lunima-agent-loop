@@ -3,7 +3,7 @@
 use crate::collector::{Action, Handle};
 use crate::core::health::{self, Health, Level};
 use crate::core::snapshot::{relative, Snapshot};
-use crate::ui::{activity::ActivityPage, github, logs::LogsPage, overview, rules::RulesPage, settings::SettingsPage};
+use crate::ui::{activity::ActivityPage, github, logs::LogsPage, overview, rules::RulesPage, settings::SettingsPage, team::TeamPage};
 use crate::ui::theme::{self, MUTED};
 use crate::ui::widgets::level_dot;
 use crate::{tray, win};
@@ -14,6 +14,7 @@ use std::time::Duration;
 #[derive(Clone, Copy, PartialEq)]
 pub enum Page {
     Overview,
+    Team,
     Activity,
     Github,
     Settings,
@@ -23,6 +24,7 @@ pub enum Page {
 
 const PAGES: &[(Page, &str, &str)] = &[
     (Page::Overview, "🏠", "Übersicht"),
+    (Page::Team, "👥", "Team"),
     (Page::Activity, "📋", "Aktivität"),
     (Page::Github, "🐙", "GitHub"),
     (Page::Settings, "⚙", "Einstellungen"),
@@ -35,8 +37,8 @@ const NOTICE_SECONDS: u64 = 6;
 impl Page {
     /// `--page overview|activity|github|settings|rules|logs`
     pub fn from_arg(name: &str) -> Option<Self> {
-        let all = [Page::Overview, Page::Activity, Page::Github, Page::Settings, Page::Rules, Page::Logs];
-        let names = ["overview", "activity", "github", "settings", "rules", "logs"];
+        let all = [Page::Overview, Page::Team, Page::Activity, Page::Github, Page::Settings, Page::Rules, Page::Logs];
+        let names = ["overview", "team", "activity", "github", "settings", "rules", "logs"];
         names.iter().position(|n| n.eq_ignore_ascii_case(name)).map(|i| all[i])
     }
 }
@@ -45,6 +47,7 @@ pub struct App {
     handle: Handle,
     page: Page,
     activity: ActivityPage,
+    team: TeamPage,
     settings: SettingsPage,
     rules: RulesPage,
     logs: LogsPage,
@@ -55,7 +58,7 @@ impl App {
         theme::apply(&cc.egui_ctx);
         win::register(cc);
         tray::install(handle.clone());
-        Self { handle, page, activity: ActivityPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default() }
+        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default() }
     }
 
     fn sidebar(&mut self, ctx: &egui::Context, s: &Snapshot, h: &Health) {
@@ -63,7 +66,7 @@ impl App {
             ui.horizontal(|ui| {
                 level_dot(ui, h.overall, 7.0);
                 ui.vertical(|ui| {
-                    ui.label(RichText::new("Lunima PO").size(18.0).strong());
+                    ui.label(RichText::new("Lunima Team").size(18.0).strong());
                     ui.label(RichText::new("Control Center").size(12.0).color(MUTED));
                 });
             });
@@ -128,6 +131,7 @@ impl eframe::App for App {
                 ui.set_max_width(ui.available_width().min(1080.0));
                 match self.page {
                     Page::Overview => overview::show(ui, &s, &h, &self.handle),
+                    Page::Team => self.team.show(ui, &s, &self.handle),
                     Page::Activity => self.activity.show(ui, &s),
                     Page::Github => github::show(ui, &s),
                     Page::Settings => self.settings.show(ui, &s, &self.handle),

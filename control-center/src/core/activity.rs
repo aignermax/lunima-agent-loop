@@ -71,6 +71,40 @@ fn title_in(cmd: &str) -> Option<String> {
         .map(|m| m.as_str().to_string())
 }
 
+/// Each `gh api …` invocation of a (possibly multi-command) shell line, up to the next
+/// command separator.
+fn api_calls(cmd: &str) -> impl Iterator<Item = &str> {
+    static R: OnceLock<Regex> = OnceLock::new();
+    re(&R, r"gh api\b[^\n;&|]*").find_iter(cmd).map(|m| m.as_str())
+}
+
+/// The REST way to open an issue: a POST to `repos/<owner>/<name>/issues` (any flag order).
+/// Returns (repo, call); the response is only the new number, so the link is built from it.
+fn api_issue_create(cmd: &str) -> Option<(String, &str)> {
+    static PATH: OnceLock<Regex> = OnceLock::new();
+    static POST: OnceLock<Regex> = OnceLock::new();
+    api_calls(cmd).find_map(|call| {
+        if !re(&POST, r"(?:-X|--method)\s+POST\b").is_match(call) {
+            return None;
+        }
+        let repo = re(&PATH, r"(?:^|\s)/?repos/([\w.-]+/[\w.-]+)/issues(?:\s|$)").captures(call)?;
+        Some((repo[1].to_string(), call))
+    })
+}
+
+fn api_issue_repo(cmd: &str) -> Option<String> {
+    api_issue_create(cmd).map(|(repo, _)| repo)
+}
+
+/// `-f title="…"`, `-f "title=…"`, `-f 'title=…'`, `-f title=word`.
+fn api_title(call: &str) -> Option<String> {
+    static R: OnceLock<Regex> = OnceLock::new();
+    re(&R, r#"-[fF]\s+(?:"title=([^"]*)"|'title=([^']*)'|title="([^"]*)"|title='([^']*)'|title=(\S+))"#)
+        .captures(call)
+        .and_then(|c| (1..=5).find_map(|i| c.get(i)))
+        .map(|m| m.as_str().to_string())
+}
+
 fn number_after(cmd: &str, verb: &str) -> Option<String> {
     let pattern = format!(r"{}\s+#?(\d+)", regex::escape(verb));
     Regex::new(&pattern).ok()?.captures(cmd).map(|c| format!("#{}", &c[1]))
@@ -90,6 +124,9 @@ fn classify(cmd: &str) -> Option<(ActionKind, String)> {
     let c = cmd.trim();
     if c.contains("gh issue create") {
         return Some((ActionKind::IssueCreated, title_in(c).unwrap_or_else(|| "Neues Issue".into())));
+    }
+    if let Some((_, call)) = api_issue_create(c) {
+        return Some((ActionKind::IssueCreated, api_title(call).unwrap_or_else(|| "Neues Issue".into())));
     }
     if c.contains("gh pr create") {
         return Some((ActionKind::PrCreated, title_in(c).unwrap_or_else(|| "Neuer PR".into())));
@@ -126,7 +163,7 @@ fn tool_result_text(content: &Value) -> String {
 /// Parses a whole log. Unparseable lines (e.g. `[stderr] ...`) are ignored.
 pub fn parse_pass(log: &str) -> Pass {
     let mut pass = Pass::default();
-    let mut pending: HashMap<String, usize> = HashMap::new();
+    let mut pending: HashMap<String, (usize, Option<String>)> = HashMap::new();
     for line in log.lines() {
         let Ok(event) = serde_json::from_str::<Value>(line) else { continue };
         match event.get("type").and_then(Value::as_str) {
@@ -146,7 +183,7 @@ fn content_items(event: &Value) -> &[Value] {
     event.pointer("/message/content").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[])
 }
 
-fn collect_tool_uses(event: &Value, pass: &mut Pass, pending: &mut HashMap<String, usize>) {
+fn collect_tool_uses(event: &Value, pass: &mut Pass, pending: &mut HashMap<String, (usize, Option<String>)>) {
     for item in content_items(event) {
         if item.get("type").and_then(Value::as_str) != Some("tool_use") {
             continue;
@@ -154,13 +191,13 @@ fn collect_tool_uses(event: &Value, pass: &mut Pass, pending: &mut HashMap<Strin
         let Some(cmd) = item.pointer("/input/command").and_then(Value::as_str) else { continue };
         let Some((kind, text)) = classify(cmd) else { continue };
         if let Some(id) = item.get("id").and_then(Value::as_str) {
-            pending.insert(id.to_string(), pass.actions.len());
+            pending.insert(id.to_string(), (pass.actions.len(), api_issue_repo(cmd)));
         }
         pass.actions.push(Action { kind, text, url: None, failed: false });
     }
 }
 
-fn apply_tool_results(event: &Value, pass: &mut Pass, pending: &HashMap<String, usize>) {
+fn apply_tool_results(event: &Value, pass: &mut Pass, pending: &HashMap<String, (usize, Option<String>)>) {
     for item in content_items(event) {
         if item.get("type").and_then(Value::as_str) != Some("tool_result") {
             continue;
@@ -169,11 +206,15 @@ fn apply_tool_results(event: &Value, pass: &mut Pass, pending: &HashMap<String, 
         if failed {
             pass.tool_errors += 1;
         }
-        let Some(&idx) = item.get("tool_use_id").and_then(Value::as_str).and_then(|id| pending.get(id)) else { continue };
+        let Some((idx, api_repo)) = item.get("tool_use_id").and_then(Value::as_str).and_then(|id| pending.get(id)) else { continue };
         let text = tool_result_text(item.get("content").unwrap_or(&Value::Null));
-        let action = &mut pass.actions[idx];
+        let action = &mut pass.actions[*idx];
         action.failed = failed;
-        action.url = url_in(&text);
+        action.url = url_in(&text).or_else(|| {
+            // REST create returns just the number (e.g. with -q '.number')
+            let number = text.split_whitespace().next()?.parse::<u64>().ok()?;
+            api_repo.as_ref().map(|r| format!("https://github.com/{r}/issues/{number}"))
+        });
     }
 }
 

@@ -30,6 +30,7 @@ const fn f(group: &'static str, key: &'static str, label: &'static str, kind: Fi
 /// Every field the settings page offers, grouped for display.
 pub const FIELDS: &[FieldSpec] = &[
     f("Betrieb", "enabled", "Loop aktiviert", FieldKind::Toggle, "Aus = der Zeitplan läuft weiter, tut aber nichts."),
+    f("Betrieb", "workersEnabled", "Loop-Worker aktiv", FieldKind::Toggle, "Aus = Team-Modus: der PO plant und merged, das Coden macht der Issue-Agent."),
     f("Betrieb", "maxTasksPerDay", "Max. Tasks pro Tag", FieldKind::Number, "Budget-Grenze für Worker-Läufe pro Kalendertag."),
     f("Betrieb", "ownerIntervalMinutes", "PO-Intervall (Min.)", FieldKind::Number, "Mindestabstand zwischen zwei Product-Owner-Läufen."),
     f("Modelle", "ownerRunner", "PO-Laufzeit", FieldKind::Choice(&["claude", "kimi"]), "CLI für den Product-Owner-Lauf."),
@@ -67,6 +68,7 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("blockedLabel", "\"needs-human\""),
     ("runningLabel", "\"agent-running\""),
     ("enabled", "true"),
+    ("workersEnabled", "true"),
     ("customerEnabled", "false"),
     ("customerPython", "\"python\""),
     ("customerModel", "\"claude-fable-5-1\""),
@@ -190,6 +192,29 @@ impl ConfigDoc {
         let key = self.stored_key(spec.key).cloned().unwrap_or_else(|| spec.key.to_string());
         self.map.insert(key, value);
         Ok(())
+    }
+
+    /// Sets a boolean directly in the file text, so comments and formatting survive
+    /// (the toggles on the Team page). Falls back to a full save only for a comment-free
+    /// file that lacks the key.
+    pub fn set_bool_in_file(path: &Path, key: &str, value: bool) -> Result<(), String> {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let pattern = format!(r#"(?i)("{}"\s*:\s*)(true|false)"#, regex::escape(key));
+        let re = regex::Regex::new(&pattern).map_err(|e| e.to_string())?;
+        let updated = if re.find_iter(&text).count() == 1 {
+            re.replace(&text, |c: &regex::Captures| format!("{}{value}", &c[1])).into_owned()
+        } else {
+            let brace = text.find('{').ok_or("agent-loop.json: kein JSON-Objekt")?;
+            format!("{}\n  \"{key}\": {value},{}", &text[..=brace], &text[brace + 1..])
+        };
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, &updated).map_err(|e| e.to_string())?;
+        // the result must still be a config the loop accepts
+        if let Err(e) = Self::load(&tmp).and_then(|d| d.validate()) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        std::fs::rename(&tmp, path).map_err(|e| e.to_string())
     }
 
     /// The checks `LoopConfig.Load` enforces — a config failing them stops every run.
