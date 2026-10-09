@@ -194,6 +194,29 @@ impl ConfigDoc {
         Ok(())
     }
 
+    /// Sets a boolean directly in the file text, so comments and formatting survive
+    /// (the toggles on the Team page). Falls back to a full save only for a comment-free
+    /// file that lacks the key.
+    pub fn set_bool_in_file(path: &Path, key: &str, value: bool) -> Result<(), String> {
+        let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let pattern = format!(r#"(?i)("{}"\s*:\s*)(true|false)"#, regex::escape(key));
+        let re = regex::Regex::new(&pattern).map_err(|e| e.to_string())?;
+        let updated = if re.find_iter(&text).count() == 1 {
+            re.replace(&text, |c: &regex::Captures| format!("{}{value}", &c[1])).into_owned()
+        } else {
+            let brace = text.find('{').ok_or("agent-loop.json: kein JSON-Objekt")?;
+            format!("{}\n  \"{key}\": {value},{}", &text[..=brace], &text[brace + 1..])
+        };
+        let tmp = path.with_extension("json.tmp");
+        std::fs::write(&tmp, &updated).map_err(|e| e.to_string())?;
+        // the result must still be a config the loop accepts
+        if let Err(e) = Self::load(&tmp).and_then(|d| d.validate()) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    }
+
     /// The checks `LoopConfig.Load` enforces — a config failing them stops every run.
     pub fn validate(&self) -> Result<(), String> {
         if self.str("clonePath").trim().is_empty() {

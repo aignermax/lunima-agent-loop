@@ -3,7 +3,7 @@
 //! File contract: autonomous-issue-agent/src/control.py.
 
 use super::state::parse_time;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, TimeZone};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
@@ -48,8 +48,8 @@ pub struct LogFindings {
     pub not_logged_in: Option<DateTime<Local>>,
     /// Claude failures in the scanned tail, with the time of the newest.
     pub claude_failures: Vec<DateTime<Local>>,
-    /// Highest "PR #n has k QA failures" seen: (pr, k, when).
-    pub qa_loop: Option<(u64, u64, DateTime<Local>)>,
+    /// Latest "PR #n has k QA failures" per PR: (pr, k, when).
+    pub qa_loops: Vec<(u64, u64, DateTime<Local>)>,
     pub log_bytes: u64,
 }
 
@@ -62,7 +62,12 @@ pub fn resolve_dir(loop_root: &Path) -> Option<PathBuf> {
         .and_then(|v| v.get("issueAgentDir").and_then(Value::as_str).map(PathBuf::from));
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
     let candidates = [configured, loop_root.parent().map(|p| p.join("autonomous-issue-agent")), home.map(|h| h.join("autonomous-issue-agent"))];
-    candidates.into_iter().flatten().find(|d| d.join("main.py").is_file() && d.join("src").is_dir())
+    candidates.into_iter().flatten().find(|d| is_agent_dir(d))
+}
+
+/// A checkout of autonomous-issue-agent.
+pub fn is_agent_dir(dir: &Path) -> bool {
+    dir.join("main.py").is_file() && dir.join("src").is_dir()
 }
 
 /// Remembers an explicit issue-agent folder for this loop root.
@@ -151,17 +156,22 @@ fn tail_text(path: &Path, bytes: u64) -> (String, u64) {
     (String::from_utf8_lossy(&buf).into_owned(), len)
 }
 
-fn line_time(line: &str) -> Option<DateTime<Local>> {
-    line.get(..19).and_then(parse_time)
+/// agent.log timestamps are naive WSL local time; `offset` is WSL's zone (None = same as Windows).
+fn line_time(line: &str, offset: Option<FixedOffset>) -> Option<DateTime<Local>> {
+    let naive = NaiveDateTime::parse_from_str(line.get(..19)?, "%Y-%m-%d %H:%M:%S").ok()?;
+    match offset {
+        Some(o) => o.from_local_datetime(&naive).single().map(|t| t.with_timezone(&Local)),
+        None => Local.from_local_datetime(&naive).single(),
+    }
 }
 
 /// Scans the end of agent.log for the failure patterns that silently stalled the team before.
-pub fn scan_log(dir: &Path) -> LogFindings {
+pub fn scan_log(dir: &Path, offset: Option<FixedOffset>) -> LogFindings {
     let (text, len) = tail_text(&dir.join("agent.log"), LOG_TAIL_BYTES);
     let mut f = LogFindings { log_bytes: len, ..Default::default() };
     let qa_re = regex::Regex::new(r"PR #(\d+) has (\d+) QA failures").expect("static regex");
     for line in text.lines() {
-        let Some(t) = line_time(line) else { continue };
+        let Some(t) = line_time(line, offset) else { continue };
         if line.contains("does not support this model") {
             f.model_unsupported = Some(t);
         }
@@ -173,9 +183,8 @@ pub fn scan_log(dir: &Path) -> LogFindings {
         }
         if let Some(c) = qa_re.captures(line) {
             let (pr, n) = (c[1].parse().unwrap_or(0), c[2].parse().unwrap_or(0));
-            if f.qa_loop.is_none_or(|(_, k, _)| n >= k) {
-                f.qa_loop = Some((pr, n, t));
-            }
+            f.qa_loops.retain(|(p, _, _)| *p != pr);
+            f.qa_loops.push((pr, n, t));
         }
     }
     f

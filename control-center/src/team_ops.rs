@@ -21,6 +21,7 @@ pub fn refresh_fast(loop_root: &Path, prev: &TeamSnapshot) -> TeamSnapshot {
         env: EnvFile::load(&dir.join(".env")).ok(),
         units: prev.units.clone(),
         claude_version: prev.claude_version.clone(),
+        wsl_offset: prev.wsl_offset,
         log: prev.log.clone(),
         dir: Some(dir),
     }
@@ -30,8 +31,10 @@ pub fn refresh_fast(loop_root: &Path, prev: &TeamSnapshot) -> TeamSnapshot {
 pub fn refresh_slow(team: &mut TeamSnapshot) {
     let Some(dir) = team.dir.clone() else { return };
     team.units = Some(wsl::unit_states());
-    team.claude_version = Some(wsl::claude_version());
-    team.log = Some(issue_agent::scan_log(&dir));
+    let probe = wsl::probe();
+    team.wsl_offset = probe.as_ref().ok().and_then(|(_, o)| *o).or(team.wsl_offset);
+    team.claude_version = Some(probe.map(|(v, _)| v));
+    team.log = Some(issue_agent::scan_log(&dir, team.wsl_offset));
 }
 
 fn dir(loop_root: &Path) -> Result<std::path::PathBuf, String> {
@@ -57,17 +60,14 @@ pub fn set_paused(loop_root: &Path, role: &str, paused: bool) -> Result<String, 
 
 /// Toggles a boolean in agent-loop.json (workersEnabled, customerEnabled, …).
 pub fn set_loop_flag(loop_root: &Path, key: &str, value: bool) -> Result<String, String> {
-    let mut doc = ConfigDoc::load(&loop_root.join(CONFIG_FILE))?;
     let spec = FIELDS.iter().find(|f| f.key == key).ok_or_else(|| format!("unbekannte Einstellung {key}"))?;
-    doc.set_from_text(spec, &value.to_string())?;
-    doc.validate()?;
-    doc.save()?;
+    ConfigDoc::set_bool_in_file(&loop_root.join(CONFIG_FILE), key, value)?;
     Ok(format!("{}: {}", spec.label, if value { "an" } else { "aus" }))
 }
 
 pub fn set_agent_dir(loop_root: &Path, path: &Path) -> Result<String, String> {
-    if !path.join("main.py").is_file() {
-        return Err(format!("{} enthält keine main.py des Issue-Agents", path.display()));
+    if !issue_agent::is_agent_dir(path) {
+        return Err(format!("{} ist kein autonomous-issue-agent (main.py und src/ fehlen)", path.display()));
     }
     issue_agent::save_dir_setting(loop_root, path)?;
     Ok("Issue-Agent verbunden".into())

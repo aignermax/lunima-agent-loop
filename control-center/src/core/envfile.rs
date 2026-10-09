@@ -57,17 +57,17 @@ impl EnvFile {
         }
     }
 
-    /// Sets (or removes, for an empty value) a key; replaces the last assignment in place.
+    /// Sets a key (replacing its last assignment in place). An empty value removes *every*
+    /// assignment — otherwise an earlier duplicate would silently become effective.
     pub fn set(&mut self, key: &str, value: &str) {
-        let idx = self.lines.iter().rposition(|l| split(l).is_some_and(|(k, _)| k == key));
+        if value.is_empty() {
+            self.lines.retain(|l| !split(l).is_some_and(|(k, _)| k == key));
+            return;
+        }
         let line = format!("{key}={value}");
-        match (idx, value.is_empty()) {
-            (Some(i), true) => {
-                self.lines.remove(i);
-            }
-            (Some(i), false) => self.lines[i] = line,
-            (None, false) => self.lines.push(line),
-            (None, true) => {}
+        match self.lines.iter().rposition(|l| split(l).is_some_and(|(k, _)| k == key)) {
+            Some(i) => self.lines[i] = line,
+            None => self.lines.push(line),
         }
     }
 
@@ -114,6 +114,13 @@ mod tests {
         e.save().unwrap();
         let text = std::fs::read_to_string(&e.path).unwrap();
         assert_eq!(text, "# header\n\n# models\nB=3\nNEW=x\n");
+    }
+
+    #[test]
+    fn clearing_removes_duplicates_too() {
+        let (_t, mut e) = env("M=old\nX=1\nM=new\n");
+        e.set("M", "");
+        assert_eq!(e.get("M"), None);
     }
 
     #[test]

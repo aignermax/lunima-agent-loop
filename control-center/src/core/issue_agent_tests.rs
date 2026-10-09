@@ -79,10 +79,32 @@ fn log_scan_finds_the_known_failure_patterns() {
 2026-10-09 08:41:00,000 [ERROR] Not logged in · Please run /login\n\
 no timestamp line with does not support this model\n";
     std::fs::write(dir.path().join("agent.log"), log).unwrap();
-    let f = scan_log(dir.path());
+    let f = scan_log(dir.path(), None);
     assert_eq!(f.claude_failures.len(), 1);
-    assert_eq!(f.qa_loop.map(|(pr, n, _)| (pr, n)), Some((1471, 154)));
+    assert_eq!(f.qa_loops.iter().map(|(pr, n, _)| (*pr, *n)).collect::<Vec<_>>(), [(1471, 154)]);
     assert!(f.model_unsupported.is_some());
     assert!(f.not_logged_in.is_some());
     assert!(f.log_bytes > 0);
+}
+
+#[test]
+fn log_scan_keeps_latest_per_pr_and_applies_wsl_offset() {
+    let dir = agent_dir();
+    let log = "\
+2026-10-09 08:39:16,451 [WARNING] PR #1471 has 154 QA failures (>= 2); escalating to human.\n\
+2026-10-09 11:30:00,000 [WARNING] PR #1480 has 6 QA failures (>= 2); escalating to human.\n";
+    std::fs::write(dir.path().join("agent.log"), log).unwrap();
+    let utc = scan_log(dir.path(), FixedOffset::east_opt(0));
+    let loops: Vec<_> = utc.qa_loops.iter().map(|(pr, n, _)| (*pr, *n)).collect();
+    assert_eq!(loops, [(1471, 154), (1480, 6)]);
+    let t = utc.qa_loops[1].2;
+    assert_eq!(t.with_timezone(&chrono::Utc).format("%H:%M").to_string(), "11:30");
+}
+
+#[test]
+fn agent_dir_needs_main_py_and_src() {
+    let dir = agent_dir();
+    assert!(is_agent_dir(dir.path()));
+    std::fs::remove_dir_all(dir.path().join("src")).unwrap();
+    assert!(!is_agent_dir(dir.path()));
 }

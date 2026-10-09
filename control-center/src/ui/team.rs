@@ -19,7 +19,11 @@ pub struct TeamPage {
 /// Status line of an issue-agent role: (level, text).
 fn role_status(team: &TeamSnapshot, role: &str) -> (Level, String) {
     let now = Local::now();
-    let unit = team.units.as_ref().and_then(|u| u.as_ref().ok()).and_then(|u| u.get(role)).cloned();
+    let unit = match &team.units {
+        Some(Err(e)) => return (Level::Warn, format!("WSL nicht erreichbar: {e}")),
+        Some(Ok(u)) => u.get(role).cloned(),
+        None => None,
+    };
     match unit.as_deref() {
         None => return (Level::Pending, "wird geprüft …".into()),
         Some("active") => {}

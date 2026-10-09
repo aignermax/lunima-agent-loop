@@ -163,6 +163,7 @@ impl Worker {
         self.update(|s| {
             s.team.units = team.units;
             s.team.claude_version = team.claude_version;
+            s.team.wsl_offset = team.wsl_offset;
             s.team.log = team.log;
             s.task = Some(task);
             s.clone = Some(clone);

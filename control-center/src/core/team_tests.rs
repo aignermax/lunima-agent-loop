@@ -73,7 +73,7 @@ fn this_weeks_outages_are_reported() {
         model_unsupported: Some(now - Duration::minutes(5)),
         not_logged_in: Some(now - Duration::minutes(5)),
         claude_failures: vec![now; 4],
-        qa_loop: Some((1471, 154, now - Duration::minutes(10))),
+        qa_loops: vec![(1471, 154, now - Duration::minutes(10))],
         log_bytes: 491 * 1024 * 1024,
     });
     let t = titles(&s);
@@ -86,8 +86,32 @@ fn this_weeks_outages_are_reported() {
 fn old_log_findings_expire() {
     let (_t, mut s) = snapshot(false);
     let old = Local::now() - Duration::hours(5);
-    s.team.log = Some(LogFindings { model_unsupported: Some(old), qa_loop: Some((1, 99, old)), ..Default::default() });
+    s.team.log = Some(LogFindings { model_unsupported: Some(old), qa_loops: vec![(1, 99, old)], ..Default::default() });
     assert!(titles(&s).is_empty());
+}
+
+#[test]
+fn a_new_qa_loop_is_not_hidden_by_an_older_bigger_one() {
+    let (_t, mut s) = snapshot(false);
+    let now = Local::now();
+    s.team.log = Some(LogFindings { qa_loops: vec![(1471, 154, now - Duration::hours(5)), (1480, 6, now - Duration::minutes(5))], ..Default::default() });
+    let c = checks(&s, now).into_iter().find(|c| c.title == "QA-Schleife").unwrap();
+    assert!(c.detail.contains("#1480"));
+}
+
+#[test]
+fn backing_off_role_is_not_dead() {
+    let (_t, mut s) = snapshot(false);
+    let backoff = Local::now() - Duration::minutes(15);
+    s.team.heartbeats.insert("coder".into(), Heartbeat { state: "idle".into(), updated: Some(backoff), ..Default::default() });
+    assert!(titles(&s).is_empty());
+}
+
+#[test]
+fn unreachable_wsl_is_a_warning_not_silence() {
+    let (_t, mut s) = snapshot(false);
+    s.team.units = Some(Err("Zeitüberschreitung nach 20 s".into()));
+    assert_eq!(titles(&s), [("WSL nicht erreichbar".to_string(), Level::Warn)]);
 }
 
 #[test]

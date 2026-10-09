@@ -63,6 +63,19 @@ fn setting_a_field_keeps_the_files_key_casing() {
 }
 
 #[test]
+fn bool_toggle_keeps_comments_and_layout() {
+    let (_t, d) = doc("{\n  // worker switch\n  \"clonePath\": \"C:/c\",\n  \"WorkersEnabled\": true /* loop */\n}\n");
+    ConfigDoc::set_bool_in_file(&d.path, "workersEnabled", false).unwrap();
+    let text = std::fs::read_to_string(&d.path).unwrap();
+    assert!(text.contains("// worker switch") && text.contains("/* loop */"));
+    assert!(!ConfigDoc::load(&d.path).unwrap().bool("workersEnabled"));
+    // missing key is inserted
+    ConfigDoc::set_bool_in_file(&d.path, "customerEnabled", false).unwrap();
+    assert!(!ConfigDoc::load(&d.path).unwrap().bool("customerEnabled"));
+    assert!(std::fs::read_to_string(&d.path).unwrap().contains("// worker switch"));
+}
+
+#[test]
 fn invalid_json_reports_error() {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("agent-loop.json");

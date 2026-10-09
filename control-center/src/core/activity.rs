@@ -71,21 +71,37 @@ fn title_in(cmd: &str) -> Option<String> {
         .map(|m| m.as_str().to_string())
 }
 
-/// `gh api repos/<owner>/<name>/issues -X POST -f title=...` — the REST way to open an issue.
-/// Returns the repo; the response is only the new number, so the link is built from it.
-fn api_issue_repo(cmd: &str) -> Option<String> {
+/// Each `gh api …` invocation of a (possibly multi-command) shell line, up to the next
+/// command separator.
+fn api_calls(cmd: &str) -> impl Iterator<Item = &str> {
     static R: OnceLock<Regex> = OnceLock::new();
-    if !(cmd.contains("-X POST") || cmd.contains("--method POST")) {
-        return None;
-    }
-    re(&R, r"gh api\s+/?repos/([\w.-]+/[\w.-]+)/issues(?:\s|$)").captures(cmd).map(|c| c[1].to_string())
+    re(&R, r"gh api\b[^\n;&|]*").find_iter(cmd).map(|m| m.as_str())
 }
 
-fn api_title(cmd: &str) -> Option<String> {
+/// The REST way to open an issue: a POST to `repos/<owner>/<name>/issues` (any flag order).
+/// Returns (repo, call); the response is only the new number, so the link is built from it.
+fn api_issue_create(cmd: &str) -> Option<(String, &str)> {
+    static PATH: OnceLock<Regex> = OnceLock::new();
+    static POST: OnceLock<Regex> = OnceLock::new();
+    api_calls(cmd).find_map(|call| {
+        if !re(&POST, r"(?:-X|--method)\s+POST\b").is_match(call) {
+            return None;
+        }
+        let repo = re(&PATH, r"(?:^|\s)/?repos/([\w.-]+/[\w.-]+)/issues(?:\s|$)").captures(call)?;
+        Some((repo[1].to_string(), call))
+    })
+}
+
+fn api_issue_repo(cmd: &str) -> Option<String> {
+    api_issue_create(cmd).map(|(repo, _)| repo)
+}
+
+/// `-f title="…"`, `-f "title=…"`, `-f 'title=…'`, `-f title=word`.
+fn api_title(call: &str) -> Option<String> {
     static R: OnceLock<Regex> = OnceLock::new();
-    re(&R, r#"-[fF]\s+"?title=(?:"([^"]*)"|'([^']*)'|([^\s"]+))"#)
-        .captures(cmd)
-        .and_then(|c| c.get(1).or_else(|| c.get(2)).or_else(|| c.get(3)))
+    re(&R, r#"-[fF]\s+(?:"title=([^"]*)"|'title=([^']*)'|title="([^"]*)"|title='([^']*)'|title=(\S+))"#)
+        .captures(call)
+        .and_then(|c| (1..=5).find_map(|i| c.get(i)))
         .map(|m| m.as_str().to_string())
 }
 
@@ -109,8 +125,8 @@ fn classify(cmd: &str) -> Option<(ActionKind, String)> {
     if c.contains("gh issue create") {
         return Some((ActionKind::IssueCreated, title_in(c).unwrap_or_else(|| "Neues Issue".into())));
     }
-    if api_issue_repo(c).is_some() {
-        return Some((ActionKind::IssueCreated, api_title(c).unwrap_or_else(|| "Neues Issue".into())));
+    if let Some((_, call)) = api_issue_create(c) {
+        return Some((ActionKind::IssueCreated, api_title(call).unwrap_or_else(|| "Neues Issue".into())));
     }
     if c.contains("gh pr create") {
         return Some((ActionKind::PrCreated, title_in(c).unwrap_or_else(|| "Neuer PR".into())));

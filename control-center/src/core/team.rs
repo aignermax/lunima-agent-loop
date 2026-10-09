@@ -12,6 +12,9 @@ use std::path::PathBuf;
 
 const LOG_WARN_BYTES: u64 = 200 * 1024 * 1024;
 const QA_LOOP_ROUNDS: u64 = 5;
+/// Longer than the agent's maximum poll backoff (900 s), so a role that is backing off
+/// during an API outage is not mistaken for a dead one.
+const IDLE_SILENCE_MINUTES: i64 = 20;
 
 /// Everything known about the issue agent.
 #[derive(Clone, Default)]
@@ -23,6 +26,8 @@ pub struct TeamSnapshot {
     pub env: Option<EnvFile>,
     pub units: Probe<BTreeMap<String, String>>,
     pub claude_version: Probe<String>,
+    /// WSL's time zone (agent.log timestamps are WSL local time).
+    pub wsl_offset: Option<chrono::FixedOffset>,
     pub log: Option<LogFindings>,
 }
 
@@ -59,7 +64,14 @@ pub fn checks(s: &Snapshot, now: DateTime<Local>) -> Vec<Check> {
 }
 
 fn unit_checks(t: &TeamSnapshot, now: DateTime<Local>, out: &mut Vec<Check>) {
-    let Some(Ok(units)) = &t.units else { return };
+    let units = match &t.units {
+        Some(Ok(u)) => u,
+        Some(Err(e)) => {
+            out.push(check(Level::Warn, "WSL nicht erreichbar".into(), format!("Status der Agents unbekannt: {e}"), None));
+            return;
+        }
+        None => return,
+    };
     for (role, _) in UNITS {
         let name = role_label(role);
         let state = units.get(*role).map(String::as_str).unwrap_or("unbekannt");
@@ -73,7 +85,7 @@ fn unit_checks(t: &TeamSnapshot, now: DateTime<Local>, out: &mut Vec<Check>) {
         }
         let Some(hb) = t.heartbeats.get(*role) else { continue };
         // working without a Claude session (git, builds, test suites) can be quiet for a while
-        let limit = if hb.state == "working" { Duration::minutes(60) } else { Duration::minutes(10) };
+        let limit = if hb.state == "working" { Duration::minutes(60) } else { Duration::minutes(IDLE_SILENCE_MINUTES) };
         if let Some(u) = hb.updated.filter(|u| now - *u > limit) {
             out.push(check(Level::Warn, format!("{name} reagiert nicht"), format!("Letztes Lebenszeichen {} (Zustand '{}').", relative(u, now), hb.state), Some(("Neu starten", Fix::RestartUnit(role.to_string())))));
         }
@@ -89,7 +101,8 @@ fn log_checks(t: &TeamSnapshot, now: DateTime<Local>, out: &mut Vec<Check>) {
     if let Some(at) = recent(f.not_logged_in, now, 2) {
         out.push(check(Level::Error, "Claude in WSL nicht angemeldet".into(), format!("{}: 'Not logged in'. Ohne ANTHROPIC_API_KEY in der .env braucht WSL ein eigenes /login.", relative(at, now)), None));
     }
-    if let Some((pr, n, at)) = f.qa_loop.filter(|(_, n, at)| *n >= QA_LOOP_ROUNDS && now - *at < Duration::hours(3)) {
+    let worst = f.qa_loops.iter().filter(|(_, n, at)| *n >= QA_LOOP_ROUNDS && now - *at < Duration::hours(3)).max_by_key(|(_, n, _)| *n);
+    if let Some(&(pr, n, at)) = worst {
         out.push(check(Level::Error, "QA-Schleife".into(), format!("PR #{pr} ist {n}× durch die QA gefallen (zuletzt {}). Jede Runde kostet einen Review-Lauf.", relative(at, now)), None));
     }
     let failures = f.claude_failures.iter().filter(|t| now - **t < Duration::hours(2)).count();

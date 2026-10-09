@@ -63,6 +63,25 @@ gh api repos/aignermax/Lunima/issues -X POST -f title="ISA playground: recognize
 }
 
 #[test]
+fn rest_creation_variants() {
+    let quoted_pair = r#"gh api repos/o/r/issues -X POST -f "title=Two words here" -f body=x"#;
+    let method_first = r#"gh api --method POST repos/o/r/issues -f title='Single quoted'"#;
+    for (cmd, title) in [(quoted_pair, "Two words here"), (method_first, "Single quoted")] {
+        let pass = parse_pass(&tool_use("c", cmd));
+        assert_eq!(pass.actions[0].kind, ActionKind::IssueCreated, "{cmd}");
+        assert_eq!(pass.actions[0].text, title);
+    }
+}
+
+#[test]
+fn a_get_listing_next_to_a_label_post_is_not_a_creation() {
+    let cmd = r#"gh api repos/o/r/issues --jq '.[].number'; gh api repos/o/r/issues/5/labels -X POST -f "labels[]=x""#;
+    let pass = parse_pass(&tool_use("g", cmd));
+    assert_eq!(pass.actions.len(), 1);
+    assert_eq!(pass.actions[0].kind, ActionKind::LabelAdded);
+}
+
+#[test]
 fn rest_labels_on_existing_issue_are_not_creations() {
     let pass = parse_pass(&tool_use("l", r#"gh api repos/o/r/issues/12/labels -X POST -f "labels[]=x""#));
     assert_eq!(pass.actions[0].kind, ActionKind::LabelAdded);
