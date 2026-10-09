@@ -5,6 +5,7 @@ pub mod cli;
 pub mod git;
 pub mod github;
 pub mod schedtask;
+pub mod wsl;
 
 use std::path::Path;
 use std::process::{Command, Output};

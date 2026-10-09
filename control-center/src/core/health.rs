@@ -23,6 +23,11 @@ pub enum Fix {
     EnableTask,
     RescueWip,
     RunOwner,
+    /// issue-agent role (coder/qa/pr-feedback)
+    StartUnit(String),
+    RestartUnit(String),
+    ResumeRole(String),
+    DisableLoopWorkers,
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +67,7 @@ pub fn evaluate(s: &Snapshot, now: DateTime<Local>) -> Health {
     ]
     .into_iter()
     .flatten()
+    .chain(super::team::checks(s, now))
     .collect();
     let overall = checks.iter().map(|c| c.level).max().unwrap_or(Level::Pending);
     let (headline, subline) = headline(s, &checks, overall, now);
@@ -138,6 +144,10 @@ fn owner_check(s: &Snapshot, now: DateTime<Local>) -> Option<Check> {
 }
 
 fn worker_check(s: &Snapshot) -> Option<Check> {
+    // the loop's own workers are off in team mode — their old failures don't matter
+    if !s.config.as_ref().is_ok_and(|c| c.bool("workersEnabled")) {
+        return None;
+    }
     let streak = s.state.as_ref().ok()?.failure_streak("task");
     if streak.len() < 2 {
         return None;

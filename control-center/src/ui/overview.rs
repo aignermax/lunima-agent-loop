@@ -105,6 +105,10 @@ fn fix_action(fix: &Fix) -> Action {
         Fix::EnableTask => Action::SetTaskEnabled(true),
         Fix::RescueWip => Action::RescueWip,
         Fix::RunOwner => Action::RunOwner,
+        Fix::StartUnit(role) => Action::Unit(role.clone(), "start"),
+        Fix::RestartUnit(role) => Action::Unit(role.clone(), "restart"),
+        Fix::ResumeRole(role) => Action::SetRolePaused(role.clone(), false),
+        Fix::DisableLoopWorkers => Action::SetLoopFlag("workersEnabled", false),
     }
 }
 

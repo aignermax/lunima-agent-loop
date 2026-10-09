@@ -20,8 +20,8 @@
         <Component Id="ControlCenterExe">
           <File Id="ControlCenter" Source="$(AgentBinDir)lunima-po.exe" KeyPath="yes">
             <!-- Start menu entry; "Start with Windows" is a per-user toggle inside the app. -->
-            <Shortcut Id="ControlCenterStartMenu" Directory="ProgramMenuFolder" Name="Lunima PO Control Center"
-                      Description="Status, Aktivität und Einstellungen des Lunima Product Owners"
+            <Shortcut Id="ControlCenterStartMenu" Directory="ProgramMenuFolder" Name="Lunima Team Control Center"
+                      Description="Status, Steuerung und Einstellungen des Lunima-Agenten-Teams"
                       WorkingDirectory="INSTALLFOLDER" Advertise="yes" />
           </File>
         </Component>

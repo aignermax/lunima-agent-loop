@@ -30,6 +30,26 @@ pub enum Action {
     /// Back to the built-in prompt: remove the override file.
     DeletePrompt(PathBuf),
     RefreshAll,
+    /// issue-agent role + systemctl verb (start/stop/restart)
+    Unit(String, &'static str),
+    SetRolePaused(String, bool),
+    /// boolean in agent-loop.json, e.g. workersEnabled
+    SetLoopFlag(&'static str, bool),
+    SetAgentDir(PathBuf),
+    /// issue agent .env; true = restart its daemons afterwards
+    SaveEnv(crate::core::envfile::EnvFile, bool),
+}
+
+impl Action {
+    /// Short German label for the "busy" toast.
+    fn label(&self) -> String {
+        match self {
+            Action::Unit(role, verb) => format!("{} {verb}", crate::core::team::role_label(role)),
+            Action::SaveEnv(..) => ".env speichern".into(),
+            Action::SaveConfig(_) => "Einstellungen speichern".into(),
+            other => format!("{other:?}").chars().take(40).collect(),
+        }
+    }
 }
 
 /// Result message shown as a toast.
@@ -117,7 +137,10 @@ impl Worker {
             logs::attach_records(&mut passes, &st.last_runs);
         }
         let running = cli::loop_running();
+        let prev_team = self.shared.snapshot.lock().expect("snapshot lock").team.clone();
+        let team = crate::team_ops::refresh_fast(&self.root, &prev_team);
         self.update(|s| {
+            s.team = team;
             s.config = config;
             s.state = state;
             s.logs = files;
@@ -135,7 +158,12 @@ impl Worker {
         let repo = snap.config_str("githubRepo");
         let gh_data = if repo.is_empty() { Err("githubRepo fehlt".into()) } else { github::fetch(&repo) };
         let autostart = autostart::is_enabled();
+        let mut team = snap.team.clone();
+        crate::team_ops::refresh_slow(&mut team);
         self.update(|s| {
+            s.team.units = team.units;
+            s.team.claude_version = team.claude_version;
+            s.team.log = team.log;
             s.task = Some(task);
             s.clone = Some(clone);
             s.gh_auth = Some(gh_auth);
@@ -146,7 +174,7 @@ impl Worker {
     }
 
     fn execute(&mut self, action: Action) {
-        *self.shared.busy.lock().expect("busy lock") = Some(format!("{action:?}").chars().take(40).collect());
+        *self.shared.busy.lock().expect("busy lock") = Some(action.label());
         (self.on_change)();
         let result = self.perform(&action);
         *self.shared.busy.lock().expect("busy lock") = None;
@@ -179,6 +207,11 @@ impl Worker {
                 Err(e) => Err(e.to_string()),
             },
             Action::RefreshAll => Ok("Aktualisiert".into()),
+            Action::Unit(role, verb) => crate::team_ops::unit(role, verb),
+            Action::SetRolePaused(role, paused) => crate::team_ops::set_paused(&self.root, role, *paused),
+            Action::SetLoopFlag(key, value) => crate::team_ops::set_loop_flag(&self.root, key, *value),
+            Action::SetAgentDir(path) => crate::team_ops::set_agent_dir(&self.root, path),
+            Action::SaveEnv(env, restart) => crate::team_ops::save_env(env, *restart),
         }
     }
 

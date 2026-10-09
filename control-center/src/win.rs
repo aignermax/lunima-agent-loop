@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::OnceLock;
 
-pub const TITLE: &str = "Lunima PO Control Center";
+pub const TITLE: &str = "Lunima Team Control Center";
 
 static HWND: AtomicIsize = AtomicIsize::new(0);
 static CTX: OnceLock<eframe::egui::Context> = OnceLock::new();

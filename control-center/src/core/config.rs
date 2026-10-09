@@ -30,6 +30,7 @@ const fn f(group: &'static str, key: &'static str, label: &'static str, kind: Fi
 /// Every field the settings page offers, grouped for display.
 pub const FIELDS: &[FieldSpec] = &[
     f("Betrieb", "enabled", "Loop aktiviert", FieldKind::Toggle, "Aus = der Zeitplan läuft weiter, tut aber nichts."),
+    f("Betrieb", "workersEnabled", "Loop-Worker aktiv", FieldKind::Toggle, "Aus = Team-Modus: der PO plant und merged, das Coden macht der Issue-Agent."),
     f("Betrieb", "maxTasksPerDay", "Max. Tasks pro Tag", FieldKind::Number, "Budget-Grenze für Worker-Läufe pro Kalendertag."),
     f("Betrieb", "ownerIntervalMinutes", "PO-Intervall (Min.)", FieldKind::Number, "Mindestabstand zwischen zwei Product-Owner-Läufen."),
     f("Modelle", "ownerRunner", "PO-Laufzeit", FieldKind::Choice(&["claude", "kimi"]), "CLI für den Product-Owner-Lauf."),
@@ -67,6 +68,7 @@ const DEFAULTS: &[(&str, &str)] = &[
     ("blockedLabel", "\"needs-human\""),
     ("runningLabel", "\"agent-running\""),
     ("enabled", "true"),
+    ("workersEnabled", "true"),
     ("customerEnabled", "false"),
     ("customerPython", "\"python\""),
     ("customerModel", "\"claude-fable-5-1\""),

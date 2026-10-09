@@ -10,6 +10,7 @@ mod app;
 mod collector;
 mod core;
 mod sys;
+mod team_ops;
 mod tray;
 mod ui;
 mod win;

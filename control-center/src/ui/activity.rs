@@ -12,11 +12,25 @@ use eframe::egui::{self, RichText, Ui};
 #[derive(Default)]
 pub struct ActivityPage {
     only_with_actions: bool,
+    coder_tab: bool,
 }
 
 impl ActivityPage {
     pub fn show(&mut self, ui: &mut Ui, s: &Snapshot) {
-        page_title(ui, "Aktivität", "Was der Product Owner in seinen Läufen getan hat — direkt aus seinen Protokollen.");
+        page_title(ui, "Aktivität", "Was das Team getan hat — direkt aus den Protokollen von Product Owner und Coder.");
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!self.coder_tab, "Product Owner").clicked() {
+                self.coder_tab = false;
+            }
+            if ui.selectable_label(self.coder_tab, "Coder (Issue-Agent)").clicked() {
+                self.coder_tab = true;
+            }
+        });
+        ui.add_space(8.0);
+        if self.coder_tab {
+            super::coder_history::show(ui, s);
+            return;
+        }
         ui.checkbox(&mut self.only_with_actions, "Nur Läufe mit Aktionen oder Fehlern");
         ui.add_space(8.0);
         let entries: Vec<&PassEntry> = s

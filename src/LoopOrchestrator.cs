@@ -152,6 +152,11 @@ public sealed class LoopOrchestrator
     {
         if (!_config.Enabled) { Log("Disabled (enabled=false)."); return 0; }
         if (PausedSkip()) return 0;
+        if (!_config.WorkersEnabled)
+        {
+            Log("Workers disabled (workersEnabled=false) — team mode: the autonomous issue agent implements agent-task issues.");
+            return 0;
+        }
 
         var capacity = _config.MaxTasksPerDay - _state.Today().Tasks;
         if (capacity <= 0)
@@ -294,6 +299,7 @@ public sealed class LoopOrchestrator
         Console.WriteLine($"Clone:             {_config.ClonePath}");
         Console.WriteLine($"Integration:       {_config.IntegrationBranch} (base: {_config.BaseBranch})");
         Console.WriteLine($"Enabled:           {_config.Enabled}");
+        Console.WriteLine($"Workers:           {(_config.WorkersEnabled ? "enabled" : "disabled (PO only — team mode)")}");
         Console.WriteLine($"Customer review:   {(_config.CustomerEnabled ? "enabled" : "disabled")} ({_config.CustomerModel}, max {_config.CustomerMaxReviewsPerCycle}/cycle)");
         Console.WriteLine($"Paused:            {_state.PauseDescription()}");
         Console.WriteLine($"Models:            worker={_config.WorkerModel}, owner={_config.OwnerModel}");
