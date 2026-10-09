@@ -1,7 +1,13 @@
 //! A `.env` file edited in place: comments, blank lines and order survive; only the
 //! changed `KEY=value` lines are rewritten. Secrets are never shown.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+/// Key-level changes to a .env, applied to the file as it is *at save time* (so two pages
+/// editing different keys never overwrite each other). `None` = remove the key (agent
+/// default); `Some("")` = explicit empty value (e.g. discovery off).
+pub type EnvEdits = BTreeMap<String, Option<String>>;
 
 #[derive(Debug, Clone, Default)]
 pub struct EnvFile {
@@ -71,6 +77,32 @@ impl EnvFile {
         }
     }
 
+    /// Like `set`, but an empty value is written as `KEY=` (explicitly empty, not default).
+    pub fn assign(&mut self, key: &str, value: &str) {
+        let line = format!("{key}={value}");
+        match self.lines.iter().rposition(|l| split(l).is_some_and(|(k, _)| k == key)) {
+            Some(i) => self.lines[i] = line,
+            None => self.lines.push(line),
+        }
+    }
+
+    pub fn apply(&mut self, edits: &EnvEdits) {
+        for (key, value) in edits {
+            match value {
+                Some(v) => self.assign(key, v),
+                None => self.set(key, ""),
+            }
+        }
+    }
+
+    /// Value with pending edits on top.
+    pub fn get_with(&self, edits: &EnvEdits, key: &str) -> Option<String> {
+        match edits.get(key) {
+            Some(v) => v.clone(),
+            None => self.get(key),
+        }
+    }
+
     pub fn save(&self) -> Result<(), String> {
         let tmp = self.path.with_extension("env.tmp");
         std::fs::write(&tmp, self.lines.join("\n") + "\n").map_err(|e| e.to_string())?;
@@ -131,6 +163,20 @@ mod tests {
         assert_eq!(e.display("AGENT_OPENROUTER_KEY_FILE"), "/x");
         assert_eq!(e.display("AGENT_CODER_MODEL"), "m");
         assert_eq!(e.display("MISSING"), "—");
+    }
+
+    #[test]
+    fn explicit_empty_and_edits() {
+        let (_t, mut e) = env("AGENT_DISCOVERY_ORG=Akhetonics\nA=1\n");
+        let mut edits = EnvEdits::new();
+        edits.insert("AGENT_DISCOVERY_ORG".into(), Some(String::new()));
+        edits.insert("A".into(), None);
+        edits.insert("B".into(), Some("2".into()));
+        assert_eq!(e.get_with(&edits, "B").as_deref(), Some("2"));
+        e.apply(&edits);
+        e.save().unwrap();
+        assert_eq!(std::fs::read_to_string(&e.path).unwrap(), "AGENT_DISCOVERY_ORG=\nB=2\n");
+        assert_eq!(e.get("AGENT_DISCOVERY_ORG").as_deref(), Some(""));
     }
 
     #[test]

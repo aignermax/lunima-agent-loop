@@ -27,6 +27,8 @@ pub struct TeamSnapshot {
     pub discovered: Vec<String>,
     /// repo → roles enabled by its .agent.toml (Err: not readable / no file)
     pub agent_tomls: BTreeMap<String, Result<Vec<String>, String>>,
+    /// When each .agent.toml was fetched (re-fetched at most every few minutes).
+    pub agent_toml_at: BTreeMap<String, std::time::Instant>,
     pub env: Option<EnvFile>,
     pub units: Probe<BTreeMap<String, String>>,
     pub claude_version: Probe<String>,

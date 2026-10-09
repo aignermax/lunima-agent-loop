@@ -109,9 +109,51 @@ pub fn placeholders(text: &str) -> Vec<String> {
     out
 }
 
+/// What Python's `str.format` would reject in an issue-agent prompt: unbalanced braces and
+/// fields that aren't known placeholders (a single-brace `{"json": 1}` is such a field).
+/// The agent falls back to its built-in prompt in that case, silently ignoring the edit.
+pub fn format_problems(text: &str, known: &[String]) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut rest = text;
+    while let Some(i) = rest.find(['{', '}']) {
+        let (c, after) = (rest.as_bytes()[i], &rest[i + 1..]);
+        if after.starts_with(c as char) {
+            rest = &after[1..]; // `{{` / `}}` are literal braces
+            continue;
+        }
+        if c == b'}' {
+            problems.push("einzelne „}“ (für eine echte Klammer „}}“ schreiben)".to_string());
+            rest = after;
+            continue;
+        }
+        let Some(end) = after.find('}') else {
+            problems.push("„{“ ohne schließende Klammer".to_string());
+            break;
+        };
+        let field = &after[..end];
+        let name = field.split(['!', ':', '.', '[']).next().unwrap_or("");
+        if !known.iter().any(|k| k == name) {
+            problems.push(format!("unbekannter Platzhalter „{{{field}}}“"));
+        }
+        rest = &after[end + 1..];
+    }
+    problems.dedup();
+    problems
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_problems_match_python_format() {
+        let known = vec!["pr_number".to_string()];
+        assert!(format_problems("PR #{pr_number} {{\"literal\": 1}}", &known).is_empty());
+        assert_eq!(format_problems(r#"Antworte mit {"verdict": "OK"}"#, &known).len(), 1);
+        assert!(!format_problems("a } b", &known).is_empty());
+        assert!(!format_problems("a { b", &known).is_empty());
+        assert!(format_problems("{pr_number:>5}", &known).is_empty());
+    }
 
     #[test]
     fn placeholders_skip_escaped_braces_and_json() {

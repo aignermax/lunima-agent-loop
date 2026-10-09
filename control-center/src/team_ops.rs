@@ -1,7 +1,7 @@
 //! Collector side of the team: refreshing issue-agent data and executing team actions.
 
 use crate::core::config::{ConfigDoc, FIELDS};
-use crate::core::envfile::EnvFile;
+use crate::core::envfile::{EnvEdits, EnvFile};
 use crate::core::issue_agent;
 use crate::core::root::CONFIG_FILE;
 use crate::core::team::{role_label, TeamSnapshot};
@@ -10,17 +10,22 @@ use chrono::Local;
 use std::path::Path;
 
 const HISTORY_SHOWN: usize = 40;
+const TOML_REFRESH: std::time::Duration = std::time::Duration::from_secs(600);
+const DEFAULT_EXPIRY_DAYS: i64 = 8;
 
 /// Cheap file reads, every few seconds. Keeps the slow probes of `prev`.
 pub fn refresh_fast(loop_root: &Path, prev: &TeamSnapshot) -> TeamSnapshot {
     let Some(dir) = issue_agent::resolve_dir(loop_root) else { return TeamSnapshot::default() };
+    let env = EnvFile::load(&dir.join(".env")).ok();
+    let expiry = env.as_ref().and_then(|e| e.get("AGENT_DISCOVERY_EXPIRY_DAYS")).and_then(|v| v.parse().ok()).unwrap_or(DEFAULT_EXPIRY_DAYS);
     TeamSnapshot {
         heartbeats: issue_agent::read_heartbeats(&dir),
         pauses: issue_agent::read_pauses(&dir, Local::now()),
         history: issue_agent::read_history(&dir, HISTORY_SHOWN),
-        discovered: crate::core::projects::read_discovered(&dir),
+        discovered: crate::core::projects::read_discovered(&dir, expiry, Local::now().naive_local()),
         agent_tomls: prev.agent_tomls.clone(),
-        env: EnvFile::load(&dir.join(".env")).ok(),
+        agent_toml_at: prev.agent_toml_at.clone(),
+        env,
         units: prev.units.clone(),
         claude_version: prev.claude_version.clone(),
         wsl_offset: prev.wsl_offset,
@@ -33,13 +38,15 @@ pub fn refresh_fast(loop_root: &Path, prev: &TeamSnapshot) -> TeamSnapshot {
 pub fn refresh_slow(team: &mut TeamSnapshot, po_repo: &str) {
     let Some(dir) = team.dir.clone() else { return };
     if let Some(env) = &team.env {
-        team.agent_tomls = crate::core::projects::list(env, &team.discovered, po_repo)
-            .into_iter()
-            .map(|p| {
-                let roles = crate::sys::github::fetch_raw(&p.repo, ".agent.toml").map(|t| crate::core::projects::parse_agents_enabled(&t));
-                (p.repo, roles)
-            })
-            .collect();
+        // one gh call per repo, but at most every TOML_REFRESH — actions trigger slow refreshes
+        for p in crate::core::projects::list(env, &team.discovered, po_repo) {
+            if team.agent_toml_at.get(&p.repo).is_some_and(|t| t.elapsed() < TOML_REFRESH) {
+                continue;
+            }
+            let roles = crate::sys::github::fetch_raw(&p.repo, ".agent.toml").map(|t| crate::core::projects::parse_agents_enabled(&t));
+            team.agent_tomls.insert(p.repo.clone(), roles);
+            team.agent_toml_at.insert(p.repo, std::time::Instant::now());
+        }
     }
     team.units = Some(wsl::unit_states());
     let probe = wsl::probe();
@@ -84,8 +91,11 @@ pub fn set_agent_dir(loop_root: &Path, path: &Path) -> Result<String, String> {
     Ok("Issue-Agent verbunden".into())
 }
 
-/// Saves the issue agent's .env and restarts its daemons so they load it.
-pub fn save_env(env: &EnvFile, restart: bool) -> Result<String, String> {
+/// Applies key-level edits to the issue agent's .env *as it is now* and restarts its
+/// daemons so they load it.
+pub fn save_env(loop_root: &Path, edits: &EnvEdits, restart: bool) -> Result<String, String> {
+    let mut env = EnvFile::load(&dir(loop_root)?.join(".env"))?;
+    env.apply(edits);
     env.save()?;
     if !restart {
         return Ok(".env gespeichert".into());

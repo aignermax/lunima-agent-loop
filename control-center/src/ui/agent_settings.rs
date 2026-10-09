@@ -1,10 +1,11 @@
 //! Settings → Issue-Agent: models per role, budgets, labels and operation as a form over
-//! the agent's .env (comments survive; secrets are shown masked and never edited here).
+//! the agent's .env. Only changed keys are saved, on top of the file as it is at save time
+//! (comments survive; secrets are shown masked and never edited here).
 
 use super::theme::{self, MUTED};
 use super::widgets::{card, muted, primary, secondary};
 use crate::collector::{Action, Handle};
-use crate::core::envfile::EnvFile;
+use crate::core::envfile::{EnvEdits, EnvFile};
 use crate::core::snapshot::Snapshot;
 use eframe::egui::{self, RichText, Ui};
 
@@ -22,10 +23,16 @@ struct EnvField {
     kind: Kind,
     default: &'static str,
     help: &'static str,
+    /// Clearing the field means "explicitly empty" (writes `KEY=`), not "agent default".
+    empty_is_value: bool,
 }
 
 const fn e(group: &'static str, key: &'static str, label: &'static str, kind: Kind, default: &'static str, help: &'static str) -> EnvField {
-    EnvField { group, key, label, kind, default, help }
+    EnvField { group, key, label, kind, default, help, empty_is_value: false }
+}
+
+const fn e0(group: &'static str, key: &'static str, label: &'static str, default: &'static str, help: &'static str) -> EnvField {
+    EnvField { group, key, label, kind: Kind::Text, default, help, empty_is_value: true }
 }
 
 const FIELDS: &[EnvField] = &[
@@ -42,74 +49,67 @@ const FIELDS: &[EnvField] = &[
     e("Budgets", "AGENT_MAX_QA_FIX_ROUNDS", "QA-Fix-Runden", Kind::Number, "2", "Danach Eskalation an needs-human."),
     e("Budgets", "AGENT_PR_FEEDBACK_MAX_ROUNDS", "PR-Feedback-Runden", Kind::Number, "3", ""),
     e("Labels", "AGENT_ISSUE_LABEL", "Task-Label", Kind::Text, "agent-task", ""),
-    e("Labels", "AGENT_PR_LABELS", "Labels für Coder-PRs", Kind::Text, "", "agent-pr = der PO reviewt und merged sie."),
-    e("Labels", "AGENT_SKIP_LABELS", "Nie bearbeiten bei", Kind::Text, "agent-running,needs-human", ""),
+    e0("Labels", "AGENT_PR_LABELS", "Labels für Coder-PRs", "keine", "agent-pr = der PO reviewt und merged sie. Leer = keine."),
+    e0("Labels", "AGENT_SKIP_LABELS", "Nie bearbeiten bei", "agent-running,needs-human", "Leer = keine Ausnahmen."),
     e("Labels", "AGENT_COMPLEXITY_TAG", "Label „schwer“", Kind::Text, "complex", ""),
     e("Labels", "AGENT_CRITICAL_LABEL", "Label „kritisch“", Kind::Text, "critical", ""),
     e("Betrieb", "AGENT_COMPLEX_USES_CLAUDE", "complex → Premium-Modell", Kind::Toggle, "true", ""),
     e("Betrieb", "AGENT_POLL_INTERVAL", "Abfrage-Intervall (s)", Kind::Number, "15", ""),
-    e("Betrieb", "AGENT_DISCOVERY_ORG", "Organisation für Auto-Discovery", Kind::Text, "Akhetonics", "Leer = aus."),
+    e0("Betrieb", "AGENT_DISCOVERY_ORG", "Organisation für Auto-Discovery", "Akhetonics", "Leer = Discovery aus."),
 ];
 
 const SECRETS: &[&str] = &["ANTHROPIC_API_KEY", "GITHUB_TOKEN", "AGENT_OPENROUTER_API_KEY", "AGENT_ECO_API_KEY"];
 
 #[derive(Default)]
 pub struct AgentSettings {
-    draft: Option<EnvFile>,
+    edits: EnvEdits,
     error: Option<String>,
 }
 
 impl AgentSettings {
     pub fn show(&mut self, ui: &mut Ui, s: &Snapshot, handle: &Handle) {
-        let Some(file_env) = &s.team.env else {
+        let Some(env) = &s.team.env else {
             muted(ui, "Issue-Agent nicht verbunden — siehe Seite Team.");
             return;
         };
-        let mut env = self.draft.clone().unwrap_or_else(|| file_env.clone());
-        let before: Vec<Option<String>> = FIELDS.iter().map(|f| env.get(f.key)).collect();
         let mut groups: Vec<&str> = FIELDS.iter().map(|f| f.group).collect();
         groups.dedup();
         for group in groups {
             card(ui, Some(group), |ui| {
                 egui::Grid::new(("agent", group)).num_columns(2).spacing([24.0, 10.0]).min_col_width(210.0).show(ui, |ui| {
                     for f in FIELDS.iter().filter(|f| f.group == group) {
-                        field_row(ui, f, &mut env);
+                        field_row(ui, f, env, &mut self.edits);
                         ui.end_row();
                     }
                 });
             });
             ui.add_space(10.0);
         }
-        if FIELDS.iter().map(|f| env.get(f.key)).collect::<Vec<_>>() != before {
-            self.draft = Some(env);
-            self.error = None;
-        }
-        secrets(ui, file_env);
+        secrets(ui, env);
         ui.add_space(10.0);
         self.footer(ui, handle);
     }
 
     fn footer(&mut self, ui: &mut Ui, handle: &Handle) {
-        let dirty = self.draft.is_some();
+        let dirty = !self.edits.is_empty();
         ui.horizontal(|ui| {
             ui.add_enabled_ui(dirty, |ui| {
                 if primary(ui, "Speichern & Agents neu starten") {
-                    match self.draft.as_ref().map(validate) {
-                        Some(Err(e)) => self.error = Some(e),
-                        _ => {
-                            if let Some(d) = self.draft.take() {
-                                handle.send(Action::SaveEnv(d, true));
-                            }
+                    match validate(&self.edits) {
+                        Err(e) => self.error = Some(e),
+                        Ok(()) => {
+                            handle.send(Action::SaveEnv(std::mem::take(&mut self.edits), true));
+                            self.error = None;
                         }
                     }
                 }
                 if secondary(ui, "Verwerfen") {
-                    self.draft = None;
+                    self.edits.clear();
                     self.error = None;
                 }
             });
             if dirty {
-                ui.label(RichText::new("• ungespeichert — laufende Arbeit wird beim Neustart abgebrochen").color(theme::WARN));
+                ui.label(RichText::new(format!("• {} ungespeichert — laufende Arbeit wird beim Neustart abgebrochen", self.edits.len())).color(theme::WARN));
             }
             if let Some(e) = &self.error {
                 ui.label(RichText::new(e).color(theme::ERROR));
@@ -118,13 +118,13 @@ impl AgentSettings {
     }
 }
 
-fn field_row(ui: &mut Ui, f: &EnvField, env: &mut EnvFile) {
+fn field_row(ui: &mut Ui, f: &EnvField, env: &EnvFile, edits: &mut EnvEdits) {
     ui.vertical(|ui| {
         ui.label(f.label);
         let hint = if f.help.is_empty() { format!("{} · Standard: {}", f.key, f.default) } else { format!("{} · {}", f.key, f.help) };
         ui.label(RichText::new(hint).color(MUTED).size(11.0));
     });
-    let current = env.get(f.key).unwrap_or_default();
+    let current = env.get_with(edits, f.key).unwrap_or_default();
     let mut text = current.clone();
     match f.kind {
         Kind::Toggle => {
@@ -140,14 +140,20 @@ fn field_row(ui: &mut Ui, f: &EnvField, env: &mut EnvFile) {
             ui.add(egui::TextEdit::singleline(&mut text).hint_text(f.default).desired_width(360.0));
         }
     }
-    if text != current {
-        env.set(f.key, &text);
+    if text == current {
+        return;
+    }
+    let value = if text.is_empty() && !f.empty_is_value { None } else { Some(text) };
+    if value == env.get(f.key).filter(|v| !v.is_empty() || f.empty_is_value) {
+        edits.remove(f.key); // back to what the file says
+    } else {
+        edits.insert(f.key.to_string(), value);
     }
 }
 
-fn validate(env: &EnvFile) -> Result<(), String> {
+fn validate(edits: &EnvEdits) -> Result<(), String> {
     for f in FIELDS.iter().filter(|f| f.kind == Kind::Number) {
-        if let Some(v) = env.get(f.key).filter(|v| !v.is_empty()) {
+        if let Some(Some(v)) = edits.get(f.key) {
             if v.parse::<u32>().is_err() {
                 return Err(format!("{}: „{v}“ ist keine Zahl", f.label));
             }
