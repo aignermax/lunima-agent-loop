@@ -73,7 +73,7 @@ impl ProjectsPage {
                 }
             });
             if dirty {
-                ui.label(RichText::new("● ungespeichert").color(theme::WARN));
+                ui.label(RichText::new("• ungespeichert").color(theme::WARN));
             }
         });
     }

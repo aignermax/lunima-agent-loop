@@ -109,7 +109,7 @@ impl AgentSettings {
                 }
             });
             if dirty {
-                ui.label(RichText::new("● ungespeichert — laufende Arbeit wird beim Neustart abgebrochen").color(theme::WARN));
+                ui.label(RichText::new("• ungespeichert — laufende Arbeit wird beim Neustart abgebrochen").color(theme::WARN));
             }
             if let Some(e) = &self.error {
                 ui.label(RichText::new(e).color(theme::ERROR));

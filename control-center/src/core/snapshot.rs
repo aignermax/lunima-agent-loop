@@ -66,9 +66,6 @@ impl Snapshot {
         self.root.join("logs")
     }
 
-    pub fn prompts_dir(&self) -> PathBuf {
-        self.root.join("prompts")
-    }
 }
 
 /// "vor 5 Min." / "vor 3 Std." / "vor 2 Tagen" / "in 12 Min."
