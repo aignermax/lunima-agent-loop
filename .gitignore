@@ -13,3 +13,4 @@ __pycache__/
 out/
 installer/bin/
 installer/obj/
+control-center/target/

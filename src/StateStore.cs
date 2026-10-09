@@ -39,6 +39,8 @@ public sealed class StateStore
 {
     private readonly string _path;
     private readonly LoopState _state;
+    /// <summary>True once this process paused/resumed itself; otherwise the pause on disk wins.</summary>
+    private bool _pauseOwned;
 
     public StateStore(string path)
     {
@@ -84,6 +86,7 @@ public sealed class StateStore
     {
         _state.PausedUntil = until;
         _state.PauseReason = reason;
+        _pauseOwned = true;
         Save();
     }
 
@@ -91,6 +94,7 @@ public sealed class StateStore
     {
         _state.PausedUntil = null;
         _state.PauseReason = null;
+        _pauseOwned = true;
         Save();
     }
 
@@ -117,6 +121,24 @@ public sealed class StateStore
 
     public void Save()
     {
+        // A long pass loaded the state hours ago; a pause/resume issued meanwhile by another
+        // process (CLI, Control Center) must survive this pass's save.
+        if (!_pauseOwned && File.Exists(_path))
+        {
+            try
+            {
+                var onDisk = JsonSerializer.Deserialize(File.ReadAllText(_path), JsonContext.Default.LoopState);
+                if (onDisk is not null)
+                {
+                    _state.PausedUntil = onDisk.PausedUntil;
+                    _state.PauseReason = onDisk.PauseReason;
+                }
+            }
+            catch (JsonException)
+            {
+                // unreadable file: keep our view
+            }
+        }
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         File.WriteAllText(_path, JsonSerializer.Serialize(_state, JsonContext.Default.LoopState));
     }
