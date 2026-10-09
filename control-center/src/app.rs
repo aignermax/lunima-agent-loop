@@ -3,7 +3,7 @@
 use crate::collector::{Action, Handle};
 use crate::core::health::{self, Health, Level};
 use crate::core::snapshot::{relative, Snapshot};
-use crate::ui::{activity::ActivityPage, github, logs::LogsPage, overview, rules::RulesPage, settings::SettingsPage, team::TeamPage};
+use crate::ui::{activity::ActivityPage, github, logs::LogsPage, overview, rules::RulesPage, projects::ProjectsPage, settings::SettingsPage, team::TeamPage};
 use crate::ui::theme::{self, MUTED};
 use crate::ui::widgets::level_dot;
 use crate::{tray, win};
@@ -15,6 +15,7 @@ use std::time::Duration;
 pub enum Page {
     Overview,
     Team,
+    Projects,
     Activity,
     Github,
     Settings,
@@ -25,6 +26,7 @@ pub enum Page {
 const PAGES: &[(Page, &str, &str)] = &[
     (Page::Overview, "🏠", "Übersicht"),
     (Page::Team, "👥", "Team"),
+    (Page::Projects, "📦", "Projekte"),
     (Page::Activity, "📋", "Aktivität"),
     (Page::Github, "🐙", "GitHub"),
     (Page::Settings, "⚙", "Einstellungen"),
@@ -37,8 +39,8 @@ const NOTICE_SECONDS: u64 = 6;
 impl Page {
     /// `--page overview|activity|github|settings|rules|logs`
     pub fn from_arg(name: &str) -> Option<Self> {
-        let all = [Page::Overview, Page::Team, Page::Activity, Page::Github, Page::Settings, Page::Rules, Page::Logs];
-        let names = ["overview", "team", "activity", "github", "settings", "rules", "logs"];
+        let all = [Page::Overview, Page::Team, Page::Projects, Page::Activity, Page::Github, Page::Settings, Page::Rules, Page::Logs];
+        let names = ["overview", "team", "projects", "activity", "github", "settings", "rules", "logs"];
         names.iter().position(|n| n.eq_ignore_ascii_case(name)).map(|i| all[i])
     }
 }
@@ -48,6 +50,7 @@ pub struct App {
     page: Page,
     activity: ActivityPage,
     team: TeamPage,
+    projects: ProjectsPage,
     settings: SettingsPage,
     rules: RulesPage,
     logs: LogsPage,
@@ -58,7 +61,7 @@ impl App {
         theme::apply(&cc.egui_ctx);
         win::register(cc);
         tray::install(handle.clone());
-        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default() }
+        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default() }
     }
 
     fn sidebar(&mut self, ctx: &egui::Context, s: &Snapshot, h: &Health) {
@@ -132,6 +135,7 @@ impl eframe::App for App {
                 match self.page {
                     Page::Overview => overview::show(ui, &s, &h, &self.handle),
                     Page::Team => self.team.show(ui, &s, &self.handle),
+                    Page::Projects => self.projects.show(ui, &s, &self.handle),
                     Page::Activity => self.activity.show(ui, &s),
                     Page::Github => github::show(ui, &s),
                     Page::Settings => self.settings.show(ui, &s, &self.handle),

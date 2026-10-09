@@ -36,8 +36,8 @@ pub enum Action {
     /// boolean in agent-loop.json, e.g. workersEnabled
     SetLoopFlag(&'static str, bool),
     SetAgentDir(PathBuf),
-    /// issue agent .env; true = restart its daemons afterwards
-    SaveEnv(crate::core::envfile::EnvFile, bool),
+    /// key-level edits to the issue agent's .env; true = restart its daemons afterwards
+    SaveEnv(crate::core::envfile::EnvEdits, bool),
 }
 
 impl Action {
@@ -159,11 +159,13 @@ impl Worker {
         let gh_data = if repo.is_empty() { Err("githubRepo fehlt".into()) } else { github::fetch(&repo) };
         let autostart = autostart::is_enabled();
         let mut team = snap.team.clone();
-        crate::team_ops::refresh_slow(&mut team);
+        crate::team_ops::refresh_slow(&mut team, &snap.config_str("githubRepo"));
         self.update(|s| {
             s.team.units = team.units;
             s.team.claude_version = team.claude_version;
             s.team.wsl_offset = team.wsl_offset;
+            s.team.agent_tomls = team.agent_tomls;
+            s.team.agent_toml_at = team.agent_toml_at;
             s.team.log = team.log;
             s.task = Some(task);
             s.clone = Some(clone);
@@ -212,7 +214,7 @@ impl Worker {
             Action::SetRolePaused(role, paused) => crate::team_ops::set_paused(&self.root, role, *paused),
             Action::SetLoopFlag(key, value) => crate::team_ops::set_loop_flag(&self.root, key, *value),
             Action::SetAgentDir(path) => crate::team_ops::set_agent_dir(&self.root, path),
-            Action::SaveEnv(env, restart) => crate::team_ops::save_env(env, *restart),
+            Action::SaveEnv(edits, restart) => crate::team_ops::save_env(&self.root, edits, *restart),
         }
     }
 

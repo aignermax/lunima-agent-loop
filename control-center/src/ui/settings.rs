@@ -14,11 +14,26 @@ pub struct SettingsPage {
     /// Edit buffer (key → text). Empty = not editing, mirror the file.
     edits: HashMap<&'static str, String>,
     error: Option<String>,
+    agent_tab: bool,
+    agent: super::agent_settings::AgentSettings,
 }
 
 impl SettingsPage {
     pub fn show(&mut self, ui: &mut Ui, s: &Snapshot, handle: &Handle) {
-        page_title(ui, "Einstellungen", "agent-loop.json — Änderungen gelten ab dem nächsten Lauf.");
+        page_title(ui, "Einstellungen", "PO-Loop (agent-loop.json) und Issue-Agent (.env) — Änderungen gelten ab dem nächsten Lauf.");
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!self.agent_tab, "PO-Loop").clicked() {
+                self.agent_tab = false;
+            }
+            if ui.selectable_label(self.agent_tab, "Issue-Agent").clicked() {
+                self.agent_tab = true;
+            }
+        });
+        ui.add_space(8.0);
+        if self.agent_tab {
+            self.agent.show(ui, s, handle);
+            return;
+        }
         match &s.config {
             Err(e) => {
                 ui.label(RichText::new(e).color(theme::ERROR));
