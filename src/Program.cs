@@ -26,6 +26,8 @@ try
         ?? FindRoot(AppContext.BaseDirectory)
         ?? DefaultDataDir();
     Directory.CreateDirectory(root);
+    if (command is not ("status" or "help"))
+        LoopLog.Attach(root, command);
 
     var configPath = Path.Combine(root, "agent-loop.json");
     if (!File.Exists(configPath))

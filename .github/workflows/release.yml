@@ -1,5 +1,6 @@
 # Builds lunima-agent-loop as a NativeAOT single executable for every platform.
-#   Windows targets additionally get an MSI (installer/, WiX) that installs to Program Files + PATH.
+#   Windows targets additionally get the Control Center (control-center/, Rust tray app) and an MSI
+#   (installer/, WiX) that installs both to Program Files + PATH + Start menu.
 #   push a tag `v*` (e.g. `git tag v0.2.0 && git push origin v0.2.0`) → GitHub release with all binaries
 #   PR / manual run (Actions → Release → Run workflow)               → binaries as workflow artifacts only
 name: Release
@@ -38,6 +39,17 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF#refs/tags/v}"; else v="0.0.${GITHUB_RUN_NUMBER}"; fi
           echo "VERSION=$v" >> "$GITHUB_ENV"
 
+      - name: Rust toolchain (Control Center)
+        if: matrix.msi
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test + build Control Center
+        if: matrix.msi
+        shell: bash
+        run: |
+          cargo test --manifest-path control-center/Cargo.toml --locked
+          cargo build --manifest-path control-center/Cargo.toml --release --locked
+
       - name: Publish (NativeAOT)
         shell: bash
         run: dotnet publish lunima-agent-loop.csproj -c Release -r ${{ matrix.rid }} -p:Version=$VERSION -o out --nologo
@@ -48,6 +60,7 @@ jobs:
           name="lunima-agent-loop-${VERSION}-${{ matrix.rid }}"
           mkdir -p "dist/$name"
           cp "out/lunima-agent-loop${{ matrix.ext }}" agent-loop.example.json README.md "dist/$name/"
+          if [[ -n "${{ matrix.msi }}" ]]; then cp control-center/target/release/lunima-po.exe out/ && cp out/lunima-po.exe "dist/$name/"; fi
           cd dist
           if [[ "${{ matrix.ext }}" == ".exe" ]]; then pwsh -NoProfile -Command "Compress-Archive -Path '$name' -DestinationPath '$name.zip'"; else tar czf "$name.tar.gz" "$name"; fi
           rm -rf "$name"

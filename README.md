@@ -115,6 +115,39 @@ Use a release binary (or `dotnet publish -c Release -r linux-x64`), then run `in
 Schedule with a systemd user timer or cron instead of the Windows-only register script, e.g.
 `7 * * * * /opt/lunima-agent-loop/lunima-agent-loop run >> /var/log/agent-loop.log 2>&1`.
 
+## Control Center (tray app)
+
+`lunima-po.exe` (Rust, `control-center/`) shows whether the loop works and what it did — and
+lets you fix it without a terminal. It reads the same folder as the CLI (`agent-loop.json`,
+`state/`, `logs/`, `prompts/`) and drives the loop through the CLI itself.
+
+| Page | What you see / do |
+|---|---|
+| **Übersicht** | Traffic light + headline, today's counters, next scheduled run, **health checks** with one-click fixes, recent runs |
+| **Aktivität** | Every PO pass: issues created, PRs merged, labels, comments (with links), final report, duration, cost |
+| **GitHub** | Newest issues (flags new ones **without** the task label), open PRs (flags wrong base branch) |
+| **Einstellungen** | Form over `agent-loop.json` (unknown keys preserved), schedule on/off, "start with Windows" |
+| **Regeln** | Edit `prompts/owner.md` / `worker.md` (disk overrides the built-in prompts), restore defaults |
+| **Protokolle** | Raw logs incl. the loop's console mirror `logs/loop-<date>.log` (real error behind a failed run) |
+
+Health checks — each one once stopped the loop unnoticed: config/CLI present, `enabled`, pause
+(→ *Fortsetzen*), scheduled task missing/disabled (→ *Einschalten*), last PO pass failed (expired
+Claude login is called out), worker failure streak, **dirty clone** blocking every worker
+(→ *Als WIP sichern*: commits the changes to a local `wip/control-center-*` branch), `gh` login.
+
+The tray icon has the same colour as the traffic light; its menu offers open / pause-resume /
+run PO now / quit. Closing the window keeps the app in the tray.
+
+```powershell
+lunima-po.exe                          # root: cwd → exe folder → %LOCALAPPDATA%\lunima-agent-loop
+lunima-po.exe --root C:\path\to\loop    # explicit loop folder
+lunima-po.exe --tray                   # start hidden (what "start with Windows" uses)
+lunima-po.exe --page activity          # open a page: overview|activity|github|settings|rules|logs
+```
+
+Build: `cargo build --release --manifest-path control-center/Cargo.toml` (tests: `cargo test`).
+Rendering uses wgpu (DirectX 12 on Windows) — Windows-on-ARM GPUs have no OpenGL 2+.
+
 ## Configuration (`agent-loop.json`)
 
 | key | default | meaning |

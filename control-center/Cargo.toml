@@ -1,0 +1,39 @@
+[package]
+name = "lunima-po-center"
+version = "0.1.0"
+edition = "2021"
+description = "Control Center for the Lunima Product-Owner loop: status, health checks, activity, settings and rules — with a tray icon."
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "lunima-po"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.31", default-features = false, features = ["wgpu", "default_fonts", "persistence"] }
+egui_extras = { version = "0.31", default-features = false }
+tray-icon = "0.20"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+regex = { version = "1", default-features = false, features = ["std", "unicode-perl"] }
+raw-window-handle = "0.6"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Threading",
+    "Win32_Security",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+opt-level = "s"
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
