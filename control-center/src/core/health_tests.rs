@@ -12,7 +12,7 @@ fn healthy() -> Snapshot {
     let map = serde_json::json!({"enabled": true, "clonePath": "C:/clone"}).as_object().unwrap().clone();
     s.config = Ok(ConfigDoc { path: PathBuf::from("agent-loop.json"), map, had_comments: false });
     s.task = Some(Ok(TaskInfo { exists: true, state: "Ready".into(), next_run: Some(Local::now() + Duration::minutes(30)), ..Default::default() }));
-    s.clone = Some(Ok(CloneStatus { exists: true, branch_line: "dev...origin/dev".into(), dirty: vec![] }));
+    s.clone = Some(Ok(CloneStatus { exists: true, branch_line: "dev...origin/dev".into(), dirty: vec![], untracked: vec![] }));
     s.gh_auth = Some(Ok(()));
     s.passes = vec![pass_entry(Duration::hours(2), Pass { finished: true, ..Default::default() })];
     s
@@ -60,7 +60,7 @@ fn expired_claude_login_is_an_error_with_hint() {
 #[test]
 fn dirty_clone_and_worker_streak_are_errors() {
     let mut s = healthy();
-    s.clone = Some(Ok(CloneStatus { exists: true, branch_line: "dev".into(), dirty: vec!["a.cs".into(), "b.cs".into()] }));
+    s.clone = Some(Ok(CloneStatus { exists: true, branch_line: "dev".into(), dirty: vec!["a.cs".into(), "b.cs".into()], untracked: vec![] }));
     let failed = RunRecord { kind: "task".into(), exit_code: 1, note: Some("branch setup failed".into()), ..Default::default() };
     s.state = Ok(LoopState { last_runs: vec![failed.clone(), failed.clone(), failed], ..Default::default() });
     let h = evaluate(&s, Local::now());
@@ -68,7 +68,7 @@ fn dirty_clone_and_worker_streak_are_errors() {
     let w = h.checks.iter().find(|c| c.title == "Worker scheitern").unwrap();
     assert!(w.detail.starts_with("3 Läufe in Folge"));
     // once the clone is clean again the streak is history, not an emergency
-    s.clone = Some(Ok(CloneStatus { exists: true, branch_line: "dev".into(), dirty: vec![] }));
+    s.clone = Some(Ok(CloneStatus { exists: true, branch_line: "dev".into(), dirty: vec![], untracked: vec![] }));
     let h2 = evaluate(&s, Local::now());
     assert_eq!(level_of(&h2, "Worker scheiterten"), Some(Level::Warn));
     assert!(w.detail.contains("uncommittete"));
@@ -145,4 +145,14 @@ fn attach_records_matches_each_pass_to_its_own_window() {
     attach_records(&mut passes, &[rec(100, 1), rec(10, 0)]);
     assert_eq!(passes[0].record_exit, Some(0));
     assert_eq!(passes[1].record_exit, Some(1));
+}
+
+#[test]
+fn untracked_tool_files_are_a_hint_not_a_blockade() {
+    // 13.10.: Kimi CLI artefacts (AGENTS.md, .agents/) were reported as "Clone blockiert"
+    let mut s = healthy();
+    s.clone = Some(Ok(CloneStatus { exists: true, branch_line: "dev".into(), dirty: vec![], untracked: vec!["AGENTS.md".into(), ".agents/".into()] }));
+    let h = evaluate(&s, Local::now());
+    assert_eq!(level_of(&h, "Clone: unversionierte Dateien"), Some(Level::Info));
+    assert!(h.checks.iter().all(|c| c.fix != Some(("Als WIP sichern", Fix::RescueWip))));
 }

@@ -170,10 +170,12 @@ fn clone_check(s: &Snapshot) -> Option<Check> {
         // a running pass works in the clone: changes there are expected, never "rescue" them
         Ok(c) if !c.dirty.is_empty() && s.loop_running => check(Level::Info, "Clone in Benutzung", format!("Ein Lauf arbeitet gerade darin ({} geänderte Dateien).", c.dirty.len())),
         Ok(c) if !c.dirty.is_empty() => with_fix(
-            check(Level::Error, "Clone blockiert", format!("{} uncommittete Dateien verhindern jeden Worker-Lauf (z. B. {}).", c.dirty.len(), c.dirty[0])),
+            check(Level::Error, "Clone blockiert", format!("{} geänderte, versionierte Dateien verhindern jeden Branch-Wechsel (z. B. {}).", c.dirty.len(), c.dirty[0])),
             "Als WIP sichern",
             Fix::RescueWip,
         ),
+        // untracked files don't stop `git checkout -B` — just mention them
+        Ok(c) if !c.untracked.is_empty() => check(Level::Info, "Clone: unversionierte Dateien", format!("{} Datei(en), z. B. {} — blockieren nichts.", c.untracked.len(), c.untracked[0])),
         Ok(c) => check(Level::Ok, "Clone", format!("sauber · {}", c.branch_line)),
     })
 }
