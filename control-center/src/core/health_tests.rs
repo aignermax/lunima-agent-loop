@@ -156,3 +156,14 @@ fn untracked_tool_files_are_a_hint_not_a_blockade() {
     assert_eq!(level_of(&h, "Clone: unversionierte Dateien"), Some(Level::Info));
     assert!(h.checks.iter().all(|c| c.fix != Some(("Als WIP sichern", Fix::RescueWip))));
 }
+
+#[test]
+fn colliding_untracked_files_with_branch_setup_failures_are_blocking() {
+    let mut s = healthy();
+    s.clone = Some(Ok(CloneStatus { exists: true, branch_line: "dev".into(), dirty: vec![], untracked: vec!["src/New.cs".into()] }));
+    let failed = RunRecord { kind: "task".into(), exit_code: 1, note: Some("branch setup failed".into()), ..Default::default() };
+    s.state = Ok(LoopState { last_runs: vec![failed.clone(), failed], ..Default::default() });
+    let h = evaluate(&s, Local::now());
+    assert_eq!(level_of(&h, "Clone blockiert"), Some(Level::Error));
+    assert_eq!(level_of(&h, "Worker scheitern"), Some(Level::Error), "not 'clone is clean now'");
+}
