@@ -1,8 +1,13 @@
-<!-- Per-machine install of the single NativeAOT exe into Program Files, added to the system PATH.
-     Config, state and logs are NOT installed: the exe keeps them in %LOCALAPPDATA%\lunima-agent-loop
-     (created by the first 'lunima-agent-loop init'), so upgrades and uninstalls never touch them. -->
+<!-- Per-machine install of the Lunima Team binaries into Program Files\Lunima Team (on the system PATH):
+       lunima-team-agent.exe — the agent daemon (coder, QA, PR feedback, product owner)
+       lunima-po.exe         — the Lunima Team Control Center (tray app, Start-menu entry)
+     Config, state and logs are NOT installed: they live in %LOCALAPPDATA%\lunima-team (created by
+     `lunima-team-agent init` / the Control Center's setup assistant), so upgrades and uninstalls never
+     touch them. The agent's autostart (scheduled task LunimaTeamAgent) and the Control Center's
+     "start with Windows" are per-user toggles inside the Control Center, not part of the MSI.
+     The UpgradeCode is the one of the former "Lunima Agent Loop" MSI, so old installs are upgraded. -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
-  <Package Name="Lunima Agent Loop"
+  <Package Name="Lunima Team"
            Manufacturer="Lunima"
            Version="$(AgentVersion)"
            UpgradeCode="{5B151487-3B93-4F4E-A46C-3C0B2D0549AE}"
@@ -11,15 +16,14 @@
     <MediaTemplate EmbedCab="yes" />
 
     <StandardDirectory Id="ProgramFiles6432Folder">
-      <Directory Id="INSTALLFOLDER" Name="Lunima Agent Loop">
-        <Component Id="AgentExe">
-          <File Source="$(AgentBinDir)lunima-team-agent.exe" KeyPath="yes" />
+      <Directory Id="INSTALLFOLDER" Name="Lunima Team">
+        <Component Id="TeamAgentExe">
+          <File Id="TeamAgent" Source="$(AgentBinDir)lunima-team-agent.exe" KeyPath="yes" />
           <Environment Id="AddToPath" Name="PATH" Value="[INSTALLFOLDER]"
                        Part="last" Action="set" System="yes" Permanent="no" />
         </Component>
         <Component Id="ControlCenterExe">
           <File Id="ControlCenter" Source="$(AgentBinDir)lunima-po.exe" KeyPath="yes">
-            <!-- Start menu entry; "Start with Windows" is a per-user toggle inside the app. -->
             <Shortcut Id="ControlCenterStartMenu" Directory="ProgramMenuFolder" Name="Lunima Team Control Center"
                       Description="Status, Steuerung und Einstellungen des Lunima-Agenten-Teams"
                       WorkingDirectory="INSTALLFOLDER" Advertise="yes" />

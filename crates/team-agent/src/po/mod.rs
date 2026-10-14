@@ -70,7 +70,7 @@ impl Role for ProductOwner {
         }
         let key = schedule::slot_key(interval, slot);
         self.settled_slot = Some(slot);
-        if !forge.try_lock(&key)? {
+        if !forge.try_lock(&key, &ctx.machine)? {
             st.result("skipped", "Durchlauf dieses Intervalls lief auf einem anderen Rechner", Some(next));
             st.save(&state_dir);
             return Ok(false);

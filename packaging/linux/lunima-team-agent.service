@@ -1,0 +1,14 @@
+[Unit]
+Description=Lunima team agent (coder, QA, PR feedback, product owner)
+Documentation=https://github.com/aignermax/lunima-agent-loop
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/lunima-team-agent run
+Restart=on-failure
+RestartSec=60
+
+[Install]
+WantedBy=default.target

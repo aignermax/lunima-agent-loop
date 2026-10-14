@@ -1,8 +1,9 @@
-# Builds the team agent (lunima-team-agent, Rust) for every platform.
-#   Windows targets additionally get the Control Center (control-center/, Rust tray app) and an MSI
-#   (installer/, WiX) that installs both to Program Files + PATH + Start menu.
-#   push a tag `v*` (e.g. `git tag v0.2.0 && git push origin v0.2.0`) → GitHub release with all binaries
-#   PR / manual run (Actions → Release → Run workflow)               → binaries as workflow artifacts only
+# Builds Lunima Team for every platform:
+#   Windows (x64, arm64): lunima-team-agent.exe + lunima-po.exe (Control Center) → zip + MSI (installer/, WiX)
+#   Linux (x64, arm64):   lunima-team-agent + lunima-po → tar.gz (install.sh, systemd user unit) + .deb (cargo-deb)
+#   macOS (arm64):        lunima-team-agent only → tar.gz (no Control Center build there)
+#   push a tag `v*` (e.g. `git tag v0.5.0 && git push origin v0.5.0`) → GitHub release with all assets
+#   PR / manual run (Actions → Release → Run workflow)               → assets as workflow artifacts only
 name: Release
 
 on:
@@ -20,19 +21,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { rid: win-x64,     os: windows-latest,   ext: .exe, msi: x64 }
-          - { rid: win-arm64,   os: windows-11-arm,   ext: .exe, msi: arm64 }
-          - { rid: linux-x64,   os: ubuntu-latest,    ext: '' }
-          - { rid: linux-arm64, os: ubuntu-24.04-arm, ext: '' }
-          - { rid: osx-arm64,   os: macos-latest,     ext: '' }
+          - { rid: win-x64,     os: windows-latest,   kind: windows, msi: x64 }
+          - { rid: win-arm64,   os: windows-11-arm,   kind: windows, msi: arm64 }
+          - { rid: linux-x64,   os: ubuntu-latest,    kind: linux }
+          - { rid: linux-arm64, os: ubuntu-24.04-arm, kind: linux }
+          - { rid: osx-arm64,   os: macos-latest,     kind: mac }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: actions/setup-dotnet@v4   # WiX (MSI) only
-        if: matrix.msi
-        with:
-          dotnet-version: '10.0.x'
 
       - name: Version from tag
         shell: bash
@@ -43,38 +39,80 @@ jobs:
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Test + build team agent (all platforms)
-        shell: bash
+      - name: Linux libraries for the Control Center (GTK tray, eframe)
+        if: matrix.kind == 'linux'
         run: |
-          cargo test -p team-core -p team-agent --locked
-          cargo build -p team-agent --release --locked
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libgtk-3-dev libxdo-dev libayatana-appindicator3-dev
 
-      - name: Test + build Control Center (Windows)
-        if: matrix.msi
+      - name: Test
         shell: bash
         run: |
-          cargo test -p lunima-po-center --locked
-          cargo build -p lunima-po-center --release --locked
+          if [[ "${{ matrix.kind }}" == mac ]]; then
+            cargo test -p team-core -p team-agent --locked
+          else
+            cargo test --workspace --locked
+          fi
 
-      - name: Package
+      - name: Build release binaries
         shell: bash
         run: |
-          name="lunima-agent-loop-${VERSION}-${{ matrix.rid }}"
-          mkdir -p "dist/$name" out
-          cp README.md "dist/$name/"
-          cp "target/release/lunima-team-agent${{ matrix.ext }}" "dist/$name/"
-          cp "target/release/lunima-team-agent${{ matrix.ext }}" out/
-          if [[ -n "${{ matrix.msi }}" ]]; then cp target/release/lunima-po.exe out/ && cp out/lunima-po.exe "dist/$name/"; fi
+          if [[ "${{ matrix.kind }}" == mac ]]; then
+            cargo build --release --locked -p team-agent
+          else
+            cargo build --release --locked -p team-agent -p lunima-po-center
+          fi
+
+      - name: Package (Windows zip)
+        if: matrix.kind == 'windows'
+        shell: bash
+        run: |
+          name="lunima-team-${VERSION}-${{ matrix.rid }}"
+          mkdir -p "dist/$name"
+          cp target/release/lunima-team-agent.exe target/release/lunima-po.exe README.md "dist/$name/"
           cd dist
-          if [[ "${{ matrix.ext }}" == ".exe" ]]; then pwsh -NoProfile -Command "Compress-Archive -Path '$name' -DestinationPath '$name.zip'"; else tar czf "$name.tar.gz" "$name"; fi
+          pwsh -NoProfile -Command "Compress-Archive -Path '$name' -DestinationPath '$name.zip'"
           rm -rf "$name"
 
+      # WiX v5 builds through the .NET SDK (installer tooling only — no .NET code is shipped)
+      - uses: actions/setup-dotnet@v4
+        if: matrix.kind == 'windows'
+        with:
+          dotnet-version: '10.0.x'
+
       - name: Build MSI
-        if: matrix.msi
+        if: matrix.kind == 'windows'
         shell: bash
         run: |
-          dotnet build installer/lunima-agent-loop.wixproj -c Release --nologo -p:InstallerPlatform=${{ matrix.msi }} -p:AgentVersion="${VERSION%%-*}" -p:AgentLabel="$VERSION"
+          dotnet build installer/lunima-team.wixproj -c Release --nologo -p:InstallerPlatform=${{ matrix.msi }} -p:AgentVersion="${VERSION%%-*}" -p:AgentLabel="$VERSION"
           cp installer/bin/Release/*.msi dist/
+
+      - name: Package (Linux tar.gz)
+        if: matrix.kind == 'linux'
+        run: sh packaging/linux/make-tarball.sh "$VERSION" "${{ matrix.rid }}"
+
+      - name: Install cargo-deb
+        if: matrix.kind == 'linux'
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deb
+
+      - name: Package (Debian)
+        if: matrix.kind == 'linux'
+        run: |
+          cargo deb -p lunima-po-center --no-build --deb-version "$VERSION" --output dist/
+          dpkg-deb --info dist/*.deb
+          dpkg-deb --contents dist/*.deb
+
+      - name: Package (macOS tar.gz)
+        if: matrix.kind == 'mac'
+        shell: bash
+        run: |
+          name="lunima-team-agent-${VERSION}-${{ matrix.rid }}"
+          mkdir -p "dist/$name"
+          cp target/release/lunima-team-agent README.md "dist/$name/"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -rf "dist/$name"
 
       - uses: actions/upload-artifact@v4
         with:

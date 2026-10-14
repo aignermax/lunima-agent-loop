@@ -29,6 +29,72 @@ Configuration is a single `team.toml` in the data folder (`%LOCALAPPDATA%\lunima
 role is switched on with `[roles] product_owner = true`. Pauses are set per role in the Control
 Center (`state/control.json`).
 
+## Installation
+
+Every `v*` tag publishes [release](https://github.com/aignermax/lunima-agent-loop/releases)
+assets for Windows (x64, arm64) and Linux (x64, arm64); macOS gets the agent binary only.
+Two programs are installed:
+
+- `lunima-team-agent` — the agent daemon (coder, QA, PR feedback, product owner) that runs
+  in the background as you, using your Claude subscription and your `gh` login;
+- `lunima-po` — the **Lunima Team Control Center** (status, pause/resume, settings, tray icon).
+
+Configuration, state and logs live in the data folder (`%LOCALAPPDATA%\lunima-team` on
+Windows, `~/.local/share/lunima-team` on Linux) and are never touched by upgrades or uninstall.
+
+**Prerequisites** (on every machine that runs the agent): `git`; the GitHub CLI `gh`, logged in
+(`gh auth login`); the Claude Code CLI `claude`, logged in with your subscription (no API key
+needed); optionally the .NET SDK if the agent should build and test Lunima.
+
+### Windows
+
+1. Install `lunima-team-<version>-win-x64.msi` (or `-arm64.msi`). It puts both programs into
+   `C:\Program Files\Lunima Team` (on the PATH) and adds the Start-menu entry
+   *Lunima Team Control Center*. An older *Lunima Agent Loop* install is upgraded in place.
+2. Open the Control Center. Its setup assistant checks git / gh / claude and their logins,
+   imports an existing configuration (`.env` of the Python issue agent, `agent-loop.json` of
+   the old PO loop) into `team.toml`, and enables the agent's autostart (scheduled task
+   `LunimaTeamAgent`, runs at logon as you) and, if you like, the Control Center's own.
+
+Without the UI: `lunima-team-agent init`, then `lunima-team-agent status`, then
+`lunima-team-agent run` (or `once coder|qa|pr-feedback` for a single cycle).
+
+### Linux
+
+Debian/Ubuntu:
+
+```sh
+sudo apt install ./lunima-team_<version>-1_amd64.deb    # or _arm64.deb
+lunima-team-agent init                                  # writes ~/.local/share/lunima-team/team.toml
+systemctl --user enable --now lunima-team-agent         # agent in the background (user unit)
+lunima-po                                               # Control Center
+```
+
+Other distributions: unpack `lunima-team-<version>-linux-x64.tar.gz` and run `./install.sh`
+(installs into `~/.local`, user unit into `~/.config/systemd/user`; `sudo ./install.sh --system`
+for `/usr/local`; `./install.sh --uninstall` removes it again), then the same three commands.
+To keep the agent running while you are logged out: `loginctl enable-linger $USER`.
+
+The Control Center's tray icon needs a desktop with StatusNotifier/AppIndicator support
+(GNOME: the *AppIndicator* extension).
+
+### Cutting a release
+
+`git tag v0.5.0 && git push origin v0.5.0` — CI (`.github/workflows/release.yml`) tests the
+workspace on every platform and attaches the MSIs, zips, `.deb`s and tarballs to the release.
+
+## Building locally
+
+```sh
+cargo test --workspace
+cargo build --release -p team-agent -p lunima-po-center
+```
+
+Linux needs `pkg-config libgtk-3-dev libxdo-dev libayatana-appindicator3-dev` for the Control
+Center. Packages: `dotnet build installer/lunima-team.wixproj -c Release -p:InstallerPlatform=x64`
+(Windows, WiX via the .NET SDK), `sh packaging/linux/make-tarball.sh <version> linux-x64` and
+`cargo deb -p lunima-po-center --no-build` (Linux, `cargo install cargo-deb`).
+
 ## Control Center (tray app)
 
 `lunima-po.exe` (Rust, `control-center/`) shows whether the loop works and what it did — and
