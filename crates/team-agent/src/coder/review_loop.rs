@@ -75,6 +75,9 @@ fn retry(ctx: &Ctx, setup: &RepoSetup, issue: &Issue, state: &mut SessionState, 
     let out = ctx.llm.run(&job)?;
     state.add_session(out.num_turns, out.usage.total(), out.estimated_cost());
     commit_and_push(wt, &state.branch_name, &format!("Address review feedback (round {})", round + 1))?;
+    for label in [&ctx.cfg.labels.qa_passed, &ctx.cfg.labels.qa_failed] {
+        let _ = setup.forge.remove_label(pr.number, label);
+    }
     let md = walkthrough::publish(wt, &setup.repo, &state.branch_name, issue.number);
     if let Ok(fresh) = setup.forge.pr(pr.number) {
         finish::attach(setup.forge.as_ref(), &fresh, &md);

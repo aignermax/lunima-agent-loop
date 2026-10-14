@@ -86,7 +86,7 @@ impl PrFeedback {
         let max_rounds = ctx.cfg.budgets.pr_feedback_max_rounds;
         if thread.rounds() >= max_rounds as usize {
             if !thread.cap_notified {
-                self.notify_cap(forge, pr.number, max_rounds)?;
+                self.notify_cap(forge, pr.number, max_rounds, &ctx.machine)?;
             }
             return Ok(None);
         }
@@ -97,9 +97,9 @@ impl PrFeedback {
         handle::run(self, ctx, forge, repo, pr, &trigger).map(Some)
     }
 
-    fn notify_cap(&mut self, forge: &dyn Forge, number: u64, max_rounds: u32) -> RoleResult {
+    fn notify_cap(&mut self, forge: &dyn Forge, number: u64, max_rounds: u32, machine: &str) -> RoleResult {
         self.locks
-            .with(forge, &format!("fb-pr-{number}"), || {
+            .with(forge, &format!("fb-pr-{number}"), machine, || {
                 let thread = Thread::parse(&forge.comments(number)?);
                 if thread.cap_notified {
                     return Ok(Claimed::No);

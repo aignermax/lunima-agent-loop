@@ -6,6 +6,7 @@ use crate::ctx::{Ctx, RoleResult};
 use crate::forge::{Forge, PR_TITLE_PREFIX};
 use crate::pr_text::{self, Stats};
 use crate::session::{SessionState, Store};
+use crate::qa::claims;
 use crate::walkthrough;
 use crate::workspace::RepoSetup;
 use std::path::Path;
@@ -28,14 +29,23 @@ pub fn finish(ctx: &Ctx, setup: &RepoSetup, store: &Store, issue: &Issue, state:
     state.in_review = true;
     state.pr_url = Some(pr.html_url.clone());
     store.save(state);
+    // QA and QA fix keep away while the coder still changes the head
+    claims::add_to(&ctx.paths.state(), claims::CODER_FILE, &setup.repo, pr.number);
+    let _ = forge.add_labels(pr.number, &[&ctx.cfg.labels.running]);
     let escalated = review_loop::run(ctx, setup, issue, state, wt, &pr)?;
+    let _ = forge.remove_label(pr.number, &ctx.cfg.labels.running);
+    claims::remove_from(&ctx.paths.state(), claims::CODER_FILE, &setup.repo, pr.number);
     if escalated {
         pickup::release(ctx, forge, n, Release::Human);
     } else {
-        forge.comment(n, &format!("Implementation complete. PR: {}", pr.html_url))?;
-        forge.close_issue(n)?;
+        // the PR is done; a failing comment/close must not send the issue back to coding
+        let closed = forge.comment(n, &format!("Implementation complete. PR: {}", pr.html_url)).and_then(|_| forge.close_issue(n));
+        if let Err(e) = closed {
+            crate::log::warn(&format!("#{n} nicht geschlossen ({e}) — der PR ist trotzdem fertig"));
+        }
         pickup::release(ctx, forge, n, Release::Done);
     }
+    remove_worktree(setup, wt);
     state.completed = true;
     state.note(&format!("PR created: {}", pr.html_url));
     history(ctx, issue, state, true, Some(pr.html_url.clone()));
@@ -64,6 +74,7 @@ fn no_changes(ctx: &Ctx, setup: &RepoSetup, store: &Store, issue: &Issue, state:
         crate::log::warn(&format!("#{n} nicht geschlossen: {e}"));
     }
     pickup::release(ctx, forge, n, Release::Done);
+    remove_worktree(setup, &ctx.paths.worktree(&setup.repo, &state.branch_name));
     state.completed = true;
     state.note("No changes needed — closed");
     history(ctx, issue, state, true, None);
@@ -93,6 +104,13 @@ fn find_or_create_pr(ctx: &Ctx, setup: &RepoSetup, issue: &Issue, state: &Sessio
         }
     }
     Ok(pr)
+}
+
+/// The branch lives on origin; the local checkout (with its build output) can go.
+pub fn remove_worktree(setup: &RepoSetup, wt: &Path) {
+    if let Err(e) = setup.clone.remove_worktree(wt) {
+        crate::log::warn(&format!("Worktree {} nicht entfernt: {e}", wt.display()));
+    }
 }
 
 /// Puts a (new) walkthrough into an existing PR's body.

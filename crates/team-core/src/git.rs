@@ -100,6 +100,7 @@ impl RepoClone {
     /// An existing worktree is reused **as is** (uncommitted work of a previous session stays).
     pub fn worktree(&self, path: &Path, branch: &str, base: &str) -> Result<PathBuf, String> {
         if path.join(".git").exists() {
+            self.refresh_worktree(path, branch)?;
             return Ok(path.to_path_buf());
         }
         if let Some(parent) = path.parent() {
@@ -120,6 +121,22 @@ impl RepoClone {
             self.git(&["worktree", "add", "-b", branch, &p, &format!("origin/{base}")])?;
         }
         Ok(path.to_path_buf())
+    }
+
+    /// A reused worktree that is strictly behind `origin/<branch>` (another machine pushed
+    /// since) is moved to origin; its leftovers are stale. Ahead/diverged stays untouched.
+    fn refresh_worktree(&self, path: &Path, branch: &str) -> Result<(), String> {
+        if !self.remote_branch_exists(branch) {
+            return Ok(());
+        }
+        let g = |a: &[&str]| run_git(Some(path), a, false);
+        let head = g(&["rev-parse", "HEAD"])?;
+        let remote = g(&["rev-parse", &format!("origin/{branch}")])?;
+        if head.trim() == remote.trim() || g(&["merge-base", "--is-ancestor", "HEAD", &format!("origin/{branch}")]).is_err() {
+            return Ok(());
+        }
+        g(&["reset", "-q", "--hard", &format!("origin/{branch}")])?;
+        g(&["clean", "-fdq"]).map(|_| ())
     }
 
     /// Removes a worktree (Windows: clears read-only files git leaves under .git/objects).

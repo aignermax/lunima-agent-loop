@@ -21,7 +21,9 @@ pub trait Forge: Send + Sync {
     fn create_pr(&self, title: &str, body: &str, head: &str, base: &str) -> Result<PullRequest, String>;
     fn edit_pr_body(&self, number: u64, body: &str) -> Result<(), String>;
     /// atomic cross-machine lock (`refs/team-locks/<key>`); false = held by someone else
-    fn try_lock(&self, key: &str) -> Result<bool, String>;
+    fn try_lock(&self, key: &str, owner: &str) -> Result<bool, String>;
+    /// owner + creation time of a held lock (None = free)
+    fn lock_info(&self, key: &str) -> Result<Option<gh::LockInfo>, String>;
     fn unlock(&self, key: &str) -> Result<(), String>;
 }
 
@@ -74,8 +76,11 @@ impl Forge for gh::Repo {
     fn edit_pr_body(&self, number: u64, body: &str) -> Result<(), String> {
         gh::Repo::edit_pr_body(self, number, body)
     }
-    fn try_lock(&self, key: &str) -> Result<bool, String> {
-        gh::Repo::try_lock(self, key)
+    fn try_lock(&self, key: &str, owner: &str) -> Result<bool, String> {
+        gh::Repo::try_lock(self, key, owner)
+    }
+    fn lock_info(&self, key: &str) -> Result<Option<gh::LockInfo>, String> {
+        gh::Repo::lock_info(self, key)
     }
     fn unlock(&self, key: &str) -> Result<(), String> {
         gh::Repo::unlock(self, key)

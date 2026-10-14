@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::fake::{self, FakeForge, FakeLlm};
+use crate::forge::Forge;
 use crate::llm::LlmError;
 use std::sync::Arc;
 use team_core::claude::Outcome;
@@ -198,4 +199,73 @@ fn second_machine_finds_nothing_to_claim() {
     let mut other = w.ctx.clone();
     other.machine = "OTHERBOX".into();
     assert!(!coder().cycle(&other).unwrap(), "issue is claimed by TESTBOX");
+}
+
+#[test]
+fn pr_is_marked_running_during_review_and_worktree_is_removed() {
+    let w = world(FakeForge::new("o/r").with_issue(task(30, "x", &[])), FakeLlm::new().reply(SUMMARY, Some("f.txt")).reply(REVIEW_OK, None));
+    assert!(coder().cycle(&w.ctx).unwrap());
+    let pr = the_pr(&w);
+    let log = w.forge.log();
+    let on = log.iter().position(|l| *l == format!("label+ {} agent-running", pr.number)).expect("PR marked running");
+    let off = log.iter().position(|l| *l == format!("label- {} agent-running", pr.number)).expect("PR released");
+    assert!(on < off);
+    assert!(!w.ctx.paths.worktree("o/r", &pr.head.name).exists());
+}
+
+#[test]
+fn own_claim_without_session_is_resumed() {
+    let w = world(FakeForge::new("o/r").with_issue(fake::issue(31, "t", "x", &["agent-running"])), FakeLlm::new().reply(SUMMARY, Some("f.txt")).reply(REVIEW_OK, None));
+    w.forge.add_comment(31, "<!-- team-agent:claim machine=TESTBOX -->\n🤖 Agent `TESTBOX` is now working on this issue...");
+    assert!(coder().cycle(&w.ctx).unwrap());
+    assert!(w.forge.log().contains(&"close 31".to_string()));
+}
+
+#[test]
+fn silent_foreign_claim_is_requeued_after_a_day() {
+    let w = world(FakeForge::new("o/r").with_issue(fake::issue(32, "t", "x", &["agent-running"])), FakeLlm::new().reply("x", None));
+    let id = w.forge.add_comment(32, "<!-- team-agent:claim machine=GONE -->\n🤖 Agent `GONE` is now working on this issue...");
+    assert!(!coder().cycle(&w.ctx).unwrap(), "fresh foreign claim is respected");
+    assert!(w.forge.labels(32).contains(&"agent-running".to_string()));
+    w.forge.set_comment_time(32, id, "2020-01-01T00:00:00Z");
+    coder().cycle(&w.ctx).unwrap();
+    assert!(w.forge.comment_bodies(32).iter().any(|c| c.contains("silent for over 24 hours")));
+    assert!(w.forge.log().contains(&"label+ 32 agent-task".to_string()), "back into the queue");
+    assert!(w.forge.comment_bodies(32).iter().any(|c| c.contains("machine=TESTBOX")), "and taken over by this machine");
+}
+
+#[test]
+fn session_cap_hands_over_and_requeue_starts_fresh() {
+    let mut w = world(FakeForge::new("o/r").with_issue(task(33, "x", &[])), FakeLlm::new().then(max_turns("a.txt")));
+    w.ctx.cfg.budgets.max_sessions = 2;
+    assert!(coder().cycle(&w.ctx).unwrap());
+    assert!(w.forge.labels(33).contains(&"needs-human".to_string()));
+    assert!(w.forge.comment_bodies(33).last().unwrap().contains("Handing this issue to a human"));
+    assert!(!w.forge.comment_bodies(33).iter().any(|c| c.contains("Attempt")), "not a failed attempt");
+    // a human re-queues it
+    w.forge.remove_label(33, "needs-human").unwrap();
+    w.forge.add_labels(33, &["agent-task"]).unwrap();
+    coder().cycle(&w.ctx).unwrap();
+    assert_eq!(w.llm.calls(), 4, "two fresh sessions after the re-queue");
+}
+
+#[test]
+fn failure_after_the_pr_exists_goes_to_a_human() {
+    let llm = FakeLlm::new().reply(SUMMARY, Some("f.txt")).reply(REVIEW_BLOCKING, None).then(|_| Err(LlmError::Failed("crash".into())));
+    let w = world(FakeForge::new("o/r").with_issue(task(34, "x", &["complex"])), llm);
+    assert!(coder().cycle(&w.ctx).unwrap());
+    let labels = w.forge.labels(34);
+    assert!(labels.contains(&"needs-human".to_string()) && !labels.contains(&"agent-task".to_string()));
+    assert!(!w.forge.labels(the_pr(&w).number).contains(&"agent-running".to_string()));
+}
+
+#[test]
+fn human_pr_mentioning_the_issue_is_not_adopted() {
+    let mut human = fake::pr(40, "Refactor X", "feature/human", &[]);
+    human.body = Some("see also #35".into());
+    let w = world(FakeForge::new("o/r").with_issue(task(35, "x", &[])).with_pr(human), FakeLlm::new().reply(SUMMARY, Some("f.txt")).reply(REVIEW_OK, None));
+    assert!(coder().cycle(&w.ctx).unwrap());
+    let prs = w.forge.s.lock().unwrap().prs.clone();
+    assert!(prs.values().any(|p| p.head.name.starts_with("agent/issue-35-")));
+    assert!(fake::pushed_file(&w.origin, "feature/human", "f.txt").is_none());
 }

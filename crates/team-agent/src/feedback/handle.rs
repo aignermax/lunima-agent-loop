@@ -38,7 +38,7 @@ pub(super) fn run(role: &mut PrFeedback, ctx: &Ctx, forge: &dyn Forge, repo: &st
     let setup = workspace::setup(ctx, ROLE, repo)?;
     let policy = load_policy(&setup);
     let id = trigger.id;
-    let decision = role.locks.with(forge, &format!("fb-pr-{}", pr.number), || {
+    let decision = role.locks.with(forge, &format!("fb-pr-{}", pr.number), &ctx.machine, || {
         let (_, th) = fresh_thread(forge, pr.number)?;
         if th.done.contains(&id) || th.live_claim(id, Utc::now()) {
             return Ok(Claimed::No);

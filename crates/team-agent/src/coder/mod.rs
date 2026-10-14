@@ -72,7 +72,7 @@ impl Coder {
         let run = IssueRun { ctx, setup, store: &store };
         if let Some((issue, state)) = resumable(ctx, setup, &store) {
             crate::log::info(&format!("Setze {}#{} fort", setup.repo, issue.number));
-            run.run(issue, Some(state))?;
+            run.run(issue, state)?;
             return Ok(true);
         }
         if let Err(e) = team_core::provider::choose(&ctx.cfg, &setup.repo, &[]) {
@@ -85,7 +85,9 @@ impl Coder {
         let has_state = |n: u64| store.load(&setup.repo, n).is_some();
         let Some(issue) = pickup::claim_next(ctx, setup.forge.as_ref(), &mut self.locks, &has_state)? else { return Ok(false) };
         let state = store.load(&setup.repo, issue.number).map(|mut s| {
-            s.attempts = 0; // re-queued by a human: fresh attempts
+            if s.handed_to_human {
+                s.restart_after_human();
+            }
             s
         });
         run.run(issue, state)?;
@@ -95,7 +97,7 @@ impl Coder {
 
 /// An unfinished session of this machine whose issue is still claimed (open + running).
 /// Sessions of issues that were closed or taken over are dropped.
-fn resumable(ctx: &Ctx, setup: &RepoSetup, store: &Store) -> Option<(team_core::gh::Issue, crate::session::SessionState)> {
+fn resumable(ctx: &Ctx, setup: &RepoSetup, store: &Store) -> Option<(team_core::gh::Issue, Option<crate::session::SessionState>)> {
     for state in store.open_in(&setup.repo) {
         let Ok(issue) = setup.forge.issue(state.issue_number) else { continue };
         if issue.state != "open" {
@@ -104,15 +106,22 @@ fn resumable(ctx: &Ctx, setup: &RepoSetup, store: &Store) -> Option<(team_core::
         }
         // still ours: running, and no other machine claimed it after a re-queue
         if issue.has_label(&ctx.cfg.labels.running) && pickup::claimed_by(setup.forge.as_ref(), issue.number).is_none_or(|m| m == ctx.machine) {
-            return Some((issue, state));
+            return Some((issue, Some(state)));
         }
     }
-    None
+    // own claims whose session file is missing (crash right after claiming)
+    let has_state = |n: u64| store.load(&setup.repo, n).is_some();
+    pickup::running_claims(ctx, setup.forge.as_ref(), &has_state).into_iter().next().map(|i| (i, None))
 }
 
 impl Role for Coder {
     fn name(&self) -> &'static str {
         "coder"
+    }
+
+    /// PRs this machine marked `agent-running` before a crash are released.
+    fn recover(&mut self, ctx: &Ctx) {
+        crate::qa::claims::recover_file(ctx, crate::qa::claims::CODER_FILE, &ctx.cfg.labels.running);
     }
 
     fn cycle(&mut self, ctx: &Ctx) -> RoleResult<bool> {

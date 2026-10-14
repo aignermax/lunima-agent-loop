@@ -2,7 +2,7 @@
 
 use crate::forge::Forge;
 use crate::llm::{Job, Llm, LlmError};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Mutex;
 use team_core::claude::Outcome;
@@ -13,7 +13,8 @@ pub struct Store {
     pub issues: BTreeMap<u64, Issue>,
     pub prs: BTreeMap<u64, PullRequest>,
     pub comments: BTreeMap<u64, Vec<Comment>>,
-    pub locks: BTreeSet<String>,
+    /// key → (owner, created)
+    pub locks: BTreeMap<String, (String, chrono::DateTime<chrono::Utc>)>,
     /// every mutating call, e.g. "label+ 7 agent-running"
     pub log: Vec<String>,
     next_id: u64,
@@ -77,6 +78,12 @@ impl FakeForge {
         let mut s = self.s.lock().unwrap();
         if let Some(c) = s.comments.get_mut(&number).and_then(|l| l.iter_mut().find(|c| c.id == id)) {
             c.created_at = created_at.into();
+        }
+    }
+    /// Makes a held lock look `by` older (stale-lock tests).
+    pub fn age_lock(&self, key: &str, by: std::time::Duration) {
+        if let Some(l) = self.s.lock().unwrap().locks.get_mut(key) {
+            l.1 -= chrono::Duration::from_std(by).unwrap();
         }
     }
     pub fn log(&self) -> Vec<String> {
@@ -191,10 +198,17 @@ impl Forge for FakeForge {
         }
         Ok(())
     }
-    fn try_lock(&self, key: &str) -> Result<bool, String> {
+    fn try_lock(&self, key: &str, owner: &str) -> Result<bool, String> {
         let mut s = self.s.lock().unwrap();
         s.log.push(format!("lock {key}"));
-        Ok(s.locks.insert(key.into()))
+        if s.locks.contains_key(key) {
+            return Ok(false);
+        }
+        s.locks.insert(key.into(), (owner.into(), chrono::Utc::now()));
+        Ok(true)
+    }
+    fn lock_info(&self, key: &str) -> Result<Option<team_core::gh::LockInfo>, String> {
+        Ok(self.s.lock().unwrap().locks.get(key).map(|(owner, created)| team_core::gh::LockInfo { owner: owner.clone(), created: *created }))
     }
     fn unlock(&self, key: &str) -> Result<(), String> {
         let mut s = self.s.lock().unwrap();

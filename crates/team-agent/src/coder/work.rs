@@ -36,6 +36,11 @@ impl IssueRun<'_> {
         let n = issue.number;
         let branch = pickup::branch_for(setup.forge.as_ref(), &setup.clone, &issue, state.as_ref());
         let mut state = state.unwrap_or_else(|| SessionState::new(&setup.repo, n, &branch));
+        state.branch_name = branch.clone();
+        if !state.in_review && matches!(pickup::agent_pr(setup.forge.as_ref(), n), Ok(Some(_))) {
+            // the PR exists already (e.g. made by the other machine): continue with the review
+            state.in_review = true;
+        }
         self.store.save(&state);
         ctx.heartbeat.report("working", detail!["repo" => setup.repo, "issue" => n, "title" => issue.title]);
         crate::log::info(&format!("{}#{n} „{}“ auf {branch}", setup.repo, issue.title));
@@ -49,6 +54,10 @@ impl IssueRun<'_> {
                 Flow::Continue => {}
                 Flow::Stop => return Ok(()),
                 Flow::Fail(e) => return self.fail(&issue, &mut state, &e),
+                Flow::Human(reason) => {
+                    self.hand_over(&issue, &mut state, &reason);
+                    return Ok(());
+                }
             }
         }
         match finish::finish(ctx, setup, self.store, &issue, &mut state, &worktree, &base) {
@@ -117,7 +126,7 @@ impl IssueRun<'_> {
                 return Ok(Flow::Stop);
             }
             if state.session_count >= b.max_sessions {
-                return Ok(Flow::Fail(format!("{} sessions without finishing", state.session_count)));
+                return Ok(Flow::Human(format!("{} Claude sessions did not finish this issue", state.session_count)));
             }
             let labels = crate::forge::label_names(&current.labels);
             let choice = match team_core::provider::choose(&ctx.cfg, &setup.repo, &labels) {
@@ -166,8 +175,28 @@ impl IssueRun<'_> {
         let body = format!("⚠️ **Token budget exceeded**\n\nThis issue has consumed {} tokens (limit: {}).\n\nCost so far: ${:.2}\n\nThe agent is stopping to prevent excessive costs. Please review the issue complexity or increase the budget limit if needed.", thousands(state.total_tokens), thousands(limit), state.total_cost_usd);
         let _ = self.setup.forge.comment(n, &body);
         state.note(&format!("Stopped: Token budget exceeded ({} tokens)", thousands(state.total_tokens)));
+        state.handed_to_human = true;
         self.store.save(state);
         pickup::release(self.ctx, self.setup.forge.as_ref(), n, Release::Human);
+    }
+
+    /// Not an error but nothing more the agent can do: a human takes over.
+    fn hand_over(&self, issue: &Issue, state: &mut SessionState, reason: &str) {
+        let n = issue.number;
+        let _ = self.setup.forge.comment(n, &format!("{GAVE_UP_MARK}\n🙋 Handing this issue to a human: {reason}. Work so far is on branch `{}`. Re-add the `{}` label (and remove `{}`) to let the agent continue with a fresh budget.", state.branch_name, self.ctx.cfg.labels.task, self.ctx.cfg.labels.needs_human));
+        state.note(&format!("Handed to a human: {reason}"));
+        state.handed_to_human = true;
+        self.store.save(state);
+        self.release_pr(state);
+        pickup::release(self.ctx, self.setup.forge.as_ref(), n, Release::Human);
+    }
+
+    /// Drops `agent-running` from the issue's PR (review / fix ended).
+    fn release_pr(&self, state: &SessionState) {
+        if let Ok(Some(pr)) = self.setup.forge.pr_by_branch(&state.branch_name) {
+            let _ = self.setup.forge.remove_label(pr.number, &self.ctx.cfg.labels.running);
+            crate::qa::claims::remove_from(&self.ctx.paths.state(), crate::qa::claims::CODER_FILE, &self.setup.repo, pr.number);
+        }
     }
 
     /// An attempt failed: re-queue (any machine may retry) or give up after `max_attempts`.
@@ -175,6 +204,11 @@ impl IssueRun<'_> {
         let (ctx, forge) = (self.ctx, self.setup.forge.as_ref());
         let n = issue.number;
         crate::log::error(&format!("{}#{n}: {err}", self.setup.repo));
+        if state.in_review {
+            // the PR exists: re-coding from scratch elsewhere would duplicate it
+            self.hand_over(issue, state, &format!("the review step failed after the PR was opened (`{}`)", err.chars().take(300).collect::<String>()));
+            return Ok(());
+        }
         state.attempts += 1;
         state.note(&format!("Error: {}", err.chars().take(200).collect::<String>()));
         self.store.save(state);
@@ -188,7 +222,7 @@ impl IssueRun<'_> {
         let _ = forge.comment(n, &format!("{FAILED_MARK}\n{GAVE_UP_MARK}\n❌ Agent `{}` failed to complete this issue after {attempts} attempts.\n\nLast error: `{short}`\n\nPlease investigate manually.", ctx.machine));
         finish::history(ctx, issue, state, false, None);
         pickup::release(ctx, forge, n, Release::Human);
-        state.attempts = 0;
+        state.handed_to_human = true;
         self.store.save(state);
         Ok(())
     }
@@ -205,4 +239,6 @@ pub enum Flow {
     Continue,
     Stop,
     Fail(String),
+    /// stop and hand to a human (not counted as a failed attempt)
+    Human(String),
 }

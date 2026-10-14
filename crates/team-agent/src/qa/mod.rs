@@ -39,12 +39,15 @@ pub struct Qa {
 
 enum Outcome {
     Disabled,
+    /// checkout failed (branch deleted, fork …)
+    Unverifiable,
     Verified(bool),
 }
 
 /// PRs QA should look at, oldest first.
 pub fn eligible(prs: &[PullRequest], labels: &Labels) -> Vec<PullRequest> {
-    let blockers = [&labels.qa_passed, &labels.qa_failed, &labels.qa_running, &labels.needs_human];
+    // `agent-running`: the coder is still reviewing/fixing it — its head is about to change
+    let blockers = [&labels.qa_passed, &labels.qa_failed, &labels.qa_running, &labels.needs_human, &labels.running];
     prs.iter().filter(|p| p.title.starts_with(PR_TITLE_PREFIX) && !blockers.iter().any(|l| p.has_label(l))).cloned().collect()
 }
 
@@ -79,7 +82,8 @@ impl Role for Qa {
             }
             let Claimed::Yes(pr) = self.claim(ctx, &setup, &pr)? else { continue };
             match self.verify(ctx, &setup, &pr)? {
-                Outcome::Disabled => {
+                Outcome::Disabled | Outcome::Unverifiable => {
+                    // until its head changes; newer PRs must not starve behind it
                     self.disabled.insert(self.skip_key(&repo, &pr));
                 }
                 Outcome::Verified(passed) => {
@@ -102,7 +106,7 @@ impl Qa {
         let forge: &dyn Forge = &*setup.forge;
         let labels = ctx.cfg.labels.clone();
         let n = pr.number;
-        let claimed = self.locks.with(forge, &format!("qa-pr-{n}"), || {
+        let claimed = self.locks.with(forge, &format!("qa-pr-{n}"), &ctx.machine, || {
             let fresh = forge.pr(n)?;
             if eligible(std::slice::from_ref(&fresh), &labels).is_empty() {
                 return Ok(Claimed::No);
@@ -132,7 +136,8 @@ impl Qa {
         ctx.heartbeat.report("working", team_core::detail!["repo" => setup.repo, "pr" => n, "title" => pr.title]);
         if let Err(e) = setup.clone.reset_to_remote(&pr.head.name) {
             Self::release(ctx, setup, n, None);
-            return Err(RoleError::Failed(format!("PR #{n}: checkout failed: {e}")));
+            crate::log::error(&format!("{} PR #{n}: checkout fehlgeschlagen — übersprungen bis zum nächsten Push: {e}", setup.repo));
+            return Ok(Outcome::Unverifiable);
         }
         let (steps, note, review) = match ProjectConfig::load(&setup.clone.dir) {
             Err(e) => (vec![StepResult::failure(".agent.toml", &e)], None, None),

@@ -26,7 +26,7 @@ pub fn claim_next(ctx: &Ctx, forge: &dyn Forge, locks: &mut Locks, has_state: &d
             continue;
         }
         let n = candidate.number;
-        let claimed = locks.with(forge, &format!("issue-{n}"), || {
+        let claimed = locks.with(forge, &format!("issue-{n}"), &ctx.machine, || {
             let fresh = forge.issue(n)?;
             if !is_free(ctx, &fresh) {
                 return Ok(Claimed::No);
@@ -45,7 +45,11 @@ fn mark_claimed(ctx: &Ctx, forge: &dyn Forge, issue: &Issue, announce: bool) -> 
     let l = &ctx.cfg.labels;
     let n = issue.number;
     forge.add_labels(n, &[&l.running])?;
-    forge.remove_label(n, &l.task)?;
+    if let Err(e) = forge.remove_label(n, &l.task) {
+        // half a claim would pin the issue: undo
+        let _ = forge.remove_label(n, &l.running);
+        return Err(e);
+    }
     if let Err(e) = forge.add_assignee(n, &ctx.login) {
         crate::log::warn(&format!("#{n}: Zuweisung an {} fehlgeschlagen: {e}", ctx.login));
     }
@@ -101,21 +105,15 @@ pub fn release(ctx: &Ctx, forge: &dyn Forge, n: u64, how: Release) {
 }
 
 /// Branch for an issue, the same on every machine: a `branch:` directive, else the branch
-/// of an open PR that references the issue, else the newest `agent/issue-N-*` on origin
-/// (work another machine pushed), else a new one.
+/// of the open agent PR for the issue, else the newest `agent/issue-N-*` on origin (work
+/// another machine pushed), else this machine's earlier branch, else a new one.
 pub fn branch_for(forge: &dyn Forge, clone: &RepoClone, issue: &Issue, state: Option<&SessionState>) -> String {
-    if let Some(s) = state.filter(|s| !s.branch_name.is_empty()) {
-        return s.branch_name.clone();
-    }
     if let Some(b) = directives::work_branch(issue.body.as_deref()) {
         return b;
     }
     let n = issue.number;
-    let mention = Regex::new(&format!(r"#{n}\b")).expect("regex");
-    if let Ok(prs) = forge.open_prs() {
-        if let Some(pr) = prs.iter().find(|p| mention.is_match(&p.title) || mention.is_match(p.body.as_deref().unwrap_or(""))) {
-            return pr.head.name.clone();
-        }
+    if let Ok(Some(pr)) = agent_pr(forge, n) {
+        return pr.head.name;
     }
     let prefix = format!("agent/issue-{n}-");
     let pattern = format!("refs/heads/{prefix}*");
@@ -125,5 +123,44 @@ pub fn branch_for(forge: &dyn Forge, clone: &RepoClone, issue: &Issue, state: Op
             return b.to_string();
         }
     }
+    if let Some(s) = state.filter(|s| !s.branch_name.is_empty()) {
+        return s.branch_name.clone();
+    }
     format!("{prefix}{}", chrono::Utc::now().timestamp())
+}
+
+/// The open agent PR of issue `n` (its body starts with `Automated implementation for #n`);
+/// human PRs that merely mention the issue don't count.
+pub fn agent_pr(forge: &dyn Forge, n: u64) -> Result<Option<team_core::gh::PullRequest>, String> {
+    let head = Regex::new(&format!(r"^Automated implementation for #{n}\b")).expect("regex");
+    Ok(forge.open_prs()?.into_iter().find(|p| p.title.starts_with(crate::forge::PR_TITLE_PREFIX) && head.is_match(p.body.as_deref().unwrap_or(""))))
+}
+
+/// A machine that went silent this long with a claimed issue is presumed gone.
+pub const ABANDONED_AFTER: chrono::Duration = chrono::Duration::hours(24);
+
+/// Running issues: this machine's own claims without a local session (crash right after
+/// claiming) are returned for resumption; claims of other machines that have been silent
+/// for `ABANDONED_AFTER` are put back into the queue.
+pub fn running_claims(ctx: &Ctx, forge: &dyn Forge, has_state: &dyn Fn(u64) -> bool) -> Vec<Issue> {
+    let mut mine = Vec::new();
+    for issue in forge.open_issues(&ctx.cfg.labels.running).unwrap_or_default() {
+        if issue.pull_request.is_some() || has_state(issue.number) {
+            continue;
+        }
+        let comments = forge.comments(issue.number).unwrap_or_default();
+        match claimed_by(forge, issue.number) {
+            Some(m) if m == ctx.machine => mine.push(issue),
+            Some(m) => {
+                let last = comments.iter().filter_map(|c| chrono::DateTime::parse_from_rfc3339(&c.created_at).ok()).max();
+                if last.is_some_and(|t| chrono::Utc::now() - t.with_timezone(&chrono::Utc) > ABANDONED_AFTER) {
+                    crate::log::warn(&format!("#{}: Claim von {m} seit über 24 h still — zurück in die Warteschlange", issue.number));
+                    let _ = forge.comment(issue.number, &format!("⚠️ Agent `{m}` claimed this issue but has been silent for over 24 hours — putting it back into the queue."));
+                    release(ctx, forge, issue.number, Release::Requeue);
+                }
+            }
+            None => {}
+        }
+    }
+    mine
 }

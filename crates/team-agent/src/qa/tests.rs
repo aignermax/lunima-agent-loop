@@ -180,9 +180,13 @@ fn checkout_failure_releases_the_label() {
     let e = env(&[], FakeLlm::new());
     let forge = Arc::new(FakeForge::new("o/r").with_pr(pr(5, "Agent: ghost", "agent/missing", &[])));
     let ctx = Ctx { forge: { let f = forge.clone(); Arc::new(move |_| f.clone() as Arc<dyn Forge>) }, ..e.ctx.clone() };
-    assert!(Qa::default().cycle(&ctx).is_err());
+    let mut qa = Qa::default();
+    assert_eq!(qa.cycle(&ctx), Ok(false));
     assert!(forge.labels(5).is_empty());
     assert!(claims::load(&ctx.paths.state()).is_empty());
+    let locks_before = forge.log().iter().filter(|l| l.starts_with("lock")).count();
+    assert_eq!(qa.cycle(&ctx), Ok(false));
+    assert_eq!(forge.log().iter().filter(|l| l.starts_with("lock")).count(), locks_before, "skipped until its head changes");
 }
 
 #[test]
@@ -203,7 +207,7 @@ fn selection_skips_labelled_and_foreign_prs() {
 #[test]
 fn locked_pr_is_left_to_the_other_machine() {
     let e = env(&one(toml("\"qa\"", "exit 0", "", false)), FakeLlm::new());
-    e.forge.try_lock("qa-pr-1").unwrap();
+    e.forge.try_lock("qa-pr-1", "OTHERBOX").unwrap();
     assert!(!Qa::default().cycle(&e.ctx).unwrap());
     assert!(e.forge.labels(1).is_empty() && e.forge.comment_bodies(1).is_empty());
 }

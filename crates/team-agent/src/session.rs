@@ -28,6 +28,8 @@ pub struct SessionState {
     pub notes: Vec<String>,
     /// coding finished and the PR exists — a resumed run continues with the review
     pub in_review: bool,
+    /// given up / handed to a human — a re-queue starts the counters afresh
+    pub handed_to_human: bool,
 }
 
 impl Default for SessionState {
@@ -49,6 +51,7 @@ impl Default for SessionState {
             last_output: String::new(),
             notes: vec![],
             in_review: false,
+            handed_to_human: false,
         }
     }
 }
@@ -70,6 +73,18 @@ impl SessionState {
         self.total_tokens += tokens;
         self.total_cost_usd += cost;
         self.last_session_at = Local::now().to_rfc3339();
+    }
+
+    /// A human put the issue back into the queue: new budget, new attempts, same branch.
+    pub fn restart_after_human(&mut self) {
+        self.session_count = 0;
+        self.total_turns_used = 0;
+        self.total_tokens = 0;
+        self.total_cost_usd = 0.0;
+        self.attempts = 0;
+        self.in_review = false;
+        self.handed_to_human = false;
+        self.note("Re-queued by a human — fresh budget");
     }
 
     pub fn duration_sec(&self) -> Option<i64> {

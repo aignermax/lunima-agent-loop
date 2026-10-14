@@ -230,18 +230,34 @@ impl Repo {
         api("PATCH", &self.p(&format!("pulls/{number}")), Some(&json!({ "body": body }))).map(|_| ())
     }
 
-    /// Atomic claim between machines: creates the hidden ref `refs/team-locks/<key>`.
-    /// `Ok(false)` when it already exists (someone else holds the lock). Not a branch, so it
-    /// shows up neither in the branch list nor in PRs.
-    pub fn try_lock(&self, key: &str) -> Result<bool, String> {
-        let base = self.default_branch()?;
-        let sha: Value = get_json(&self.p(&format!("git/ref/heads/{}", encode(&base))))?;
-        let sha = sha.pointer("/object/sha").and_then(Value::as_str).ok_or("Sperre: SHA fehlt")?.to_string();
+    /// Atomic claim between machines: creates the hidden ref `refs/team-locks/<key>` pointing
+    /// at a parentless commit of the empty tree whose message names the owner. `Ok(false)`
+    /// when the ref already exists (someone else holds the lock). The commit's date is set
+    /// by GitHub, so `lock_info` tells the lock's age without trusting machine clocks.
+    /// Not a branch: it shows up neither in the branch list nor in PRs.
+    pub fn try_lock(&self, key: &str, owner: &str) -> Result<bool, String> {
+        let commit = api("POST", &self.p("git/commits"), Some(&json!({ "message": format!("team-lock {key} by {owner}"), "tree": EMPTY_TREE, "parents": [] })))?;
+        let sha: Value = serde_json::from_str(&commit).map_err(|e| e.to_string())?;
+        let sha = sha.get("sha").and_then(Value::as_str).ok_or("Sperre: Commit-SHA fehlt")?;
         match api("POST", &self.p("git/refs"), Some(&json!({ "ref": format!("refs/team-locks/{key}"), "sha": sha }))) {
             Ok(_) => Ok(true),
-            Err(e) if is_status(&e, 422) => Ok(false),
+            Err(e) if e.contains("Reference already exists") => Ok(false),
             Err(e) => Err(e),
         }
+    }
+
+    /// Owner and creation time of a held lock; `None` = not held.
+    pub fn lock_info(&self, key: &str) -> Result<Option<LockInfo>, String> {
+        let r: Value = match get_json(&self.p(&format!("git/ref/team-locks/{key}"))) {
+            Ok(v) => v,
+            Err(e) if is_status(&e, 404) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let sha = r.pointer("/object/sha").and_then(Value::as_str).ok_or("Sperre: SHA fehlt")?;
+        let c: Value = get_json(&self.p(&format!("git/commits/{sha}")))?;
+        let created = c.pointer("/author/date").and_then(Value::as_str).and_then(|d| chrono::DateTime::parse_from_rfc3339(d).ok()).map(|d| d.with_timezone(&chrono::Utc)).ok_or("Sperre: Datum fehlt")?;
+        let owner = c.get("message").and_then(Value::as_str).and_then(|m| m.split(" by ").nth(1)).unwrap_or("?").trim().to_string();
+        Ok(Some(LockInfo { owner, created }))
     }
 
     /// Releases a lock from `try_lock` (missing lock is fine).
@@ -260,6 +276,16 @@ impl Repo {
             Err(e) => Err(e),
         }
     }
+}
+
+/// The well-known SHA of git's empty tree (exists implicitly in every repository).
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
+/// A held cross-machine lock.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LockInfo {
+    pub owner: String,
+    pub created: chrono::DateTime<chrono::Utc>,
 }
 
 /// `full_name`s of the repositories of all search hits (issues/PRs).

@@ -12,6 +12,7 @@ use crate::directives;
 use crate::forge::{label_names, Forge, PR_TITLE_PREFIX, QA_COMMENT_PREFIX, QA_FAILED_PREFIX};
 use crate::llm::{Job, LlmError};
 use crate::pr_text::linked_issue;
+use crate::qa::claims;
 use crate::walkthrough;
 use crate::workspace::RepoSetup;
 use std::collections::HashMap;
@@ -32,31 +33,40 @@ pub fn run(ctx: &Ctx, setup: &RepoSetup, locks: &mut Locks) -> RoleResult<bool> 
     let forge = setup.forge.as_ref();
     let Some(candidate) = forge.open_prs()?.into_iter().find(|p| wanted(ctx, p)) else { return Ok(false) };
     let n = candidate.number;
-    let claimed = locks.with(forge, &format!("qafix-pr-{n}"), || {
+    let claimed = locks.with(forge, &format!("qafix-pr-{n}"), &ctx.machine, || {
         let pr = forge.pr(n)?;
         if !wanted(ctx, &pr) {
             return Ok(Claimed::No);
         }
+        claims::add_to(&ctx.paths.state(), claims::CODER_FILE, &setup.repo, n);
         forge.add_labels(n, &[&ctx.cfg.labels.running])?;
         Ok(Claimed::Yes(pr))
     })?;
     let Claimed::Yes(pr) = claimed else { return Ok(true) };
     ctx.heartbeat.report("working", detail!["repo" => setup.repo, "pr" => n, "title" => pr.title]);
-    let comments = forge.comments(n)?;
+    let comments = match forge.comments(n) {
+        Ok(c) => c,
+        Err(e) => {
+            unclaim(ctx, setup, n);
+            return Err(e.into());
+        }
+    };
     let failures = comments.iter().filter(|c| c.body.starts_with(QA_FAILED_PREFIX)).count() as u32;
     let max = ctx.cfg.budgets.max_qa_fix_rounds;
     if failures > max {
         escalate(ctx, forge, n, &format!("Reached max QA-fix rounds ({max}). Escalating to human for review."));
+        claims::remove_from(&ctx.paths.state(), claims::CODER_FILE, &setup.repo, n);
         return Ok(true);
     }
     match fix(ctx, setup, &pr, &comments) {
         Ok(()) => {
             let _ = forge.remove_label(n, &ctx.cfg.labels.qa_failed);
-            let _ = forge.remove_label(n, &ctx.cfg.labels.running);
+            unclaim(ctx, setup, n);
+            finish::remove_worktree(setup, &ctx.paths.worktree(&setup.repo, &pr.head.name));
             Ok(true)
         }
         Err(RoleError::UsageLimit(t)) => {
-            let _ = forge.remove_label(n, &ctx.cfg.labels.running);
+            unclaim(ctx, setup, n);
             Err(RoleError::UsageLimit(t))
         }
         Err(RoleError::Failed(e)) => {
@@ -66,11 +76,16 @@ pub fn run(ctx: &Ctx, setup: &RepoSetup, locks: &mut Locks) -> RoleResult<bool> 
                 escalate(ctx, forge, n, &format!("{ERROR_MARK}\nThe QA fix failed again (`{short}`). Escalating to human for review."));
             } else {
                 let _ = forge.comment(n, &format!("{ERROR_MARK}\n⚠️ QA fix attempt on `{}` failed: `{short}` — will retry once.", ctx.machine));
-                let _ = forge.remove_label(n, &ctx.cfg.labels.running);
+                unclaim(ctx, setup, n);
             }
             Ok(true)
         }
     }
+}
+
+fn unclaim(ctx: &Ctx, setup: &RepoSetup, n: u64) {
+    let _ = setup.forge.remove_label(n, &ctx.cfg.labels.running);
+    claims::remove_from(&ctx.paths.state(), claims::CODER_FILE, &setup.repo, n);
 }
 
 fn errors_since_last_verdict(comments: &[Comment]) -> usize {
