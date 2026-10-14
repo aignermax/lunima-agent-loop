@@ -5,6 +5,7 @@ pub mod agent_toml;
 pub mod claim;
 pub mod coder;
 pub mod ctx;
+pub mod daemon;
 pub mod directives;
 pub mod feedback;
 pub mod forge;

@@ -37,11 +37,15 @@ lunima-agent-loop/
 team.toml            configuration (no secrets)
 state/control.json   per-role pause            (same contract as the Python agent)
 state/status-*.json  per-role heartbeat
-state/history.jsonl  run history (issue, PR, cost, duration)
-state/sessions/      resumable coder sessions
-prompts/<name>.md    prompt overrides (built-ins are compiled in)
-logs/                agent log (size-rotated) + per-session stream-json logs
-work/<owner>_<repo>/ one clone per repo + worktrees per issue
+state/issue-history.jsonl  run history (issue, PR, cost, duration, machine)
+state/sessions/<o_r>/      resumable coder sessions (per repo — no cross-repo collisions)
+state/discovered-repos.json, work-hints.json   org discovery (coder writes, all read)
+state/qa-claims.json       PRs this machine marked qa-running (cleared on restart)
+state/agent.lock           single instance per machine (OS file lock)
+prompts/<name>.md          prompt overrides (built-ins are compiled in)
+logs/agent.log             agent log (size-rotated); logs/<role>/*.jsonl per Claude session
+work/<role>/<o_r>/         one clone per role and repo
+work/wt/<repo>_<branch>_<hash>/  worktree per branch (short: Windows path limits)
 ```
 
 ## Processes
@@ -49,7 +53,7 @@ work/<owner>_<repo>/ one clone per repo + worktrees per issue
 - `lunima-team-agent run` — the daemon; Windows: started at logon (scheduled task, runs on
   the lock screen), Linux: systemd `--user` unit. Runs as the user, so the user's Claude
   and gh logins apply.
-- `lunima-team-agent once --role coder [--issue N]` — one cycle, for testing.
+- `lunima-team-agent once <coder|qa|pr-feedback>` — one cycle, for testing.
 - `lunima-team-agent status` — health summary on the console.
 
 ## Phases
@@ -62,3 +66,38 @@ work/<owner>_<repo>/ one clone per repo + worktrees per issue
 4. PO role (port of the C# loop); remove the C# loop.
 5. Installers: Windows MSI (Control Center + agent + autostart), Linux `.deb` + tar.gz
    (systemd user unit, desktop entry, tray); setup assistant in the Control Center.
+
+## Several machines, one GitHub account
+
+Every role may run on every machine. A claim runs inside a GitHub-side mutex: creating the
+hidden ref `refs/team-locks/<key>` succeeds for exactly one machine (422 for the rest). Inside
+it the item is re-read and marked — issue: `agent-running` + assignee + claim comment with a
+`<!-- team-agent:claim machine=X -->` marker; QA: `qa-running`; QA fix: `agent-running` on the
+PR; PR feedback: an ack comment with `<!-- pr-feedback:claim <id> machine=X -->`. Locks older
+than 10 minutes belong to a crashed machine and are broken.
+
+State the other machine needs lives on GitHub, not in local files: failed attempts
+(`<!-- team-agent:attempt-failed -->`), PR-feedback rounds/claims/done markers, the work
+branch (`agent/issue-N-*` on origin is reused; continuation sessions push their progress).
+
+## Deliberate differences to the Python agent
+
+- Claude runs on the subscription (no API key; `ANTHROPIC_*` stripped) unless the provider
+  policy routes a repo to a third-party endpoint; reviewers always use the subscription.
+- Continuation sessions keep the previous session's uncommitted work (Python reset it) and
+  push it as a work-in-progress commit.
+- Failed attempts are counted per issue on GitHub (Python counted only successful sessions,
+  so a crashing Claude looped forever); after `max_attempts` the issue goes to `needs-human`.
+- After a restart a machine resumes its own claimed issues (Python left them stuck).
+- The usage limit pauses all roles until the reset time instead of failing the issue.
+- Only `OK/PASS/APPROVE(D)` verdicts pass a review (Python passed everything but `BLOCKING`).
+- Reviewer and QA review diff against the PR's real base (Python: the default branch).
+- No PR-URL short-circuit from the final message; `#12` no longer matches `#123`.
+- QA: a repo with QA disabled no longer starves newer PRs; a broken `.agent.toml` is a FAILED
+  verdict naming the error; failed checkouts release `qa-running`; startup only clears this
+  machine's `qa-running` labels.
+- QA fix: `max_qa_fix_rounds` fix attempts (Python allowed one fewer); a crashing fix is
+  retried once, then escalated (Python retried forever). Usage of retries counts to the budget.
+- PR feedback: new commits drop the stale `qa-passed`/`qa-failed` so QA checks the new head.
+- Session files per repo; worktrees with short paths; no tokens in remote URLs (git uses
+  `gh auth git-credential`).

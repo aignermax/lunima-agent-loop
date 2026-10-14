@@ -88,7 +88,6 @@ impl Role for Qa {
                 }
             }
         }
-        crate::log::info(&format!("{repo}: keine PRs zur Prüfung"));
         Ok(false)
     }
 }

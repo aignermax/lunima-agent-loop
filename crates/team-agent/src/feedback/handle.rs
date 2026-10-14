@@ -13,7 +13,7 @@ use crate::{pr_text, walkthrough};
 use chrono::Utc;
 use std::collections::HashMap;
 use team_core::gh::{Comment, PullRequest};
-use team_core::git::{commit_and_push, run_git, Pushed};
+use team_core::git::{commit_and_push, run_git};
 use team_core::provider::{self, Choice};
 
 /// What the locked decision step concluded.
@@ -116,6 +116,7 @@ fn load_policy(setup: &RepoSetup) -> Result<ProjectConfig, String> {
 fn work(ctx: &Ctx, setup: &RepoSetup, forge: &dyn Forge, pr: &PullRequest, trigger: &Comment, choice: &Choice, issue_number: u64) -> RoleResult<String> {
     let branch = &pr.head.name;
     setup.clone.reset_to_remote(branch)?;
+    let before = setup.clone.git(&["rev-parse", "HEAD"])?;
     let mut values: HashMap<&str, String> = HashMap::new();
     values.insert("pr_number", pr.number.to_string());
     values.insert("pr_title", pr.title.clone());
@@ -135,7 +136,15 @@ fn work(ctx: &Ctx, setup: &RepoSetup, forge: &dyn Forge, pr: &PullRequest, trigg
     if out.reached_max_turns {
         crate::log::warn(&format!("PR #{}: Worker hat das Turn-Limit erreicht", pr.number));
     }
-    let pushed = commit_and_push(&setup.clone.dir, branch, &format!("PR feedback: address comment on #{}", pr.number))? == Pushed::Yes;
+    commit_and_push(&setup.clone.dir, branch, &format!("PR feedback: address comment on #{}", pr.number))?;
+    // the worker may have committed (and pushed) by itself — compare with the start
+    let pushed = setup.clone.git(&["rev-parse", "HEAD"])? != before;
+    if pushed {
+        // the QA verdict was for the old head — let QA look again
+        for label in [&ctx.cfg.labels.qa_passed, &ctx.cfg.labels.qa_failed] {
+            let _ = forge.remove_label(pr.number, label);
+        }
+    }
     let wt = walkthrough::publish(&setup.clone.dir, &setup.repo, branch, issue_number);
     if !wt.is_empty() {
         let body = forge.pr(pr.number).ok().and_then(|p| p.body).or_else(|| pr.body.clone()).unwrap_or_default();

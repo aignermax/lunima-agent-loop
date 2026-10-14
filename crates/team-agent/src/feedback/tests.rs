@@ -85,6 +85,24 @@ fn no_change_is_reported() {
 }
 
 #[test]
+fn commits_the_worker_pushed_itself_count_as_changes() {
+    let e = env(ON, Some("o/r"));
+    e.forge.add_comment(7, TRIGGER);
+    let llm = Arc::new(FakeLlm::new().then(|job| {
+        std::fs::write(job.cwd.join("self.txt"), "x").unwrap();
+        let g = |a: &[&str]| team_core::git::run_git(Some(&job.cwd), a, false).unwrap();
+        g(&["add", "-A"]);
+        g(&["-c", "user.name=w", "-c", "user.email=w@w", "commit", "-q", "-m", "worker"]);
+        g(&["push", "-q", "origin", "HEAD"]);
+        Ok(ok(REPORT))
+    }));
+    PrFeedback::new().cycle(&e.ctx("a", &llm)).unwrap();
+    assert_eq!(e.count("no new commits were pushed"), 0);
+    assert!(fake::pushed_file(&e.origin, "agent/issue-5", "self.txt").is_some());
+    assert!(e.forge.log().contains(&"label- 7 qa-passed".to_string()), "QA re-verifies the new head");
+}
+
+#[test]
 fn forks_are_declined_without_claude() {
     for head in [Some("fork/r"), None] {
         let e = env(ON, head);
