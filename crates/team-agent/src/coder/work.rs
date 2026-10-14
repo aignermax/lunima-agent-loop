@@ -134,7 +134,7 @@ impl IssueRun<'_> {
                 Err(e) => return Ok(Flow::Fail(e)),
             };
             let text = prompt::session(ctx, &setup.repo, &current, state)?;
-            let job = Job { prompt: text, cwd: worktree.to_path_buf(), model: choice.model, max_turns, env: choice.env, label: label(&setup.repo, "issue", n) };
+            let job = Job { prompt: text, cwd: worktree.to_path_buf(), model: choice.model, max_turns, env: choice.env, label: label(&setup.repo, "issue", n), max_duration: None };
             crate::log::info(&format!("#{n}: Sitzung {} ({})", state.session_count + 1, choice.why));
             let out = match ctx.llm.run(&job) {
                 Ok(o) => o,

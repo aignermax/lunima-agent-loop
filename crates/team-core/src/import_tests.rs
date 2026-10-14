@@ -61,6 +61,11 @@ fn loop_config_import_sets_po_but_keeps_role_off() {
     assert_eq!(c.product_owner.repo, "aignermax/Lunima");
     assert_eq!(c.product_owner.interval_minutes, 240);
     assert!(!c.roles.product_owner);
+    assert!(c.product_owner.customer_command.is_empty(), "customer review stays off unless enabled");
+    let mut c = TeamConfig::default();
+    apply_loop_config(&mut c, &serde_json::json!({"githubRepo": "o/r", "customerEnabled": true, "customerMaxAgeHours": 12}));
+    assert!(c.product_owner.customer_command.contains("customer_cycle.py --repo o/r"));
+    assert_eq!(c.product_owner.customer_max_age_hours, 12);
 }
 
 #[test]

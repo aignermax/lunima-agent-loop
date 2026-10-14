@@ -4,7 +4,7 @@
 //!   lunima-team-agent init [--from-env <.env>] [--from-loop <agent-loop.json>]
 //!   lunima-team-agent status
 //!   lunima-team-agent run                 all roles, forever (one instance per machine)
-//!   lunima-team-agent once <role>         one cycle of coder | qa | pr-feedback
+//!   lunima-team-agent once <role>         one cycle of coder | qa | pr-feedback | product-owner
 
 use std::path::PathBuf;
 use team_core::config::TeamConfig;
@@ -160,7 +160,7 @@ fn once(role: &str) -> i32 {
         return 3;
     };
     let Some(mut r) = team_agent::daemon::all_roles().into_iter().find(|r| r.name() == role) else {
-        eprintln!("Unbekannte Rolle „{role}“ (coder | qa | pr-feedback)");
+        eprintln!("Unbekannte Rolle „{role}“ (coder | qa | pr-feedback | product-owner)");
         return 2;
     };
     team_agent::log::init(&p.logs());
