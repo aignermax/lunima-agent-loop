@@ -41,11 +41,13 @@ pub struct Roles {
     pub qa: bool,
     pub pr_feedback: bool,
     pub product_owner: bool,
+    /// nightly simulated-user walk through the desktop app (needs an unlocked desktop)
+    pub ux_review: bool,
 }
 
 impl Default for Roles {
     fn default() -> Self {
-        Self { coder: true, qa: true, pr_feedback: true, product_owner: false }
+        Self { coder: true, qa: true, pr_feedback: true, product_owner: false, ux_review: false }
     }
 }
 
@@ -254,6 +256,59 @@ impl Default for ProductOwner {
     }
 }
 
+/// `[ux_review]`: the nightly UX report. The computer-use tester (`tools/ux-tester` of a
+/// lunima-agent-loop checkout) drives the real desktop app as simulated users; it needs
+/// the Anthropic API (a subscription can't operate a desktop), so its key comes from a
+/// key file and is handed to the tester process only.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UxReview {
+    /// "" = the Product Owner's repo
+    pub repo: String,
+    /// earliest local hour; the run window lasts `WINDOW_HOURS`
+    pub hour: u32,
+    /// folder with `ux_tester.py` (e.g. `C:\Users\me\lunima-agent-loop\tools\ux-tester`)
+    pub tester_dir: String,
+    /// interpreter command line, e.g. `py -3` or `python3`
+    pub python: String,
+    /// file with the Anthropic API key (never shown, never logged)
+    pub api_key_file: String,
+    pub model: String,
+    pub max_steps: u32,
+    /// findings at or above this severity become issues: minor | major | critical
+    pub min_severity: String,
+    /// project folder of the desktop app in the repo
+    pub app_project: String,
+    /// "" = built-in persona journeys
+    pub goals_file: String,
+    /// persona journeys per night (rotating)
+    pub goals_per_run: usize,
+    pub timeout_minutes: u64,
+}
+
+impl UxReview {
+    pub const WINDOW_HOURS: u32 = 4;
+}
+
+impl Default for UxReview {
+    fn default() -> Self {
+        Self {
+            repo: String::new(),
+            hour: 2,
+            tester_dir: String::new(),
+            python: if cfg!(windows) { "py -3".into() } else { "python3".into() },
+            api_key_file: String::new(),
+            model: "claude-opus-5-5".into(),
+            max_steps: 150,
+            min_severity: "major".into(),
+            app_project: "CAP.Desktop".into(),
+            goals_file: String::new(),
+            goals_per_run: 3,
+            timeout_minutes: 180,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TeamConfig {
@@ -268,6 +323,7 @@ pub struct TeamConfig {
     pub providers: Providers,
     pub budgets: Budgets,
     pub product_owner: ProductOwner,
+    pub ux_review: UxReview,
     /// `@agent` comments on PRs trigger the PR-feedback role
     pub pr_feedback_marker: String,
 }
@@ -285,6 +341,7 @@ impl Default for TeamConfig {
             providers: Providers::default(),
             budgets: Budgets::default(),
             product_owner: ProductOwner::default(),
+            ux_review: UxReview::default(),
             pr_feedback_marker: "@agent".into(),
         }
     }

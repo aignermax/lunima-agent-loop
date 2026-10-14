@@ -36,6 +36,7 @@ pub fn role_enabled(cfg: &TeamConfig, name: &str) -> bool {
         "qa" => cfg.roles.qa,
         "pr-feedback" => cfg.roles.pr_feedback,
         "product-owner" => cfg.roles.product_owner,
+        "ux-review" => cfg.roles.ux_review,
         _ => false,
     }
 }
@@ -73,7 +74,7 @@ fn gh_login() -> String {
 }
 
 pub fn all_roles() -> Vec<Box<dyn Role>> {
-    vec![Box::new(Coder::default()), Box::new(Qa::default()), Box::new(PrFeedback::default()), Box::new(ProductOwner::default())]
+    vec![Box::new(Coder::default()), Box::new(Qa::default()), Box::new(PrFeedback::default()), Box::new(ProductOwner::default()), Box::new(crate::ux::UxReviewer::default())]
 }
 
 /// Runs until the process is stopped.
@@ -200,7 +201,7 @@ mod tests {
         paths.ensure().unwrap();
         let mut cfg = TeamConfig::default();
         let limit: UsageLimit = Arc::new(Mutex::new(None));
-        assert_eq!(all_roles().iter().map(|r| r.name()).collect::<Vec<_>>(), vec!["coder", "qa", "pr-feedback", "product-owner"]);
+        assert_eq!(all_roles().iter().map(|r| r.name()).collect::<Vec<_>>(), vec!["coder", "qa", "pr-feedback", "product-owner", "ux-review"]);
         assert!(blocked(&cfg, "coder", &paths, &limit).is_none());
         cfg.roles.qa = false;
         assert!(blocked(&cfg, "qa", &paths, &limit).unwrap().contains("abgeschaltet"));

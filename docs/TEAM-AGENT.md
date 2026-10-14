@@ -127,3 +127,43 @@ and the C# loop's headless env (no background tasks, 30-min foreground Bash).
 - Differences to the C# loop: no workers (the coder role replaces them), no `agent-loop.json` /
   `state.json` pause (control.json like every role), one pass per slot team-wide instead of per
   machine, the prompt goes on stdin instead of a `.agent-loop/owner-pass.md` file.
+
+## UX review (simulated users)
+
+Role `ux-review` (off by default, `[roles] ux_review = true`). Once per night, in a window
+starting at `[ux_review] hour` (4 h long), the computer-use tester of a lunima-agent-loop
+checkout (`tools/ux-tester`) drives the real desktop app as personas from Lunima's
+`docs/PERSONAS.md`: newcomer first launch, designing a circuit from scratch, importing a GDS
+(a `.gds` found in the clone is substituted for `{SAMPLE_GDS}`), simulation trust, the
+learner's logic journeys, editing/undo, manufacturing path. `goals_per_run` journeys per night,
+rotating by day. Flow: clone on the integration branch → `dotnet build <app_project> -c
+Release` → tester in customer mode (isolated app, exact report folder
+`state/ux/reports/<stamp>`, product context from the clone's ROADMAP/PERSONAS on the first
+journey, the sample GDS staged at a neutral path) → only a complete session (exit 0, not
+partial/interrupted) is used: `--publish-report --no-screenshots` files `ux-finding` issues
+(no API key needed) and the sanitised report replaces the body of the maintained issue
+"UX report (simulated users)" (label `ux-report`) → `state/ux-state.json` (current run and,
+separately, the last good report). Screenshots are deleted after processing; the newest 7
+report folders are kept. The Product Owner prompt shows the newest report (≤ 3 days, from the
+GitHub issue — so every machine sees it — else the local last good one) as fenced, untrusted,
+non-gating evidence. It never blocks a merge.
+
+The desktop lock is probed before building (Windows); an unchanged commit is not rebuilt.
+A locked desktop or an error releases the night's lock so another machine can try; a locked
+desktop is retried every 30 min, an error once.
+
+The tester needs the Anthropic API (a subscription can't operate a desktop): the key comes
+from `api_key_file` and is passed to the tester process only. A locked desktop is retried
+One machine per night: lock ref `refs/team-locks/ux-<yyyymmdd>` (kept as proof after a
+finished run, older ones deleted).
+
+```toml
+[roles]
+ux_review = true
+
+[ux_review]
+tester_dir = 'C:\Users\me\lunima-agent-loop\tools\ux-tester'
+api_key_file = 'C:\Users\me\.ssh\anthropic-ux.txt'
+# optional: hour = 2, goals_per_run = 3, max_steps = 150, model = "claude-opus-5-5",
+# min_severity = "major", app_project = "CAP.Desktop", python = "py -3", goals_file = ""
+```

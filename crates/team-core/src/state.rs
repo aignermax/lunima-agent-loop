@@ -161,6 +161,46 @@ impl PoState {
     }
 }
 
+pub const UX_STATE_FILE: &str = "ux-state.json";
+
+/// `state/ux-state.json` — the last nightly UX review (the Control Center and the Product
+/// Owner read it).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UxState {
+    /// window day ("YYYY-MM-DD") of the last attempt
+    pub day: String,
+    pub last_attempt: Option<String>,
+    pub last_start: Option<String>,
+    pub last_end: Option<String>,
+    /// "running" | "ok" | "error" | "timeout" | "skipped" | "skipped-locked"
+    pub last_result: String,
+    pub last_note: String,
+    /// folder with report.md / findings.json of the last finished run
+    pub report_dir: Option<String>,
+    pub filed_issues: Vec<u64>,
+    /// ids of the persona journeys of the last run
+    pub goals: Vec<String>,
+    /// attempts in the current window (errors are retried once)
+    pub attempts: u32,
+    /// commit the app was last built from (unchanged → no rebuild)
+    pub built_sha: String,
+    /// the last successful run — a failing later run never hides it
+    pub last_ok_end: Option<String>,
+    pub last_ok_report: Option<String>,
+}
+
+impl UxState {
+    pub fn load(state_dir: &Path) -> Option<Self> {
+        let text = std::fs::read_to_string(state_dir.join(UX_STATE_FILE)).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    pub fn save(&self, state_dir: &Path) -> std::io::Result<()> {
+        write_atomic(&state_dir.join(UX_STATE_FILE), serde_json::to_string_pretty(self).unwrap_or_default().as_bytes())
+    }
+}
+
 #[cfg(test)]
 #[path = "state_tests.rs"]
 mod tests;

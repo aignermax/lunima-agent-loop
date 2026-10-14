@@ -143,8 +143,10 @@ impl Worker {
             team_core::state::PoState::load(&state),
             agent_files::agent_running(&state),
         );
+        let ux = team_core::state::UxState::load(&state);
         self.update(|s| {
             (s.heartbeats, s.pauses, s.history, s.discovered, s.po, s.agent_running) = fresh;
+            s.ux = ux;
             s.config = config;
             s.config_missing = missing;
             s.logs = files;

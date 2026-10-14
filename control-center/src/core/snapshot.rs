@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use team_core::config::TeamConfig;
 use team_core::paths::Paths;
-use team_core::state::PoState;
+use team_core::state::{PoState, UxState};
 
 /// A value that is checked asynchronously: `None` = not checked yet.
 pub type Probe<T> = Option<Result<T, String>>;
@@ -29,6 +29,7 @@ pub struct Snapshot {
     pub history: Vec<HistoryEntry>,
     pub discovered: Vec<String>,
     pub po: Option<PoState>,
+    pub ux: Option<UxState>,
     pub logs: Vec<LogFile>,
     pub passes: Vec<PassEntry>,
     pub agent_running: bool,
@@ -56,6 +57,7 @@ impl Snapshot {
             history: Vec::new(),
             discovered: Vec::new(),
             po: None,
+            ux: None,
             logs: Vec::new(),
             passes: Vec::new(),
             agent_running: false,
