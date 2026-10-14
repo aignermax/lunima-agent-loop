@@ -1,0 +1,13 @@
+<Project Sdk="WixToolset.Sdk/5.0.2">
+  <!-- Builds lunima-team-<version>-win-<arch>.msi from the Rust release binaries in targetelease
+       (cargo build with the release profile for packages team-agent and lunima-po-center), e.g.
+         dotnet build installer/lunima-team.wixproj -c Release -p:InstallerPlatform=arm64 -p:AgentVersion=0.2.0 -->
+  <PropertyGroup>
+    <!-- MSI versions must be numeric (major.minor.build); AgentLabel may carry a pre-release suffix -->
+    <AgentVersion Condition="'$(AgentVersion)' == ''">0.1.0</AgentVersion>
+    <AgentLabel Condition="'$(AgentLabel)' == ''">$(AgentVersion)</AgentLabel>
+    <AgentBinDir Condition="'$(AgentBinDir)' == ''">$(MSBuildThisFileDirectory)..\target\release\</AgentBinDir>
+    <OutputName>lunima-team-$(AgentLabel)-win-$(InstallerPlatform)</OutputName>
+    <DefineConstants>AgentVersion=$(AgentVersion);AgentBinDir=$(AgentBinDir)</DefineConstants>
+  </PropertyGroup>
+</Project>

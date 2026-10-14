@@ -30,3 +30,29 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 tempfile = "3"
+
+# Debian package "lunima-team": Control Center + agent daemon + systemd user unit.
+#   cargo build --release -p team-agent -p lunima-po-center
+#   cargo deb -p lunima-po-center --no-build --deb-version <version>
+[package.metadata.deb]
+name = "lunima-team"
+maintainer = "Max Aigner <max@akhetonics.com>"
+copyright = "Lunima"
+extended-description = """\
+The Lunima agent team: lunima-team-agent (coder, QA, PR feedback and product owner \
+roles, running Claude Code on the user's subscription against GitHub via gh) and \
+lunima-po, the Lunima Team Control Center (status, pause, settings, tray icon). \
+After installing: lunima-team-agent init, then \
+systemctl --user enable --now lunima-team-agent."""
+section = "devel"
+priority = "optional"
+depends = "$auto, git"
+recommends = "gh"
+assets = [
+    ["target/release/lunima-team-agent", "usr/bin/", "755"],
+    ["target/release/lunima-po", "usr/bin/", "755"],
+    ["../packaging/linux/lunima-team-agent.service", "usr/lib/systemd/user/", "644"],
+    ["../packaging/linux/lunima-team-control-center.desktop", "usr/share/applications/", "644"],
+    ["../packaging/linux/lunima-team-control-center.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["../README.md", "usr/share/doc/lunima-team/README.md", "644"],
+]
