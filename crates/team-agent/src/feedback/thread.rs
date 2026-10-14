@@ -33,6 +33,10 @@ pub struct Thread {
     pub cap_notified: bool,
 }
 
+/// The Python agent's trigger (`AGENT_PR_FEEDBACK_MARKER` default) — only used to read
+/// its old threads.
+const LEGACY_MARKER: &str = "@agent";
+
 fn marker_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| Regex::new(r"<!-- pr-feedback:(claim|failed|done) (\d+)").expect("regex"))
@@ -66,17 +70,33 @@ impl Thread {
     }
 
     /// Replies of the former Python agent carry the reply marker but none of the state
-    /// markers. It answered triggers oldest first, so every comment up to its latest reply
-    /// was handled; replies also link the trigger (`#issuecomment-<id>`).
+    /// markers. A success reply links its trigger (`#issuecomment-<id>`); a decline or
+    /// give-up has no link and answered the oldest open trigger before it (one per cycle,
+    /// oldest first). Its cap notice ends further rounds.
     fn parse_legacy(&mut self, comments: &[Comment]) {
-        let legacy: Vec<&Comment> = comments.iter().filter(|c| c.body.contains(REPLY_MARKER) && !c.body.contains("<!-- pr-feedback:")).collect();
-        let Some(cutoff) = legacy.iter().map(|c| created(c)).max() else { return };
         static LINK: OnceLock<Regex> = OnceLock::new();
         let link = LINK.get_or_init(|| Regex::new(r"#issuecomment-(\d+)").expect("regex"));
-        for c in &legacy {
+        let is_legacy = |c: &Comment| c.body.contains(REPLY_MARKER) && !c.body.contains("<!-- pr-feedback:");
+        let mut ordered: Vec<&Comment> = comments.iter().collect();
+        ordered.sort_by_key(|c| (created(c), c.id));
+        for c in ordered.iter().filter(|c| is_legacy(c)) {
             self.legacy.extend(link.captures_iter(&c.body).filter_map(|m| m[1].parse::<u64>().ok()));
+            if c.body.contains("Reached the maximum of") {
+                self.cap_notified = true;
+            }
         }
-        self.legacy.extend(comments.iter().filter(|c| created(c) <= cutoff).map(|c| c.id));
+        let mut open: std::collections::VecDeque<u64> = std::collections::VecDeque::new();
+        for c in &ordered {
+            if is_legacy(c) {
+                if !link.is_match(&c.body) && !c.body.contains("Reached the maximum of") {
+                    if let Some(id) = open.pop_front() {
+                        self.legacy.insert(id);
+                    }
+                }
+            } else if !c.body.contains(REPLY_MARKER) && c.body.contains(LEGACY_MARKER) && !self.legacy.contains(&c.id) {
+                open.push_back(c.id);
+            }
+        }
     }
 
     /// Answered — by this agent or by its Python predecessor.
@@ -86,7 +106,7 @@ impl Thread {
 
     /// Feedback rounds used on this PR (every finished trigger counts).
     pub fn rounds(&self) -> usize {
-        self.done.len()
+        self.done.len() + self.legacy.len()
     }
 
     /// Claims made for a trigger so far (abandoned ones included).
@@ -259,6 +279,19 @@ mod tests {
         let t = Thread::parse(&comments);
         assert!(t.is_done(1) && t.is_done(3), "answered before the cut-over");
         assert!(!t.is_done(5), "newer requests are still open");
-        assert_eq!(t.rounds(), 0, "legacy answers don't use up rounds");
+        assert_eq!(t.rounds(), 2, "legacy answers count as rounds");
+        // a request written while the old agent was busy is not swallowed
+        let busy = vec![
+            c(1, "2026-10-01T10:00:00Z", "@agent rename"),
+            c(2, "2026-10-01T10:03:00Z", "@agent also the icon"),
+            c(3, "2026-10-01T10:10:00Z", "<!-- pr-feedback-agent -->
+[pr-feedback] Done — addressed the feedback from comment [above](#issuecomment-1)."),
+        ];
+        let t = Thread::parse(&busy);
+        assert!(t.is_done(1) && !t.is_done(2));
+        // the old cap notice still applies
+        let capped = vec![c(1, "2026-10-01T10:00:00Z", "<!-- pr-feedback-agent -->
+[pr-feedback] Reached the maximum of 3 feedback rounds on this PR.")];
+        assert!(Thread::parse(&capped).cap_notified);
     }
 }
