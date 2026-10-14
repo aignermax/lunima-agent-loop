@@ -15,6 +15,8 @@ pub trait Forge: Send + Sync {
     fn comment(&self, number: u64, body: &str) -> Result<(), String>;
     fn comments(&self, number: u64) -> Result<Vec<Comment>, String>;
     fn close_issue(&self, number: u64) -> Result<(), String>;
+    fn create_issue(&self, title: &str, body: &str) -> Result<Issue, String>;
+    fn edit_issue_body(&self, number: u64, body: &str) -> Result<(), String>;
     fn open_prs(&self) -> Result<Vec<PullRequest>, String>;
     fn pr(&self, number: u64) -> Result<PullRequest, String>;
     fn pr_by_branch(&self, branch: &str) -> Result<Option<PullRequest>, String>;
@@ -60,6 +62,12 @@ impl Forge for gh::Repo {
     }
     fn close_issue(&self, number: u64) -> Result<(), String> {
         gh::Repo::close_issue(self, number)
+    }
+    fn create_issue(&self, title: &str, body: &str) -> Result<Issue, String> {
+        gh::Repo::create_issue(self, title, body)
+    }
+    fn edit_issue_body(&self, number: u64, body: &str) -> Result<(), String> {
+        gh::Repo::edit_issue_body(self, number, body)
     }
     fn open_prs(&self) -> Result<Vec<PullRequest>, String> {
         gh::Repo::open_prs(self)

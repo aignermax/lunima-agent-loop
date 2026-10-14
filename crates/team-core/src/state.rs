@@ -181,6 +181,13 @@ pub struct UxState {
     pub filed_issues: Vec<u64>,
     /// ids of the persona journeys of the last run
     pub goals: Vec<String>,
+    /// attempts in the current window (errors are retried once)
+    pub attempts: u32,
+    /// commit the app was last built from (unchanged → no rebuild)
+    pub built_sha: String,
+    /// the last successful run — a failing later run never hides it
+    pub last_ok_end: Option<String>,
+    pub last_ok_report: Option<String>,
 }
 
 impl UxState {

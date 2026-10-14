@@ -5,6 +5,7 @@
 //! public; captures show the whole desktop) and the report feeds the Product Owner. It
 //! never gates a merge.
 
+mod files;
 mod plan;
 mod report;
 mod run;
@@ -97,7 +98,11 @@ impl Role for UxReviewer {
         for old in 2..=4 {
             let _ = forge.unlock(&plan::lock_key(day - Duration::days(old)));
         }
+        if st.day != day.to_string() {
+            st.attempts = 0;
+        }
         st.day = day.to_string();
+        st.attempts += 1;
         st.last_attempt = Some(stamp(now));
         st.last_start = Some(stamp(now));
         st.last_end = None;
@@ -106,19 +111,23 @@ impl Role for UxReviewer {
         Self::save(ctx, &st);
         ctx.heartbeat.report("working", detail!["repo" => repo, "title" => "UX-Review (simulierte Nutzer)"]);
         crate::log::info(&format!("UX-Review für {repo} startet"));
-        let outcome = run::review(ctx, &self.exec, &repo, day);
+        let outcome = run::review(ctx, &self.exec, &repo, day, &mut st);
         let end = Some(stamp((self.clock)()));
         match outcome {
             Ok(Outcome::Done { report_dir, filed, goals, note }) => {
-                st = UxState { last_end: end, last_result: "ok".into(), last_note: note, report_dir: Some(report_dir.display().to_string()), filed_issues: filed, goals, ..st };
-            }
-            Ok(Outcome::Locked) => {
-                st = UxState { last_result: "skipped-locked".into(), last_note: "Bildschirm gesperrt — neuer Versuch in 30 Min.".into(), ..st };
+                let dir = Some(report_dir.display().to_string());
+                st = UxState { last_end: end.clone(), last_result: "ok".into(), last_note: note, report_dir: dir.clone(), filed_issues: filed, goals, last_ok_end: end, last_ok_report: dir, ..st };
             }
             Ok(Outcome::TimedOut { report_dir }) => {
-                st = UxState { last_end: end, last_result: "timeout".into(), last_note: "Zeitlimit erreicht".into(), report_dir: report_dir.map(|p| p.display().to_string()).or(st.report_dir), ..st };
+                st = UxState { last_end: end, last_result: "timeout".into(), last_note: "Zeitlimit erreicht — Bericht unvollständig, nichts veröffentlicht".into(), report_dir: report_dir.map(|p| p.display().to_string()), ..st };
+            }
+            Ok(Outcome::Locked) => {
+                // another machine may try tonight; this one retries in 30 min
+                let _ = forge.unlock(&key);
+                st = UxState { last_result: "skipped-locked".into(), last_note: "Bildschirm gesperrt — neuer Versuch in 30 Min.".into(), attempts: st.attempts.saturating_sub(1), ..st };
             }
             Err(e) => {
+                let _ = forge.unlock(&key);
                 crate::log::error(&format!("UX-Review: {e}"));
                 st = UxState { last_end: end, last_result: "error".into(), last_note: e.chars().take(500).collect(), ..st };
             }

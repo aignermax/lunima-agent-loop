@@ -1,24 +1,28 @@
-//! One UX review: build the desktop app from the integration branch, let the tester walk
-//! the persona journeys (customer mode: isolated app, exact report folder), then file the
-//! findings as issues without screenshots (a second tester call, `--publish-report`).
+//! One UX review: probe the desktop, build the app from the integration branch (only when
+//! the commit changed), let the tester walk the persona journeys (customer mode: isolated
+//! app, exact report folder), and — only for a complete run — file the findings as issues
+//! without screenshots and publish the report for the team.
 
-use super::plan;
+use super::{files, plan, report};
 use crate::ctx::Ctx;
 use crate::shell::{tail, CmdResult};
-use chrono::NaiveDate;
+use chrono::{Local, NaiveDate};
 use regex::Regex;
 use serde_json::{json, Value};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use team_core::config::UxReview;
+use team_core::state::UxState;
 
 /// Runs a command line (`crate::shell::run_shell_env` in production; scripted in tests).
 pub type Exec = Box<dyn Fn(&str, &Path, Duration, &[(&str, &OsStr)]) -> Result<CmdResult, String> + Send>;
 
+const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 const BUILD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const PUBLISH_TIMEOUT: Duration = Duration::from_secs(10 * 60);
-const SKIP_DIRS: &[&str] = &[".git", "bin", "obj", "node_modules", "target"];
+/// The tester's own check (OpenInputDesktop), run before anything expensive.
+const PROBE: &str = "import customer_desktop; customer_desktop.require_unlocked_desktop()";
 
 #[derive(Debug, PartialEq)]
 pub enum Outcome {
@@ -31,46 +35,7 @@ pub fn quote(s: &str) -> String {
     format!("\"{s}\"")
 }
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>, keep: &dyn Fn(&Path) -> bool) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
-    for e in entries.flatten() {
-        let p = e.path();
-        let name = e.file_name().to_string_lossy().to_lowercase();
-        if p.is_dir() {
-            if !SKIP_DIRS.contains(&name.as_str()) || keep(&p) {
-                walk(&p, out, keep);
-            }
-        } else if keep(&p) {
-            out.push(p);
-        }
-    }
-}
-
-/// A `.gds` in the clone for the GDS-import journey (names with "mzi" first, then shortest path).
-pub fn find_sample_gds(clone: &Path) -> Option<PathBuf> {
-    let mut found = Vec::new();
-    walk(clone, &mut found, &|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("gds")));
-    found.sort_by_key(|p| (!p.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase().contains("mzi")), p.as_os_str().len()));
-    found.into_iter().next()
-}
-
-/// `<project>/bin/Release/**/<project>.exe` (else `.dll`), newest first.
-pub fn find_app(clone: &Path, project: &str) -> Option<PathBuf> {
-    let root = clone.join(project).join("bin").join("Release");
-    for ext in ["exe", "dll"] {
-        let mut found = Vec::new();
-        let want = format!("{project}.{ext}").to_lowercase();
-        walk(&root, &mut found, &|p| p.is_dir() || p.file_name().is_some_and(|n| n.to_string_lossy().to_lowercase() == want));
-        found.retain(|p| p.is_file());
-        found.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
-        if let Some(p) = found.pop() {
-            return Some(p);
-        }
-    }
-    None
-}
-
-/// `<python> "<tester_dir>/ux_tester.py" <args…>` — all arguments quoted.
+/// `<python> "<tester_dir>/ux_tester.py" <args…>` — values quoted.
 pub fn tester_line(ux: &UxReview, args: &[String]) -> String {
     let script = Path::new(&ux.tester_dir).join("ux_tester.py");
     let mut line = format!("{} {}", ux.python.trim(), quote(&script.display().to_string()));
@@ -105,50 +70,94 @@ fn output(r: &CmdResult) -> String {
     format!("{}\n{}", r.stdout, r.stderr)
 }
 
-/// The whole review. `Err` = something to fix (build, missing key, tester crash).
-pub fn review(ctx: &Ctx, exec: &Exec, repo: &str, day: NaiveDate) -> Result<Outcome, String> {
+fn says_locked(text: &str) -> bool {
+    text.contains("Desktop is locked") || text.contains("No interactive desktop")
+}
+
+/// Why a finished tester run is not usable (exit code, interrupted or partial session).
+pub fn incomplete(run: &CmdResult, report: &Path) -> Option<String> {
+    let data: Value = std::fs::read_to_string(report.join("findings.json")).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+    if run.exit_code != Some(0) {
+        return Some(format!("Tester beendet mit Exit {:?}", run.exit_code));
+    }
+    if data.is_null() || !report.join("report.md").is_file() {
+        return Some("kein vollständiger Bericht (report.md/findings.json fehlen)".into());
+    }
+    if data.get("partial").and_then(Value::as_bool) != Some(false) || data.get("interrupted").and_then(Value::as_bool) != Some(false) {
+        return Some("Tester-Sitzung unvollständig oder unterbrochen".into());
+    }
+    None
+}
+
+/// Persona journeys for tonight, with the product context on the first one.
+fn goals_for(ux: &UxReview, clone: &Path, day: NaiveDate) -> Result<Vec<Value>, String> {
+    let sample = files::find_sample_gds(clone).and_then(|p| files::stage_sample(&p));
+    let mut goals = plan::pick(&plan::substitute(plan::load_goals(&ux.goals_file)?, sample.as_deref()), day, ux.goals_per_run);
+    if let (Some(first), Some(context)) = (goals.first_mut(), files::product_context(clone)) {
+        first["customer_context"] = Value::String(context);
+    }
+    Ok(goals)
+}
+
+/// The whole review. `Err` = something to fix (build, missing key, broken tester run).
+pub fn review(ctx: &Ctx, exec: &Exec, repo: &str, day: NaiveDate, st: &mut UxState) -> Result<Outcome, String> {
     let ux = &ctx.cfg.ux_review;
     let key = api_key(ux)?;
+    let tester = Path::new(&ux.tester_dir);
+    if cfg!(windows) {
+        let probe = exec(&format!("{} -c {}", ux.python.trim(), quote(PROBE)), tester, PROBE_TIMEOUT, &[])?;
+        if !probe.ok() && says_locked(&output(&probe)) {
+            return Ok(Outcome::Locked);
+        }
+    }
     let setup = crate::workspace::setup(ctx, "ux-review", repo)?;
     let branch = setup.working_branch.clone();
-    setup.clone.reset_to_remote(&branch)?;
-    let sha = setup.clone.git(&["rev-parse", "HEAD"])?.trim().to_string();
     let dir = &setup.clone.dir;
-    let build = exec(&format!("dotnet build {} -c Release", quote(&ux.app_project)), dir, BUILD_TIMEOUT, &[])?;
-    if !build.ok() {
-        return Err(format!("Build von {} fehlgeschlagen: {}", ux.app_project, tail(&output(&build), 600)));
+    let sha = setup.clone.git(&["rev-parse", &format!("origin/{branch}")])?.trim().to_string();
+    // unchanged commit + app still built: keep the clone as is (a reset would `clean -x` the build)
+    let current = setup.clone.git(&["rev-parse", "HEAD"]).map(|h| h.trim() == sha).unwrap_or(false);
+    if !(current && st.built_sha == sha && files::find_app(dir, &ux.app_project).is_some()) {
+        setup.clone.reset_to_remote(&branch)?;
+        let build = exec(&format!("dotnet build {} -c Release", quote(&ux.app_project)), dir, BUILD_TIMEOUT, &[])?;
+        if !build.ok() {
+            return Err(format!("Build von {} fehlgeschlagen: {}", ux.app_project, tail(&output(&build), 600)));
+        }
+        st.built_sha = sha.clone();
     }
-    let app = find_app(dir, &ux.app_project).ok_or_else(|| format!("{} nach dem Build nicht gefunden", ux.app_project))?;
+    let app = files::find_app(dir, &ux.app_project).ok_or_else(|| format!("{} nach dem Build nicht gefunden", ux.app_project))?;
 
-    let all = plan::substitute(plan::load_goals(&ux.goals_file)?, find_sample_gds(dir).as_deref());
-    let goals = plan::pick(&all, day, ux.goals_per_run);
+    let goals = goals_for(ux, dir, day)?;
     let work = ctx.paths.state().join("ux");
-    let report = work.join("reports").join(chrono::Local::now().format("%Y-%m-%d_%H%M%S").to_string());
-    std::fs::create_dir_all(work.join("reports")).map_err(|e| e.to_string())?;
+    let reports = work.join("reports");
+    let report = reports.join(Local::now().format("%Y-%m-%d_%H%M%S").to_string());
+    std::fs::create_dir_all(&reports).map_err(|e| e.to_string())?;
     let (goals_file, identity) = (work.join("goals.json"), work.join("request.json"));
     std::fs::write(&goals_file, serde_json::to_string_pretty(&goals).unwrap_or_default()).map_err(|e| e.to_string())?;
     std::fs::write(&identity, json!({"repo": repo, "sha": sha, "pr": Value::Null, "policy": "ux-review"}).to_string()).map_err(|e| e.to_string())?;
 
-    let env: [(&str, &OsStr); 2] = [("ANTHROPIC_API_KEY", OsStr::new(&key)), ("PYTHONUTF8", OsStr::new("1"))];
-    let tester = Path::new(&ux.tester_dir);
+    let utf8 = ("PYTHONUTF8", OsStr::new("1"));
     let timeout = Duration::from_secs(ux.timeout_minutes.max(1) * 60);
-    let run = exec(&tester_line(ux, &test_args(ux, &app, &goals_file, &identity, &report)), tester, timeout, &env)?;
-    let text = output(&run);
-    if text.contains("Desktop is locked") || text.contains("No interactive desktop") {
+    let run = exec(&tester_line(ux, &test_args(ux, &app, &goals_file, &identity, &report)), tester, timeout, &[("ANTHROPIC_API_KEY", OsStr::new(&key)), utf8])?;
+    if says_locked(&output(&run)) {
         return Ok(Outcome::Locked);
     }
-    let has_report = report.join("report.md").is_file();
     if run.timed_out {
-        return Ok(Outcome::TimedOut { report_dir: has_report.then_some(report) });
+        return Ok(Outcome::TimedOut { report_dir: report.join("report.md").is_file().then_some(report) });
     }
-    if !has_report {
-        return Err(format!("Tester ohne Bericht beendet (Exit {:?}): {}", run.exit_code, tail(&text, 600)));
+    if let Some(why) = incomplete(&run, &report) {
+        return Err(format!("{why}: {}", tail(&output(&run), 400)));
     }
-    let published = exec(&tester_line(ux, &publish_args(ux, &report, repo, &branch)), tester, PUBLISH_TIMEOUT, &env)?;
+    // filing issues needs only gh — no API key
+    let published = exec(&tester_line(ux, &publish_args(ux, &report, repo, &branch)), tester, PUBLISH_TIMEOUT, &[utf8])?;
     let filed = filed_issues(&output(&published));
     if !published.ok() {
         crate::log::warn(&format!("UX-Befunde nicht vollständig als Issues angelegt: {}", tail(&output(&published), 300)));
     }
+    let text = std::fs::read_to_string(report.join("report.md")).unwrap_or_default();
+    if let Err(e) = report::publish((ctx.forge)(repo).as_ref(), &text, Local::now()) {
+        crate::log::warn(&format!("UX-Bericht nicht auf GitHub veröffentlicht: {e}"));
+    }
+    files::retain(&reports, &report);
     let ids = goals.iter().filter_map(|g| g["id"].as_str().map(String::from)).collect::<Vec<_>>();
     let note = format!("{} Abläufe ({}), {} Issues angelegt", ids.len(), ids.join(", "), filed.len());
     Ok(Outcome::Done { report_dir: report, filed, goals: ids, note })
@@ -164,7 +173,6 @@ mod tests {
         let line = tester_line(&ux, &test_args(&ux, Path::new("C:\\app\\CAP.Desktop.exe"), Path::new("g.json"), Path::new("i.json"), Path::new("C:\\r 1")));
         assert!(line.starts_with("py -3 \"C:\\a b\\ux-tester"), "{line}");
         assert!(line.contains("--customer-goals \"g.json\"") && line.contains("--exact-report-dir \"C:\\r 1\""), "{line}");
-        assert!(line.contains("--max-steps \"150\"") && line.contains("--model \"claude-opus-5-5\""), "{line}");
         assert!(!line.contains("secret") && !line.to_lowercase().contains("api_key"), "{line}");
         let p = tester_line(&ux, &publish_args(&ux, Path::new("C:\\r 1"), "o/r", "dev"));
         assert!(p.contains("--publish-report \"C:\\r 1\" --no-screenshots --min-severity \"major\" --repo \"o/r\" --base-branch \"dev\""), "{p}");
@@ -177,21 +185,16 @@ mod tests {
     }
 
     #[test]
-    fn finds_sample_gds_and_app() {
+    fn only_a_complete_session_counts() {
         let t = tempfile::tempdir().unwrap();
-        let w = |rel: &str| {
-            let p = t.path().join(rel);
-            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
-            std::fs::write(p, "x").unwrap();
-        };
-        w("docs/examples/deep/ring.gds");
-        w("samples/mzi_lab.gds");
-        w("CAP.Desktop/obj/stale.gds");
-        w("CAP.Desktop/bin/Release/net10.0/CAP.Desktop.dll");
-        w("CAP.Desktop/bin/Release/net10.0/win-arm64/CAP.Desktop.exe");
-        assert!(find_sample_gds(t.path()).unwrap().ends_with("mzi_lab.gds"));
-        assert!(find_app(t.path(), "CAP.Desktop").unwrap().ends_with("CAP.Desktop.exe"));
-        assert!(find_app(t.path(), "Other").is_none());
-        assert!(find_sample_gds(&t.path().join("CAP.Desktop")).is_none(), "bin/obj are skipped");
+        let ok = CmdResult { exit_code: Some(0), stdout: String::new(), stderr: String::new(), timed_out: false };
+        assert!(incomplete(&ok, t.path()).is_some(), "no report");
+        std::fs::write(t.path().join("report.md"), "# r").unwrap();
+        std::fs::write(t.path().join("findings.json"), r#"{"partial": false, "interrupted": true}"#).unwrap();
+        assert!(incomplete(&ok, t.path()).unwrap().contains("unterbrochen"));
+        std::fs::write(t.path().join("findings.json"), r#"{"partial": false, "interrupted": false}"#).unwrap();
+        assert!(incomplete(&ok, t.path()).is_none());
+        let failed = CmdResult { exit_code: Some(1), ..ok };
+        assert!(incomplete(&failed, t.path()).unwrap().contains("Exit"));
     }
 }

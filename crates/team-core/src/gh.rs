@@ -202,6 +202,15 @@ impl Repo {
         list(&self.p(&format!("issues/{number}/comments?per_page=100")), ".[]")
     }
 
+    pub fn create_issue(&self, title: &str, body: &str) -> Result<Issue, String> {
+        let text = api("POST", &self.p("issues"), Some(&json!({ "title": title, "body": body })))?;
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    }
+
+    pub fn edit_issue_body(&self, number: u64, body: &str) -> Result<(), String> {
+        api("PATCH", &self.p(&format!("issues/{number}")), Some(&json!({ "body": body }))).map(|_| ())
+    }
+
     pub fn close_issue(&self, number: u64) -> Result<(), String> {
         api("PATCH", &self.p(&format!("issues/{number}")), Some(&json!({ "state": "closed" }))).map(|_| ())
     }

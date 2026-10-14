@@ -6,7 +6,6 @@
 
 use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, Timelike};
 use serde_json::Value;
-use std::path::Path;
 use team_core::config::UxReview;
 use team_core::state::UxState;
 
@@ -25,8 +24,13 @@ pub fn window_day(now: DateTime<Local>, hour: u32) -> NaiveDate {
     (now - Duration::hours((hour % 24) as i64)).date_naive()
 }
 
-/// Due: inside the window and this window has no finished attempt yet (a locked desktop
-/// is retried after `LOCKED_RETRY`; a run interrupted by a crash is not repeated).
+/// Attempts per window that end in an error (build, broken tester run) before giving up
+/// for the night.
+pub const MAX_ERROR_ATTEMPTS: u32 = 2;
+
+/// Due: inside the window and this window has no finished attempt yet. A locked desktop is
+/// retried after `LOCKED_RETRY`, an error once more; a run interrupted by a crash is not
+/// repeated the same night.
 pub fn due(st: &UxState, now: DateTime<Local>, hour: u32) -> bool {
     if !in_window(now, hour) {
         return false;
@@ -35,7 +39,12 @@ pub fn due(st: &UxState, now: DateTime<Local>, hour: u32) -> bool {
         return true;
     }
     let last = st.last_attempt.as_deref().and_then(team_core::state::parse_time);
-    st.last_result == "skipped-locked" && last.is_none_or(|t| now - t >= LOCKED_RETRY)
+    let retry = match st.last_result.as_str() {
+        "skipped-locked" => true,
+        "error" => st.attempts < MAX_ERROR_ATTEMPTS,
+        _ => false,
+    };
+    retry && last.is_none_or(|t| now - t >= LOCKED_RETRY)
 }
 
 /// `ux-<yyyymmdd>`: the cross-machine record that this day's review ran.
@@ -55,7 +64,7 @@ pub fn load_goals(goals_file: &str) -> Result<Vec<Value>, String> {
 }
 
 /// Fills `{SAMPLE_GDS}`; goals that need a sample are dropped when there is none.
-pub fn substitute(goals: Vec<Value>, sample: Option<&Path>) -> Vec<Value> {
+pub fn substitute(goals: Vec<Value>, sample: Option<&str>) -> Vec<Value> {
     goals
         .into_iter()
         .filter_map(|g| {
@@ -63,8 +72,7 @@ pub fn substitute(goals: Vec<Value>, sample: Option<&Path>) -> Vec<Value> {
             if !text.contains(SAMPLE_GDS) {
                 return Some(g);
             }
-            let path = sample?.display().to_string();
-            let escaped = serde_json::to_string(&path).ok()?;
+            let escaped = serde_json::to_string(sample?).ok()?;
             serde_json::from_str(&text.replace(SAMPLE_GDS, escaped.trim_matches('"'))).ok()
         })
         .collect()
@@ -113,6 +121,11 @@ mod tests {
         assert!(due(&st, at(15, 2, 41), 2), "locked desktop retried after 30 min");
         st.last_result = "running".into();
         assert!(!due(&st, at(15, 4, 0), 2), "a crashed run is not repeated the same night");
+        st.last_result = "error".into();
+        st.attempts = 1;
+        assert!(due(&st, at(15, 2, 41), 2), "an error is retried once");
+        st.attempts = 2;
+        assert!(!due(&st, at(15, 3, 30), 2), "but not again");
     }
 
     #[test]
@@ -128,10 +141,10 @@ mod tests {
     fn sample_placeholder_is_filled_or_the_goal_dropped() {
         let g = load_goals("").unwrap();
         let n = g.len();
-        let with = substitute(g.clone(), Some(Path::new("C:\\x\\mzi.gds")));
+        let with = substitute(g.clone(), Some("%TEMP%\\lunima-ux\\sample.gds"));
         assert_eq!(with.len(), n);
         let gds = with.iter().find(|x| x["id"] == "gds-import").unwrap();
-        assert!(gds["goal"].as_str().unwrap().contains("C:\\x\\mzi.gds"));
+        assert!(gds["goal"].as_str().unwrap().contains("%TEMP%\\lunima-ux\\sample.gds"));
         assert!(!with.iter().any(|x| x.to_string().contains(SAMPLE_GDS)));
         assert_eq!(substitute(g, None).len(), n - 1);
     }

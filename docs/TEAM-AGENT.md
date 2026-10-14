@@ -138,14 +138,24 @@ checkout (`tools/ux-tester`) drives the real desktop app as personas from Lunima
 learner's logic journeys, editing/undo, manufacturing path. `goals_per_run` journeys per night,
 rotating by day. Flow: clone on the integration branch → `dotnet build <app_project> -c
 Release` → tester in customer mode (isolated app, exact report folder
-`state/ux/reports/<stamp>`) → `--publish-report --no-screenshots` files `ux-finding` issues
-(no desktop captures, no local paths) → `state/ux-state.json`. The Product Owner prompt gets
-the newest report (≤ 3 days) as a non-gating section. It never blocks a merge.
+`state/ux/reports/<stamp>`, product context from the clone's ROADMAP/PERSONAS on the first
+journey, the sample GDS staged at a neutral path) → only a complete session (exit 0, not
+partial/interrupted) is used: `--publish-report --no-screenshots` files `ux-finding` issues
+(no API key needed) and the sanitised report replaces the body of the maintained issue
+"UX report (simulated users)" (label `ux-report`) → `state/ux-state.json` (current run and,
+separately, the last good report). Screenshots are deleted after processing; the newest 7
+report folders are kept. The Product Owner prompt shows the newest report (≤ 3 days, from the
+GitHub issue — so every machine sees it — else the local last good one) as fenced, untrusted,
+non-gating evidence. It never blocks a merge.
+
+The desktop lock is probed before building (Windows); an unchanged commit is not rebuilt.
+A locked desktop or an error releases the night's lock so another machine can try; a locked
+desktop is retried every 30 min, an error once.
 
 The tester needs the Anthropic API (a subscription can't operate a desktop): the key comes
 from `api_key_file` and is passed to the tester process only. A locked desktop is retried
-every 30 min inside the window. One machine per night: lock ref `refs/team-locks/ux-<yyyymmdd>`
-(kept as proof, older ones deleted).
+One machine per night: lock ref `refs/team-locks/ux-<yyyymmdd>` (kept as proof after a
+finished run, older ones deleted).
 
 ```toml
 [roles]

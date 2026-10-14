@@ -171,6 +171,22 @@ impl Forge for FakeForge {
         }
         Ok(())
     }
+    fn create_issue(&self, title: &str, body: &str) -> Result<Issue, String> {
+        let mut s = self.s.lock().unwrap();
+        let number = s.issues.keys().chain(s.prs.keys()).max().copied().unwrap_or(0) + 1;
+        let i = issue(number, title, body, &[]);
+        s.log.push(format!("issue {number}"));
+        s.issues.insert(number, i.clone());
+        Ok(i)
+    }
+    fn edit_issue_body(&self, number: u64, body: &str) -> Result<(), String> {
+        let mut s = self.s.lock().unwrap();
+        s.log.push(format!("edit-issue {number}"));
+        if let Some(i) = s.issues.get_mut(&number) {
+            i.body = Some(body.into());
+        }
+        Ok(())
+    }
     fn open_prs(&self) -> Result<Vec<PullRequest>, String> {
         Ok(self.s.lock().unwrap().prs.values().cloned().collect())
     }
@@ -280,7 +296,9 @@ pub fn origin(tmp: &Path, files: &[(&str, &str)]) -> std::path::PathBuf {
     run_git(None, &["clone", "-q", &origin.display().to_string(), &seed.display().to_string()], false).unwrap();
     std::fs::write(seed.join("README.md"), "seed").unwrap();
     for (name, text) in files {
-        std::fs::write(seed.join(name), text).unwrap();
+        let path = seed.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
     }
     let g = |a: &[&str]| run_git(Some(&seed), a, false).unwrap();
     g(&["add", "-A"]);
