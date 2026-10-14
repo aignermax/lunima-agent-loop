@@ -108,3 +108,14 @@ fn agent_dir_needs_main_py_and_src() {
     std::fs::remove_dir_all(dir.path().join("src")).unwrap();
     assert!(!is_agent_dir(dir.path()));
 }
+
+#[test]
+fn log_scan_includes_the_rotated_file_after_a_rotation() {
+    let dir = agent_dir();
+    std::fs::write(dir.path().join("agent.log.1"), "2026-10-14 08:00:00,000 [WARNING] PR #9 has 7 QA failures (>= 2)
+").unwrap();
+    std::fs::write(dir.path().join("agent.log"), "2026-10-14 08:01:00,000 [INFO] Sleeping 15s ...
+").unwrap();
+    let f = scan_log(dir.path(), None);
+    assert_eq!(f.qa_loops.iter().map(|(pr, n, _)| (*pr, *n)).collect::<Vec<_>>(), [(9, 7)]);
+}
