@@ -26,6 +26,8 @@ pub struct SessionState {
     pub pr_url: Option<String>,
     pub last_output: String,
     pub notes: Vec<String>,
+    /// coding finished and the PR exists — a resumed run continues with the review
+    pub in_review: bool,
 }
 
 impl Default for SessionState {
@@ -46,6 +48,7 @@ impl Default for SessionState {
             pr_url: None,
             last_output: String::new(),
             notes: vec![],
+            in_review: false,
         }
     }
 }
