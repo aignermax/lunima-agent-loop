@@ -30,10 +30,3 @@ windows-sys = { version = "0.59", features = [
 
 [dev-dependencies]
 tempfile = "3"
-
-[profile.release]
-opt-level = "s"
-lto = "thin"
-codegen-units = 1
-strip = true
-panic = "abort"

@@ -363,6 +363,7 @@ checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "num-traits",
+ "serde",
  "windows-link",
 ]
 
@@ -2868,6 +2869,28 @@ name = "target-lexicon"
 version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61c41af27dd6d1e27b1b16b489db798443478cef1f06a660c96db617ba5de3b1"
+
+[[package]]
+name = "team-agent"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde_json",
+ "team-core",
+ "tempfile",
+]
+
+[[package]]
+name = "team-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml",
+]
 
 [[package]]
 name = "tempfile"

@@ -39,16 +39,21 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF#refs/tags/v}"; else v="0.0.${GITHUB_RUN_NUMBER}"; fi
           echo "VERSION=$v" >> "$GITHUB_ENV"
 
-      - name: Rust toolchain (Control Center)
-        if: matrix.msi
+      - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Test + build Control Center
+      - name: Test + build team agent (all platforms)
+        shell: bash
+        run: |
+          cargo test -p team-core -p team-agent --locked
+          cargo build -p team-agent --release --locked
+
+      - name: Test + build Control Center (Windows)
         if: matrix.msi
         shell: bash
         run: |
-          cargo test --manifest-path control-center/Cargo.toml --locked
-          cargo build --manifest-path control-center/Cargo.toml --release --locked
+          cargo test -p lunima-po-center --locked
+          cargo build -p lunima-po-center --release --locked
 
       - name: Publish (NativeAOT)
         shell: bash
@@ -60,7 +65,8 @@ jobs:
           name="lunima-agent-loop-${VERSION}-${{ matrix.rid }}"
           mkdir -p "dist/$name"
           cp "out/lunima-agent-loop${{ matrix.ext }}" agent-loop.example.json README.md "dist/$name/"
-          if [[ -n "${{ matrix.msi }}" ]]; then cp control-center/target/release/lunima-po.exe out/ && cp out/lunima-po.exe "dist/$name/"; fi
+          cp "target/release/lunima-team-agent${{ matrix.ext }}" "dist/$name/"
+          if [[ -n "${{ matrix.msi }}" ]]; then cp target/release/lunima-po.exe out/ && cp out/lunima-po.exe "dist/$name/"; fi
           cd dist
           if [[ "${{ matrix.ext }}" == ".exe" ]]; then pwsh -NoProfile -Command "Compress-Archive -Path '$name' -DestinationPath '$name.zip'"; else tar czf "$name.tar.gz" "$name"; fi
           rm -rf "$name"
