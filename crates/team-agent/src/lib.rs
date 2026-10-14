@@ -9,6 +9,7 @@ pub mod forge;
 pub mod llm;
 pub mod log;
 pub mod pr_text;
+pub mod qa;
 pub mod repos;
 pub mod review;
 pub mod role;
