@@ -80,7 +80,8 @@ impl Llm for ClaudeCli {
             env: job.env.clone(),
             settings_file: Some(self.settings_file.clone()),
             log_file: Some(log_file),
-            inactivity: self.inactivity,
+            // long foreground commands are allowed up to the hard limit
+            inactivity: job.max_duration.map_or(self.inactivity, |d| d.max(self.inactivity)),
             deadline: job.max_duration,
             on_tick: Some(&tick),
         };

@@ -142,7 +142,7 @@ pub fn apply_env(c: &mut TeamConfig, env: &BTreeMap<String, String>) {
 }
 
 /// Applies the PO loop's agent-loop.json (the PO role itself stays off until it is ported).
-pub fn apply_loop_config(c: &mut TeamConfig, json: &serde_json::Value) {
+pub fn apply_loop_config(c: &mut TeamConfig, json: &serde_json::Value, loop_root: Option<&Path>) {
     let s = |k: &str| json.as_object().and_then(|o| o.iter().find(|(key, _)| key.eq_ignore_ascii_case(k))).and_then(|(_, v)| v.as_str()).map(String::from);
     let n = |k: &str| json.as_object().and_then(|o| o.iter().find(|(key, _)| key.eq_ignore_ascii_case(k))).and_then(|(_, v)| v.as_u64());
     let po = &mut c.product_owner;
@@ -157,6 +157,8 @@ pub fn apply_loop_config(c: &mut TeamConfig, json: &serde_json::Value) {
     }
     if let Some(v) = n("ownerIntervalMinutes") {
         po.interval_minutes = v;
+        // the C# loop had no daily cap: allow one pass per interval
+        po.max_runs_per_day = (24 * 60 / v.max(1)).max(1) as u32;
     }
     if let Some(v) = n("ownerTimeoutMinutes") {
         po.timeout_minutes = v;
@@ -167,9 +169,9 @@ pub fn apply_loop_config(c: &mut TeamConfig, json: &serde_json::Value) {
     // the Python desktop customer only runs from a repo checkout; keep it as a command
     let enabled = json.as_object().and_then(|o| o.iter().find(|(k, _)| k.eq_ignore_ascii_case("customerEnabled"))).and_then(|(_, v)| v.as_bool()).unwrap_or(false);
     if enabled {
-        let python = s("customerPython").unwrap_or_else(|| "python".into());
-        let var = if cfg!(windows) { "%LUNIMA_CUSTOMER_FEEDBACK%" } else { "$LUNIMA_CUSTOMER_FEEDBACK" };
-        po.customer_command = format!("{python} tools/ux-tester/customer_cycle.py --repo {} --base {} --feedback \"{var}\"", po.repo, po.integration_branch);
+        po.customer_command = customer_command(json, po, &c.labels.pr, loop_root);
+        let (t, reviews) = (n("customerTimeoutMinutes").unwrap_or(20), n("customerMaxReviewsPerCycle").unwrap_or(2));
+        po.customer_timeout_minutes = (t + 25) * reviews.max(1) + 5;
     }
     if s("ownerRunner").is_some_and(|r| r.eq_ignore_ascii_case("claude")) {
         if let Some(m) = s("ownerModel") {
@@ -185,6 +187,39 @@ pub fn apply_loop_config(c: &mut TeamConfig, json: &serde_json::Value) {
     if let Some(v) = s("blockedLabel") {
         c.labels.needs_human = v;
     }
+}
+
+/// The C# loop's customer invocation as one command line (absolute script path: the
+/// command runs in the agent's data folder, the script lives in the loop checkout).
+fn customer_command(json: &serde_json::Value, po: &crate::config::ProductOwner, pr_label: &str, loop_root: Option<&Path>) -> String {
+    let get = |k: &str| json.as_object().and_then(|o| o.iter().find(|(key, _)| key.eq_ignore_ascii_case(k))).map(|(_, v)| v.clone());
+    let q = |s: &str| format!("\"{s}\"");
+    let var = |name: &str| if cfg!(windows) { format!("%{name}%") } else { format!("${name}") };
+    let python = get("customerPython").and_then(|v| v.as_str().map(String::from)).unwrap_or_else(|| "python".into());
+    let script = loop_root.map(|r| r.join("tools").join("ux-tester").join("customer_cycle.py").display().to_string()).unwrap_or_else(|| "tools/ux-tester/customer_cycle.py".into());
+    let mut cmd = format!(
+        "{} {} --repo {} --base {} --label {} --state-dir {} --feedback {}",
+        q(&python),
+        q(&script),
+        po.repo,
+        po.integration_branch,
+        pr_label,
+        q(&var("LUNIMA_CUSTOMER_STATE_DIR")),
+        q(&var("LUNIMA_CUSTOMER_FEEDBACK"))
+    );
+    let num = |k: &str| get(k).and_then(|v| v.as_u64());
+    if let Some(p) = get("customerProject").and_then(|v| v.as_str().map(String::from)) {
+        cmd.push_str(&format!(" --project {}", q(&p)));
+    }
+    if let Some(m) = get("customerModel").and_then(|v| v.as_str().map(String::from)) {
+        cmd.push_str(&format!(" --model {m}"));
+    }
+    for (key, flag, factor) in [("customerMaxReviewsPerCycle", "--max-reviews", 1), ("customerMaxAgeHours", "--max-age", 3600), ("customerMaxSteps", "--max-steps", 1), ("customerMaxTurns", "--max-turns", 1), ("customerTimeoutMinutes", "--timeout", 60)] {
+        if let Some(v) = num(key) {
+            cmd.push_str(&format!(" {flag} {}", v * factor));
+        }
+    }
+    cmd
 }
 
 /// Builds a config from whatever of the two legacy files exists.
@@ -217,7 +252,7 @@ pub fn from_legacy(env_file: Option<&Path>, loop_config: Option<&Path>) -> Resul
     if let Some(p) = loop_config {
         let text = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
         let json = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| format!("{}: {e}", p.display()))?;
-        apply_loop_config(&mut c, &json);
+        apply_loop_config(&mut c, &json, p.parent());
     }
     c.validate()?;
     Ok(c)

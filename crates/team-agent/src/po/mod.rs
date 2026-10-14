@@ -40,6 +40,23 @@ impl ProductOwner {
     }
 }
 
+/// Held for the whole pass (`refs/team-locks/po-running`).
+const RUN_LOCK: &str = "po-running";
+
+impl ProductOwner {
+    /// A run lock older than the pass time limit (+10 min) belongs to a crashed machine.
+    fn break_stale_run_lock(ctx: &Ctx, forge: &dyn crate::forge::Forge) -> Result<bool, String> {
+        let Some(info) = forge.lock_info(RUN_LOCK)? else { return forge.try_lock(RUN_LOCK, &ctx.machine) };
+        let limit = chrono::Duration::minutes(ctx.cfg.product_owner.timeout_minutes as i64 + 10);
+        if chrono::Utc::now() - info.created < limit {
+            return Ok(false);
+        }
+        crate::log::warn(&format!("PO-Laufsperre von {} ist veraltet — wird gebrochen", info.owner));
+        forge.unlock(RUN_LOCK)?;
+        forge.try_lock(RUN_LOCK, &ctx.machine)
+    }
+}
+
 impl Role for ProductOwner {
     fn name(&self) -> &'static str {
         "product-owner"
@@ -68,13 +85,21 @@ impl Role for ProductOwner {
             st.save(&state_dir);
             return Ok(false);
         }
+        // one pass at a time across machines (a late pass of the previous slot may still run)
+        if !forge.try_lock(RUN_LOCK, &ctx.machine)? && !Self::break_stale_run_lock(ctx, forge.as_ref())? {
+            return Ok(false);
+        }
         let key = schedule::slot_key(interval, slot);
-        self.settled_slot = Some(slot);
-        if !forge.try_lock(&key, &ctx.machine)? {
+        let claimed = forge.try_lock(&key, &ctx.machine);
+        if !matches!(claimed, Ok(true)) {
+            let _ = forge.unlock(RUN_LOCK);
+            claimed?; // an API error: try the slot again next cycle
+            self.settled_slot = Some(slot);
             st.result("skipped", "Durchlauf dieses Intervalls lief auf einem anderen Rechner", Some(next));
             st.save(&state_dir);
             return Ok(false);
         }
+        self.settled_slot = Some(slot);
         for old in [slot - 1, slot - 2] {
             let _ = forge.unlock(&schedule::slot_key(interval, old));
         }
@@ -83,7 +108,9 @@ impl Role for ProductOwner {
         st.save(&state_dir);
         ctx.heartbeat.report("working", detail!["repo" => po.repo, "prs" => prs.len(), "issues" => issues.len()]);
         crate::log::info(&format!("PO-Durchlauf für {} ({} PRs, {} Issues)", po.repo, prs.len(), issues.len()));
-        match pass::run(ctx, &prs, &issues) {
+        let outcome = pass::run(ctx, &prs, &issues);
+        let _ = forge.unlock(RUN_LOCK);
+        match outcome {
             Ok(Ended::Ok(note)) => Self::finish(ctx, &mut st, "ok", &note, next),
             Ok(Ended::Timeout(note)) => Self::finish(ctx, &mut st, "timeout", &note, next),
             Ok(Ended::Error(note)) => Self::finish(ctx, &mut st, "error", &note, next),

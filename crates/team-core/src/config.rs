@@ -232,6 +232,8 @@ pub struct ProductOwner {
     pub customer_command: String,
     /// evidence older than this is not acceptable for a merge
     pub customer_max_age_hours: u32,
+    /// time budget of the customer command (desktop reviews + checkout/build per review)
+    pub customer_timeout_minutes: u64,
 }
 
 impl Default for ProductOwner {
@@ -247,6 +249,7 @@ impl Default for ProductOwner {
             max_turns: 150,
             customer_command: String::new(),
             customer_max_age_hours: 24,
+            customer_timeout_minutes: 95,
         }
     }
 }

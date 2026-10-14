@@ -57,14 +57,20 @@ fn loop_config_import_sets_po_but_keeps_role_off() {
         "workersEnabled": false
     });
     let mut c = TeamConfig::default();
-    apply_loop_config(&mut c, &json);
+    apply_loop_config(&mut c, &json, None);
     assert_eq!(c.product_owner.repo, "aignermax/Lunima");
     assert_eq!(c.product_owner.interval_minutes, 240);
     assert!(!c.roles.product_owner);
     assert!(c.product_owner.customer_command.is_empty(), "customer review stays off unless enabled");
     let mut c = TeamConfig::default();
-    apply_loop_config(&mut c, &serde_json::json!({"githubRepo": "o/r", "customerEnabled": true, "customerMaxAgeHours": 12}));
-    assert!(c.product_owner.customer_command.contains("customer_cycle.py --repo o/r"));
+    apply_loop_config(&mut c, &serde_json::json!({"githubRepo": "o/r", "customerEnabled": true, "customerMaxAgeHours": 12, "customerPython": "C:/Program Files/Py/python.exe", "customerMaxReviewsPerCycle": 2, "customerTimeoutMinutes": 20, "ownerIntervalMinutes": 60}), Some(std::path::Path::new("L")));
+    let cmd = &c.product_owner.customer_command;
+    assert!(cmd.contains("--state-dir") && cmd.contains("--max-age 43200") && cmd.contains("--max-reviews 2"), "{cmd}");
+    assert!(cmd.starts_with("\"C:/Program Files/Py/python.exe\""), "{cmd}");
+    assert!(cmd.contains("customer_cycle.py") && cmd.contains("L"), "{cmd}");
+    assert_eq!(c.product_owner.customer_timeout_minutes, 95);
+    assert_eq!(c.product_owner.max_runs_per_day, 24);
+    assert!(c.product_owner.customer_command.contains("--repo o/r --base"));
     assert_eq!(c.product_owner.customer_max_age_hours, 12);
 }
 

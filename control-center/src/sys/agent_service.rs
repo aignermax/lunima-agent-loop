@@ -56,7 +56,7 @@ pub fn register_script(exe: &Path) -> String {
 /// The systemd user unit for `exe`.
 pub fn unit_file(exe: &Path) -> String {
     format!(
-        "[Unit]\nDescription=Lunima Team Agent (Coder, QA, PR-Feedback, Product Owner)\nAfter=network-online.target\n\n[Service]\nExecStart={} run\nRestart=on-failure\nRestartSec=60\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Lunima Team Agent (Coder, QA, PR-Feedback, Product Owner)\nAfter=network-online.target\n\n[Service]\nEnvironment=PATH=%h/.local/bin:%h/.npm-global/bin:%h/bin:/usr/local/bin:/usr/bin:/bin\nExecStart={} run\nRestart=on-failure\nRestartSec=60\n\n[Install]\nWantedBy=default.target\n",
         exe.display()
     )
 }

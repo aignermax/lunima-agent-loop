@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::fake::{self, FakeForge, FakeLlm};
+use crate::forge::Forge;
 use crate::llm::LlmError;
 use std::sync::Arc;
 
@@ -138,4 +139,19 @@ fn no_po_repo_means_no_work() {
     ctx.cfg.product_owner.repo.clear();
     assert_eq!(ProductOwner::default().cycle(&ctx), Ok(false));
     assert_eq!(w.llm.calls(), 0);
+}
+
+#[test]
+fn a_running_pass_elsewhere_blocks_the_next_slot_until_stale() {
+    let w = world(with_agent_pr(), FakeLlm::new().reply("done", None));
+    let a = w.ctx("A");
+    w.forge.try_lock(RUN_LOCK, "B").unwrap(); // B is still in a pass
+    let mut po = ProductOwner::default();
+    assert_eq!(po.cycle(&a), Ok(false));
+    assert_eq!(w.llm.calls(), 0);
+    assert!(!w.forge.s.lock().unwrap().locks.keys().any(|k| k.starts_with("po-slot")), "slot not taken");
+    w.forge.age_lock(RUN_LOCK, Duration::from_secs(80 * 60)); // 60 min limit + 10 min grace passed
+    let mut po = ProductOwner::default();
+    assert_eq!(po.cycle(&a), Ok(true));
+    assert!(!w.forge.s.lock().unwrap().locks.contains_key(RUN_LOCK), "run lock released after the pass");
 }

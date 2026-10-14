@@ -6,6 +6,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=PATH=%h/.local/bin:%h/.npm-global/bin:%h/bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/lunima-team-agent run
 Restart=on-failure
 RestartSec=60

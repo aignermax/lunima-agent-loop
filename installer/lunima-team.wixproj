@@ -1,5 +1,5 @@
 <Project Sdk="WixToolset.Sdk/5.0.2">
-  <!-- Builds lunima-team-<version>-win-<arch>.msi from the Rust release binaries in targetelease
+  <!-- Builds lunima-team-<version>-win-<arch>.msi from the Rust release binaries in target\release
        (cargo build with the release profile for packages team-agent and lunima-po-center), e.g.
          dotnet build installer/lunima-team.wixproj -c Release -p:InstallerPlatform=arm64 -p:AgentVersion=0.2.0 -->
   <PropertyGroup>
