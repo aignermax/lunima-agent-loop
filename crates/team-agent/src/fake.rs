@@ -68,9 +68,16 @@ impl FakeForge {
         let mut s = self.s.lock().unwrap();
         s.next_id += 1;
         let id = s.next_id;
-        let c = Comment { id, body: body.into(), user: Some(User { login: "someone".into() }), created_at: format!("2026-10-14T10:{:02}:00Z", id % 60) };
+        let c = Comment { id, body: body.into(), user: Some(User { login: "someone".into() }), created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true) };
         s.comments.entry(number).or_default().push(c);
         id
+    }
+    /// Backdates a comment (e.g. an abandoned claim from hours ago).
+    pub fn set_comment_time(&self, number: u64, id: u64, created_at: &str) {
+        let mut s = self.s.lock().unwrap();
+        if let Some(c) = s.comments.get_mut(&number).and_then(|l| l.iter_mut().find(|c| c.id == id)) {
+            c.created_at = created_at.into();
+        }
     }
     pub fn log(&self) -> Vec<String> {
         self.s.lock().unwrap().log.clone()
