@@ -11,7 +11,14 @@ use team_core::config::TeamConfig;
 use team_core::paths::Paths;
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // `--home <dir>` anywhere = data folder (the Control Center passes it for non-default homes)
+    if let Some(i) = args.iter().position(|a| a == "--home") {
+        if let Some(dir) = args.get(i + 1).cloned() {
+            std::env::set_var(team_core::paths::ENV_HOME, dir);
+            args.drain(i..=i + 1);
+        }
+    }
     let code = match args.first().map(String::as_str) {
         Some("init") => init(&args[1..]),
         Some("status") => status(),
@@ -113,6 +120,8 @@ fn single_instance(p: &Paths) -> Option<std::fs::File> {
     let _ = p.ensure();
     let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(p.state().join("agent.lock")).ok()?;
     file.try_lock().ok()?;
+    // the lock file itself is unreadable for others on Windows: the pid goes next to it
+    let _ = std::fs::write(p.state().join("agent.pid"), std::process::id().to_string());
     Some(file)
 }
 

@@ -13,6 +13,21 @@ pub const TASK_NAME: &str = "LunimaTeamAgent";
 pub const UNIT: &str = "lunima-team-agent";
 pub const EXE: &str = if cfg!(windows) { "lunima-team-agent.exe" } else { "lunima-team-agent" };
 
+/// A non-default data folder (`lunima-po --home`): the agent must use the same one.
+static HOME: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+pub fn set_home(dir: PathBuf) {
+    let _ = HOME.set(dir);
+}
+
+/// `run` plus `--home "<dir>"` when the Control Center runs on a non-default folder.
+fn run_args() -> String {
+    match HOME.get() {
+        Some(h) => format!("run --home \"{}\"", h.display()),
+        None => "run".into(),
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ServiceInfo {
     /// starts with the user's session (task exists / unit enabled)
@@ -40,7 +55,7 @@ fn ps_quote(s: &str) -> String {
 
 /// PowerShell that (re)registers the at-logon task for the current user.
 pub fn register_script(exe: &Path) -> String {
-    let args = format!("--headless \"{}\" run", exe.display());
+    let args = format!("--headless \"{}\" {}", exe.display(), run_args());
     format!(
         "$u = \"$env:USERDOMAIN\\$env:USERNAME\"\n\
          $a = New-ScheduledTaskAction -Execute 'conhost.exe' -Argument {args} -WorkingDirectory {dir}\n\
@@ -56,8 +71,9 @@ pub fn register_script(exe: &Path) -> String {
 /// The systemd user unit for `exe`.
 pub fn unit_file(exe: &Path) -> String {
     format!(
-        "[Unit]\nDescription=Lunima Team Agent (Coder, QA, PR-Feedback, Product Owner)\nAfter=network-online.target\n\n[Service]\nEnvironment=PATH=%h/.local/bin:%h/.npm-global/bin:%h/bin:/usr/local/bin:/usr/bin:/bin\nExecStart={} run\nRestart=on-failure\nRestartSec=60\n\n[Install]\nWantedBy=default.target\n",
-        exe.display()
+        "[Unit]\nDescription=Lunima Team Agent (Coder, QA, PR-Feedback, Product Owner)\nAfter=network-online.target\n\n[Service]\nEnvironment=PATH=%h/.local/bin:%h/.npm-global/bin:%h/bin:/usr/local/bin:/usr/bin:/bin\nExecStart=\"{}\" {}\nRestart=on-failure\nRestartSec=60\n\n[Install]\nWantedBy=default.target\n",
+        exe.display(),
+        run_args()
     )
 }
 
@@ -110,10 +126,10 @@ fn ensure_unit(exe: &Path) -> Result<(), String> {
 }
 
 /// Start / stop / restart, through the task or unit when autostart is set up.
-pub fn control(verb: Verb, exe: &Path, info: Option<&ServiceInfo>) -> Result<(), String> {
+pub fn control(verb: Verb, exe: &Path, info: Option<&ServiceInfo>, state: &Path) -> Result<(), String> {
     let managed = info.is_some_and(|i| i.autostart);
     if matches!(verb, Verb::Stop | Verb::Restart) {
-        stop(managed)?;
+        stop(managed, state)?;
     }
     if verb == Verb::Stop {
         return Ok(());
@@ -129,7 +145,7 @@ pub fn control(verb: Verb, exe: &Path, info: Option<&ServiceInfo>) -> Result<(),
     spawn(exe)
 }
 
-fn stop(managed: bool) -> Result<(), String> {
+fn stop(managed: bool, state: &Path) -> Result<(), String> {
     if managed && !cfg!(windows) {
         let mut c = hidden("systemctl");
         c.args(systemctl_args("stop"));
@@ -139,20 +155,25 @@ fn stop(managed: bool) -> Result<(), String> {
         let _ = super::powershell(&format!("Stop-ScheduledTask -TaskName '{TASK_NAME}' -ErrorAction SilentlyContinue"));
     }
     // the task's conhost may leave the daemon behind; a spawned daemon has no task at all
-    let mut c = hidden(if cfg!(windows) { "taskkill" } else { "pkill" });
-    if cfg!(windows) {
-        c.args(["/IM", EXE, "/T", "/F"]);
-    } else {
-        c.args(["-x", UNIT]);
+    if let Some(pid) = crate::core::agent_files::agent_pid(state) {
+        super::process::terminate(pid);
     }
-    let _ = run(c); // "no such process" is fine
+    if cfg!(windows) {
+        let mut c = hidden("taskkill");
+        c.args(["/IM", EXE, "/T", "/F"]);
+        let _ = run(c); // "no such process" is fine
+    }
     Ok(())
 }
 
 /// Background daemon without console window (survives this app).
 fn spawn(exe: &Path) -> Result<(), String> {
     let mut cmd = hidden(exe);
-    cmd.arg("run").stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    cmd.arg("run");
+    if let Some(h) = HOME.get() {
+        cmd.arg("--home").arg(h);
+    }
+    cmd.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     if let Some(dir) = exe.parent() {
         cmd.current_dir(dir);
     }
@@ -176,7 +197,7 @@ mod tests {
     #[test]
     fn unit_runs_the_daemon_and_restarts_on_failure() {
         let u = unit_file(Path::new("/usr/bin/lunima-team-agent"));
-        assert!(u.contains("ExecStart=/usr/bin/lunima-team-agent run"));
+        assert!(u.contains("ExecStart=\"/usr/bin/lunima-team-agent\" run"), "{u}");
         assert!(u.contains("Restart=on-failure") && u.contains("RestartSec=60") && u.contains("WantedBy=default.target"));
         assert_eq!(systemctl_args("is-active"), ["--user", "is-active", "lunima-team-agent"]);
     }

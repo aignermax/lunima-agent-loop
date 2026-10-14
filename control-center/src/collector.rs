@@ -23,7 +23,10 @@ const TOML_REFRESH: Duration = Duration::from_secs(600);
 #[derive(Debug, Clone)]
 pub enum Action {
     RefreshAll,
+    /// settings page: everything except the repository list
     SaveConfig(Box<TeamConfig>),
+    /// projects page: only the repository list
+    SaveRepos(Vec<team_core::config::RepoConfig>),
     /// import legacy settings (.env / agent-loop.json) and write team.toml
     CreateConfig,
     SavePrompt(PathBuf, String),
@@ -43,6 +46,7 @@ impl Action {
         match self {
             Action::Agent(v) => format!("Team-Agent {v:?}"),
             Action::SaveConfig(_) => "Einstellungen speichern".into(),
+            Action::SaveRepos(_) => "Projekte speichern".into(),
             Action::CreateConfig => "Konfiguration anlegen".into(),
             other => format!("{other:?}").chars().take(40).collect(),
         }
@@ -199,7 +203,17 @@ impl Worker {
         let exe = || agent_service::find_exe().ok_or_else(|| "lunima-team-agent nicht gefunden".to_string());
         match action {
             Action::RefreshAll => Ok("Aktualisiert".into()),
-            Action::SaveConfig(cfg) => cfg.validate().and_then(|_| cfg.save(&self.paths.config())).map(|_| "Gespeichert — gilt ab dem nächsten Zyklus jeder Rolle".into()),
+            Action::SaveConfig(cfg) => {
+                // repos may have changed on disk meanwhile (Projects page, another tool)
+                let current = TeamConfig::load(&self.paths.config())?;
+                let cfg = (**cfg).clone().with_repos_of(&current);
+                cfg.validate().and_then(|_| cfg.save(&self.paths.config())).map(|_| "Gespeichert — gilt ab dem nächsten Zyklus jeder Rolle".into())
+            }
+            Action::SaveRepos(repos) => {
+                let mut cfg = TeamConfig::load(&self.paths.config())?;
+                cfg.repos = repos.clone();
+                cfg.validate().and_then(|_| cfg.save(&self.paths.config())).map(|_| "Projekte gespeichert".into())
+            }
             Action::CreateConfig => crate::core::setup::create_config(&self.paths, team_core::import::legacy_candidates()),
             Action::SavePrompt(path, text) => save_prompt(path, text),
             Action::DeletePrompt(path) => match std::fs::remove_file(path) {
@@ -219,7 +233,7 @@ impl Worker {
             }
             Action::Agent(verb) => {
                 let info = self.snap().service.and_then(|s| s.ok());
-                agent_service::control(*verb, &exe()?, info.as_ref())?;
+                agent_service::control(*verb, &exe()?, info.as_ref(), &state)?;
                 Ok(match verb {
                     Verb::Start => "Team-Agent gestartet",
                     Verb::Stop => "Team-Agent gestoppt",

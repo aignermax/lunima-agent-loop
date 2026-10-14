@@ -105,27 +105,41 @@ mod imp {
 
     static LOCK: OnceLock<std::fs::File> = OnceLock::new();
 
+    // a hidden (unmapped) window can't be re-shown through egui: minimise instead
     pub fn show_main() {
         if let Some(ctx) = super::CTX.get() {
-            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(false));
             ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Focus);
             ctx.request_repaint();
         }
     }
     pub fn hide_main() {
         if let Some(ctx) = super::CTX.get() {
-            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(false));
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(true));
         }
     }
+    fn runtime_dir() -> std::path::PathBuf {
+        std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir)
+    }
     /// An OS file lock in the runtime folder (released automatically when the app exits).
+    /// A second start asks the running one to show its window (request file) and exits.
     pub fn claim_single_instance() -> bool {
-        let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let dir = runtime_dir();
+        let request = dir.join("lunima-po.show");
         let Ok(file) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("lunima-po.lock")) else { return true };
         if file.try_lock().is_err() {
-            eprintln!("Das Control Center läuft bereits.");
+            let _ = std::fs::write(&request, b"show");
+            eprintln!("Das Control Center läuft bereits — sein Fenster wird nach vorne geholt.");
             return false;
         }
         let _ = LOCK.set(file);
+        let _ = std::fs::remove_file(&request);
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            if std::fs::remove_file(&request).is_ok() {
+                show_main();
+            }
+        });
         true
     }
     pub fn start_timer(_ms: u32, _f: impl Fn() + 'static) {}

@@ -56,14 +56,13 @@ fn history_newest_first_with_machine() {
 }
 
 #[test]
-fn lock_file_tells_whether_the_daemon_runs() {
+fn pid_file_tells_whether_the_daemon_runs() {
     let dir = tempfile::tempdir().unwrap();
     assert!(!agent_running(dir.path()));
-    let path = dir.path().join(LOCK_FILE);
-    let held = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(&path).unwrap();
-    held.try_lock().unwrap();
-    assert!(agent_running(dir.path()));
-    drop(held);
+    std::fs::write(dir.path().join(PID_FILE), std::process::id().to_string()).unwrap();
+    assert_eq!(agent_pid(dir.path()), Some(std::process::id()));
+    assert!(!agent_running(dir.path()), "a live pid of another program is not the agent");
+    std::fs::write(dir.path().join(PID_FILE), "4294967").unwrap();
     assert!(!agent_running(dir.path()));
 }
 

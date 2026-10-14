@@ -308,14 +308,27 @@ impl TeamConfig {
     }
 
     /// Writes via a temp file so a crash never leaves a half-written config.
+    /// Writes the file atomically. Keys this version doesn't know (written by a newer agent
+    /// or by hand) are kept; comments are not (TOML round trip).
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        let text = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let mut doc: toml::Table = toml::Table::try_from(self).map_err(|e| e.to_string())?;
+        if let Some(old) = std::fs::read_to_string(path).ok().and_then(|t| t.parse::<toml::Table>().ok()) {
+            keep_unknown(&mut doc, old);
+        }
+        let text = toml::to_string_pretty(&doc).map_err(|e| e.to_string())?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let tmp = path.with_extension("toml.tmp");
         std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    }
+
+    /// Applies settings edited elsewhere onto the file's current content: everything but
+    /// the repository list (the Projects page owns that).
+    pub fn with_repos_of(mut self, current: &TeamConfig) -> Self {
+        self.repos = current.repos.clone();
+        self
     }
 
     pub fn repo(&self, name: &str) -> Option<&RepoConfig> {
@@ -348,6 +361,19 @@ impl TeamConfig {
             return Err("poll_seconds muss größer als 0 sein.".into());
         }
         Ok(())
+    }
+}
+
+/// Copies keys of `old` that `new` lacks, recursively through tables.
+fn keep_unknown(new: &mut toml::Table, old: toml::Table) {
+    for (k, v) in old {
+        match (new.get_mut(&k), v) {
+            (None, v) => {
+                new.insert(k, v);
+            }
+            (Some(toml::Value::Table(n)), toml::Value::Table(o)) => keep_unknown(n, o),
+            _ => {}
+        }
     }
 }
 

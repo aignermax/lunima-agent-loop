@@ -1,6 +1,7 @@
 //! Everything that talks to the outside world: the agent daemon, gh, tool probes, autostart.
 
 pub mod agent_service;
+pub mod process;
 pub mod autostart;
 pub mod github;
 pub mod probes;

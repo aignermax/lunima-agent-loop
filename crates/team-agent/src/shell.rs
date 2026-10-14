@@ -2,8 +2,20 @@
 //! platform shell (`cmd /C` on Windows, `sh -c` elsewhere), killing the whole tree on timeout.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 use team_core::proc::{command, run};
+use team_core::state::Heartbeat;
+
+thread_local! {
+    static HEARTBEAT: std::cell::RefCell<Option<Arc<Heartbeat>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// The role thread's heartbeat, refreshed every minute while a command runs (builds and
+/// customer reviews can take longer than the Control Center's "not responding" limit).
+pub fn set_heartbeat(hb: Arc<Heartbeat>) {
+    HEARTBEAT.with(|h| *h.borrow_mut() = Some(hb));
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CmdResult {
@@ -44,7 +56,24 @@ pub fn run_shell_env(line: &str, cwd: &Path, timeout: Duration, env: &[(&str, &s
     for (k, v) in env {
         cmd.env(k, v);
     }
-    let out = run(cmd, Some(cwd), timeout).map_err(|e| format!("`{line}` konnte nicht gestartet werden: {e}"))?;
+    let cwd = cwd.to_path_buf();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(run(cmd, Some(&cwd), timeout));
+    });
+    let hb = HEARTBEAT.with(|h| h.borrow().clone());
+    let out = loop {
+        match rx.recv_timeout(Duration::from_secs(60)) {
+            Ok(r) => break r,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if let Some(h) = &hb {
+                    h.touch();
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Err(format!("`{line}`: Ausführung abgebrochen")),
+        }
+    };
+    let out = out.map_err(|e| format!("`{line}` konnte nicht gestartet werden: {e}"))?;
     Ok(CmdResult { exit_code: out.status, stdout: out.stdout, stderr: out.stderr, timed_out: out.timed_out })
 }
 

@@ -62,7 +62,7 @@ impl ProjectsPage {
             ui.add_enabled_ui(dirty, |ui| {
                 if primary(ui, "Speichern") {
                     if let Some(cfg) = self.draft.take() {
-                        handle.send(Action::SaveConfig(Box::new(cfg)));
+                        handle.send(Action::SaveRepos(cfg.repos));
                     }
                     self.error = None;
                 }

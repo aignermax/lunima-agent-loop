@@ -58,6 +58,9 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     let args = parse_args();
+    if let Some(h) = &args.home {
+        crate::sys::agent_service::set_home(h.clone());
+    }
     let home = args.home.or_else(team_core::paths::Paths::default_root).unwrap_or_else(|| PathBuf::from("lunima-team"));
     let paths = team_core::paths::Paths::new(home);
     // a new machine starts in the setup assistant
@@ -70,7 +73,14 @@ fn main() -> eframe::Result<()> {
         .with_inner_size([1240.0, 820.0])
         .with_min_inner_size([900.0, 600.0])
         .with_icon(app_icon())
-        .with_visible(!args.start_hidden);
+        // Linux: a hidden window can't be shown again from the tray — start minimised instead
+        .with_visible(!args.start_hidden || !cfg!(windows));
+    let minimise_at_start = args.start_hidden && !cfg!(windows);
     let options = eframe::NativeOptions { viewport, persist_window: true, ..Default::default() };
-    eframe::run_native(win::TITLE, options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, handle, page)))))
+    eframe::run_native(win::TITLE, options, Box::new(move |cc| {
+        if minimise_at_start {
+            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+        }
+        Ok(Box::new(app::App::new(cc, handle, page)))
+    }))
 }

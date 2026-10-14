@@ -11,7 +11,7 @@ use std::path::Path;
 use team_core::state::{parse_time, write_atomic, CONTROL_FILE, HISTORY_FILE};
 
 const LOG_TAIL_BYTES: u64 = 768 * 1024;
-const LOCK_FILE: &str = "agent.lock";
+const PID_FILE: &str = "agent.pid";
 
 /// What a role last reported in `state/status-<role>.json`.
 #[derive(Debug, Clone, Default)]
@@ -143,16 +143,14 @@ pub fn set_pause(state: &Path, role: &str, reason: Option<&str>) -> Result<(), S
     write_atomic(&state.join(CONTROL_FILE), text.as_bytes()).map_err(|e| e.to_string())
 }
 
-/// The daemon holds an OS lock on `state/agent.lock` while it runs.
+/// The daemon writes its pid to `state/agent.pid` after taking `agent.lock`. Probing the
+/// lock itself would briefly hold it and make a just-starting daemon exit.
+pub fn agent_pid(state: &Path) -> Option<u32> {
+    std::fs::read_to_string(state.join(PID_FILE)).ok()?.trim().parse().ok()
+}
+
 pub fn agent_running(state: &Path) -> bool {
-    let path = state.join(LOCK_FILE);
-    if !path.is_file() {
-        return false;
-    }
-    match std::fs::OpenOptions::new().read(true).write(true).open(&path) {
-        Ok(f) => f.try_lock().is_err(),
-        Err(_) => false,
-    }
+    agent_pid(state).is_some_and(crate::sys::process::is_agent)
 }
 
 fn tail_text(path: &Path, bytes: u64) -> (String, u64) {

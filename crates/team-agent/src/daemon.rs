@@ -100,6 +100,7 @@ fn role_loop(mut role: Box<dyn Role>, paths: Paths, login: String, limit: UsageL
     let name = role.name();
     crate::log::set_role(name);
     let hb = Arc::new(Heartbeat::new(&paths.state(), name));
+    crate::shell::set_heartbeat(hb.clone());
     let mut last_good: Option<TeamConfig> = None;
     let mut recovered = false;
     let mut failures = 0u32;
