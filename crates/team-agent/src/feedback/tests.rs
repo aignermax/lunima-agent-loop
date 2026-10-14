@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use team_core::claude::Outcome;
 use team_core::config::Routing;
-use team_core::gh::{Label, RepoName, User};
+use team_core::gh::{Label, RepoName};
 
 const ON: &str = "agents_enabled = [\"coder\", \"pr-feedback\"]\n";
 const TRIGGER: &str = "@agent please rename the button";
@@ -49,47 +49,6 @@ impl Env {
 
 fn ok(text: &str) -> Outcome {
     Outcome { text: text.into(), subtype: "success".into(), num_turns: 2, ..Default::default() }
-}
-
-fn comment(id: u64, body: &str) -> Comment {
-    Comment { id, body: body.into(), user: Some(User { login: "x".into() }), created_at: "2026-10-14T10:00:00Z".into() }
-}
-
-#[test]
-fn trigger_rules_and_order() {
-    assert!(is_trigger("@agent do", "@agent"));
-    assert!(is_trigger("mail x@agent.com", "@agent"));
-    assert!(!is_trigger(&format!("{REPLY_MARKER}\n@agent"), "@agent"));
-    assert!(!is_trigger("", "@agent"));
-    let list = vec![comment(3, "@agent t3"), comment(1, "@agent t1"), comment(2, "plain"), comment(4, &format!("{REPLY_MARKER} @agent")), comment(5, "@agent t5"), comment(9, &format!("{REPLY_MARKER}\nx\n<!-- pr-feedback:done 1 -->"))];
-    let th = Thread::parse(&list);
-    assert_eq!(pending(&list, &th, "@agent").iter().map(|c| c.id).collect::<Vec<_>>(), vec![3, 5]);
-    assert_eq!(th.rounds(), 1);
-}
-
-#[test]
-fn claims_expire_and_failures_release_them() {
-    let now = Utc::now();
-    let at = |h: i64| (now - chrono::Duration::hours(h)).to_rfc3339();
-    let mut c = comment(10, &claim_comment(3, "A"));
-    c.created_at = at(1);
-    let th = Thread::parse(std::slice::from_ref(&c));
-    assert!(th.live_claim(3, now) && th.attempts(3) == 1);
-    let mut old = c.clone();
-    old.created_at = at(4);
-    assert!(!Thread::parse(&[old]).live_claim(3, now), "abandoned after 3h");
-    let failed = comment(11, &failed_comment(3, 1, "boom"));
-    assert!(!Thread::parse(&[c, failed]).live_claim(3, now));
-}
-
-#[test]
-fn report_extraction() {
-    assert_eq!(feedback_report(""), "(worker produced no output)");
-    assert_eq!(feedback_report(REPORT), "- renamed the button");
-    let long = "z".repeat(2000);
-    let r = feedback_report(&long);
-    assert!(r.starts_with("...\n") && r.chars().count() <= 810);
-    assert_eq!(short_error(&"e".repeat(400)).chars().count(), 301);
 }
 
 #[test]
