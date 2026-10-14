@@ -9,7 +9,10 @@ pub struct CloneStatus {
     pub exists: bool,
     /// Header from `git status -b`, e.g. "dev...origin/dev [behind 3]".
     pub branch_line: String,
+    /// Modified/staged *tracked* files — these make `git checkout -B` refuse.
     pub dirty: Vec<String>,
+    /// Untracked files — harmless for branch switches unless they collide (rare).
+    pub untracked: Vec<String>,
 }
 
 fn git(clone: &Path) -> std::process::Command {
@@ -25,7 +28,12 @@ pub fn parse_status(text: &str) -> CloneStatus {
         if let Some(head) = line.strip_prefix("## ") {
             status.branch_line = head.to_string();
         } else if line.len() > 3 {
-            status.dirty.push(line[3..].trim_matches('"').to_string());
+            let path = line[3..].trim_matches('"').to_string();
+            if line.starts_with("??") {
+                status.untracked.push(path);
+            } else {
+                status.dirty.push(path);
+            }
         }
     }
     status
@@ -82,7 +90,8 @@ mod tests {
         assert!(clean.dirty.is_empty());
         assert_eq!(clean.branch_line, "dev...origin/dev");
         let dirty = parse_status("## dev-ki...origin/dev-ki [behind 57]\n M src/a.cs\n?? \"docs/x y.md\"\n");
-        assert_eq!(dirty.dirty, ["src/a.cs", "docs/x y.md"]);
+        assert_eq!(dirty.dirty, ["src/a.cs"]);
+        assert_eq!(dirty.untracked, ["docs/x y.md"]);
     }
 
     #[test]
@@ -121,7 +130,8 @@ mod tests {
         std::fs::write(p.join("new.txt"), "n").unwrap();
         let branch = rescue_wip(p).unwrap();
         assert!(branch.starts_with("wip/control-center-"));
-        assert!(status(p).unwrap().dirty.is_empty());
+        let after = status(p).unwrap();
+        assert!(after.dirty.is_empty() && after.untracked.is_empty());
         assert_eq!(g(&["rev-parse", "--abbrev-ref", "HEAD"]).trim(), "dev");
         assert_eq!(g(&["show", &format!("{branch}:a.txt")]).trim(), "2");
     }

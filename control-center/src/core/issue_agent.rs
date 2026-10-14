@@ -167,7 +167,14 @@ fn line_time(line: &str, offset: Option<FixedOffset>) -> Option<DateTime<Local>>
 
 /// Scans the end of agent.log for the failure patterns that silently stalled the team before.
 pub fn scan_log(dir: &Path, offset: Option<FixedOffset>) -> LogFindings {
-    let (text, len) = tail_text(&dir.join("agent.log"), LOG_TAIL_BYTES);
+    let (current, len) = tail_text(&dir.join("agent.log"), LOG_TAIL_BYTES);
+    // agent.log is rotated by size: right after a rotation the recent past is in agent.log.1
+    let text = if len < LOG_TAIL_BYTES {
+        let (previous, _) = tail_text(&dir.join("agent.log.1"), LOG_TAIL_BYTES - len);
+        previous + &current
+    } else {
+        current
+    };
     let mut f = LogFindings { log_bytes: len, ..Default::default() };
     let qa_re = regex::Regex::new(r"PR #(\d+) has (\d+) QA failures").expect("static regex");
     for line in text.lines() {

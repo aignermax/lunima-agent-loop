@@ -68,11 +68,7 @@ public sealed class LoopOrchestrator
             Log($"Integration branch '{_config.IntegrationBranch}' already exists on origin.");
         }
 
-        // keep our prompt files out of commits: local exclude only, repo stays untouched
-        var excludeFile = Path.Combine(_config.ClonePath, ".git", "info", "exclude");
-        var exclude = File.Exists(excludeFile) ? File.ReadAllText(excludeFile) : "";
-        if (!exclude.Contains(".agent-loop/"))
-            File.AppendAllText(excludeFile, "\n.agent-loop/\n");
+        EnsureLocalExcludes();
 
         Directory.CreateDirectory(LogsDir);
         Directory.CreateDirectory(Path.Combine(_rootDir, "state"));
@@ -202,6 +198,7 @@ public sealed class LoopOrchestrator
 
         try
         {
+            EnsureLocalExcludes();
             await Git("fetch origin");
             var checkout = await Git($"checkout -B {branch} origin/{_config.IntegrationBranch}");
             if (checkout.ExitCode != 0)
@@ -244,12 +241,31 @@ public sealed class LoopOrchestrator
         }
     }
 
+    /// <summary>
+    /// Files our tools drop into the clone stay out of commits and out of `git status`:
+    /// our prompt files, and what the Kimi CLI generates on every start (it migrates
+    /// CLAUDE.md → AGENTS.md and .claude/commands → .agents/skills). Local exclude only —
+    /// the target repo stays untouched. Runs before every pass, so older clones get it too.
+    /// </summary>
+    private void EnsureLocalExcludes()
+    {
+        var excludeFile = Path.Combine(_config.ClonePath, ".git", "info", "exclude");
+        if (!Directory.Exists(Path.GetDirectoryName(excludeFile))) return;
+        var existing = File.Exists(excludeFile) ? File.ReadAllLines(excludeFile) : [];
+        var missing = LocalExcludes.Where(p => !existing.Contains(p)).ToList();
+        if (missing.Count > 0)
+            File.AppendAllText(excludeFile, "\n" + string.Join("\n", missing) + "\n");
+    }
+
+    private static readonly string[] LocalExcludes = [".agent-loop/", "/AGENTS.md", "/.agents/"];
+
     public async Task<int> OwnAsync()
     {
         if (!_config.Enabled) { Log("Disabled (enabled=false)."); return 0; }
         if (PausedSkip()) return 0;
         await CustomerReview.RunAsync(_config, _rootDir);
         Log("Product-Owner pass starting.");
+        EnsureLocalExcludes();
         _state.MarkOwnerRun();
         await Git("fetch origin");
         await Git($"checkout {_config.IntegrationBranch}");
