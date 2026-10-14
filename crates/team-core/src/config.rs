@@ -222,11 +222,32 @@ pub struct ProductOwner {
     pub base_branch: String,
     pub interval_minutes: u64,
     pub timeout_minutes: u64,
+    /// passes per day on this machine (0 = no cap)
+    pub max_runs_per_day: u32,
+    /// fewer open task issues than this = backlog needs seeding (a pass is worth it)
+    pub backlog_min: usize,
+    pub max_turns: u32,
+    /// optional customer/UX review run before each pass (shell command, "" = off); it gets
+    /// the evidence file path in `LUNIMA_CUSTOMER_FEEDBACK` and the PO reads that file
+    pub customer_command: String,
+    /// evidence older than this is not acceptable for a merge
+    pub customer_max_age_hours: u32,
 }
 
 impl Default for ProductOwner {
     fn default() -> Self {
-        Self { repo: String::new(), integration_branch: "dev".into(), base_branch: "main".into(), interval_minutes: 240, timeout_minutes: 60 }
+        Self {
+            repo: String::new(),
+            integration_branch: "dev".into(),
+            base_branch: "main".into(),
+            interval_minutes: 240,
+            timeout_minutes: 60,
+            max_runs_per_day: 6,
+            backlog_min: 5,
+            max_turns: 150,
+            customer_command: String::new(),
+            customer_max_age_hours: 24,
+        }
     }
 }
 

@@ -118,7 +118,7 @@ fn fix(ctx: &Ctx, setup: &RepoSetup, pr: &PullRequest, comments: &[Comment]) -> 
     let complex = labels.iter().any(|l| l.eq_ignore_ascii_case(&ctx.cfg.labels.complex));
     let choice = team_core::provider::choose(&ctx.cfg, &setup.repo, &labels)?;
     let b = &ctx.cfg.budgets;
-    let job = Job { prompt: ctx.render("qa-fix", &v)?, cwd: wt.clone(), model: choice.model, max_turns: if complex { b.max_turns_complex } else { b.max_turns_regular }, env: choice.env, label: label(&setup.repo, "qafix", pr.number) };
+    let job = Job { prompt: ctx.render("qa-fix", &v)?, cwd: wt.clone(), model: choice.model, max_turns: if complex { b.max_turns_complex } else { b.max_turns_regular }, env: choice.env, label: label(&setup.repo, "qafix", pr.number), max_duration: None };
     crate::log::info(&format!("QA-Fix für PR #{} ({})", pr.number, choice.why));
     ctx.llm.run(&job).map_err(|e| match e {
         LlmError::UsageLimit(t) => RoleError::UsageLimit(t),

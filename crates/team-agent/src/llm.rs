@@ -19,6 +19,8 @@ pub struct Job {
     pub env: ChildEnv,
     /// log file name stem, e.g. `coder_o_r_issue-7`
     pub label: String,
+    /// hard limit for the whole session (`None` = inactivity watchdog only)
+    pub max_duration: Option<Duration>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,6 +81,7 @@ impl Llm for ClaudeCli {
             settings_file: Some(self.settings_file.clone()),
             log_file: Some(log_file),
             inactivity: self.inactivity,
+            deadline: job.max_duration,
             on_tick: Some(&tick),
         };
         let out = claude::run(&session).map_err(|e| LlmError::Failed(e.to_string()))?;

@@ -161,6 +161,16 @@ pub fn apply_loop_config(c: &mut TeamConfig, json: &serde_json::Value) {
     if let Some(v) = n("ownerTimeoutMinutes") {
         po.timeout_minutes = v;
     }
+    if let Some(v) = n("customerMaxAgeHours") {
+        po.customer_max_age_hours = v as u32;
+    }
+    // the Python desktop customer only runs from a repo checkout; keep it as a command
+    let enabled = json.as_object().and_then(|o| o.iter().find(|(k, _)| k.eq_ignore_ascii_case("customerEnabled"))).and_then(|(_, v)| v.as_bool()).unwrap_or(false);
+    if enabled {
+        let python = s("customerPython").unwrap_or_else(|| "python".into());
+        let var = if cfg!(windows) { "%LUNIMA_CUSTOMER_FEEDBACK%" } else { "$LUNIMA_CUSTOMER_FEEDBACK" };
+        po.customer_command = format!("{python} tools/ux-tester/customer_cycle.py --repo {} --base {} --feedback \"{var}\"", po.repo, po.integration_branch);
+    }
     if s("ownerRunner").is_some_and(|r| r.eq_ignore_ascii_case("claude")) {
         if let Some(m) = s("ownerModel") {
             c.models.product_owner = m;

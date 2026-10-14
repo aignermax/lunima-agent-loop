@@ -13,7 +13,7 @@
     <StandardDirectory Id="ProgramFiles6432Folder">
       <Directory Id="INSTALLFOLDER" Name="Lunima Agent Loop">
         <Component Id="AgentExe">
-          <File Source="$(AgentBinDir)lunima-agent-loop.exe" KeyPath="yes" />
+          <File Source="$(AgentBinDir)lunima-team-agent.exe" KeyPath="yes" />
           <Environment Id="AddToPath" Name="PATH" Value="[INSTALLFOLDER]"
                        Part="last" Action="set" System="yes" Permanent="no" />
         </Component>
