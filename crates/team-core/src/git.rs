@@ -45,11 +45,17 @@ pub struct RepoClone {
 impl RepoClone {
     /// Clones if missing, then fetches. Never touches a working tree that isn't ours to reset.
     pub fn ensure(dir: &Path, repo: &str) -> Result<Self, String> {
+        Self::ensure_from(dir, repo, &remote_url(repo))
+    }
+
+    /// `ensure` with an explicit clone URL (tests use a local bare repository).
+    pub fn ensure_from(dir: &Path, repo: &str, url: &str) -> Result<Self, String> {
         if !dir.join(".git").exists() {
             if let Some(parent) = dir.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            run_git(None, &["clone", &remote_url(repo), &dir.display().to_string()], true)?;
+            run_git(None, &["-c", "core.longpaths=true", "clone", url, &dir.display().to_string()], true)?;
+            let _ = run_git(Some(dir), &["config", "core.longpaths", "true"], false);
         }
         let c = Self { dir: dir.to_path_buf(), repo: repo.to_string() };
         c.fetch()?;
@@ -94,6 +100,7 @@ impl RepoClone {
     /// An existing worktree is reused **as is** (uncommitted work of a previous session stays).
     pub fn worktree(&self, path: &Path, branch: &str, base: &str) -> Result<PathBuf, String> {
         if path.join(".git").exists() {
+            self.refresh_worktree(path, branch)?;
             return Ok(path.to_path_buf());
         }
         if let Some(parent) = path.parent() {
@@ -114,6 +121,22 @@ impl RepoClone {
             self.git(&["worktree", "add", "-b", branch, &p, &format!("origin/{base}")])?;
         }
         Ok(path.to_path_buf())
+    }
+
+    /// A reused worktree that is strictly behind `origin/<branch>` (another machine pushed
+    /// since) is moved to origin; its leftovers are stale. Ahead/diverged stays untouched.
+    fn refresh_worktree(&self, path: &Path, branch: &str) -> Result<(), String> {
+        if !self.remote_branch_exists(branch) {
+            return Ok(());
+        }
+        let g = |a: &[&str]| run_git(Some(path), a, false);
+        let head = g(&["rev-parse", "HEAD"])?;
+        let remote = g(&["rev-parse", &format!("origin/{branch}")])?;
+        if head.trim() == remote.trim() || g(&["merge-base", "--is-ancestor", "HEAD", &format!("origin/{branch}")]).is_err() {
+            return Ok(());
+        }
+        g(&["reset", "-q", "--hard", &format!("origin/{branch}")])?;
+        g(&["clean", "-fdq"]).map(|_| ())
     }
 
     /// Removes a worktree (Windows: clears read-only files git leaves under .git/objects).

@@ -3,8 +3,8 @@
 //!
 //!   lunima-team-agent init [--from-env <.env>] [--from-loop <agent-loop.json>]
 //!   lunima-team-agent status
-//!
-//! The roles themselves (`run`) arrive in phase 2 — see docs/TEAM-AGENT.md.
+//!   lunima-team-agent run                 all roles, forever (one instance per machine)
+//!   lunima-team-agent once <role>         one cycle of coder | qa | pr-feedback
 
 use std::path::PathBuf;
 use team_core::config::TeamConfig;
@@ -15,12 +15,14 @@ fn main() {
     let code = match args.first().map(String::as_str) {
         Some("init") => init(&args[1..]),
         Some("status") => status(),
+        Some("run") => run(),
+        Some("once") => once(args.get(1).map(String::as_str).unwrap_or("")),
         Some("version" | "--version" | "-V") => {
             println!("lunima-team-agent {}", env!("CARGO_PKG_VERSION"));
             0
         }
         _ => {
-            eprintln!("Verwendung: lunima-team-agent <init|status|version>");
+            eprintln!("Verwendung: lunima-team-agent <init|status|run|once <rolle>|version>");
             2
         }
     };
@@ -117,6 +119,71 @@ fn status() -> i32 {
     if let Some(c) = cfg {
         for r in &c.repos {
             println!("  Repo {} · Coder {} · {:?}", r.name, if r.coder { "an" } else { "aus" }, r.routing);
+        }
+    }
+    0
+}
+
+/// Holds `state/agent.lock` for the life of the process (OS file lock: released on crash).
+fn single_instance(p: &Paths) -> Option<std::fs::File> {
+    let _ = p.ensure();
+    let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(p.state().join("agent.lock")).ok()?;
+    file.try_lock().ok()?;
+    Some(file)
+}
+
+fn ready_paths() -> Option<Paths> {
+    let Some(p) = paths() else {
+        eprintln!("Kein Datenordner bestimmbar — LUNIMA_TEAM_HOME setzen.");
+        return None;
+    };
+    if let Err(e) = TeamConfig::load(&p.config()) {
+        eprintln!("{e}\n→ zuerst `lunima-team-agent init`");
+        return None;
+    }
+    Some(p)
+}
+
+fn run() -> i32 {
+    let Some(p) = ready_paths() else { return 1 };
+    let Some(_lock) = single_instance(&p) else {
+        eprintln!("Der Team-Agent läuft auf diesem Rechner bereits.");
+        return 3;
+    };
+    team_agent::daemon::run(p)
+}
+
+fn once(role: &str) -> i32 {
+    let Some(p) = ready_paths() else { return 1 };
+    let Some(_lock) = single_instance(&p) else {
+        eprintln!("Der Team-Agent läuft bereits — `once` würde mit ihm konkurrieren.");
+        return 3;
+    };
+    let Some(mut r) = team_agent::daemon::all_roles().into_iter().find(|r| r.name() == role) else {
+        eprintln!("Unbekannte Rolle „{role}“ (coder | qa | pr-feedback)");
+        return 2;
+    };
+    team_agent::log::init(&p.logs());
+    team_agent::log::set_role(role);
+    let cfg = TeamConfig::load(&p.config()).expect("checked above");
+    let login = match team_core::gh::current_user() {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("GitHub: {e} → `gh auth login`");
+            return 1;
+        }
+    };
+    let hb = std::sync::Arc::new(team_core::state::Heartbeat::new(&p.state(), role));
+    let ctx = team_agent::daemon::context(cfg, &p, &login, hb.clone(), role);
+    r.recover(&ctx);
+    let result = r.cycle(&ctx);
+    hb.idle();
+    match result {
+        Ok(true) => println!("{role}: Arbeit erledigt"),
+        Ok(false) => println!("{role}: nichts zu tun"),
+        Err(e) => {
+            eprintln!("{role}: {e}");
+            return 1;
         }
     }
     0

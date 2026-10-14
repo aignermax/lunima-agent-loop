@@ -53,9 +53,15 @@ impl Paths {
     pub fn clone_dir(&self, role: &str, repo: &str) -> PathBuf {
         self.root.join("work").join(role).join(repo.replace('/', "_"))
     }
-    /// `work/worktrees/<owner>_<repo>/<branch>` — one worktree per issue branch.
+    /// `work/wt/<repo>_<branch tail>_<hash>` — one worktree per branch. Kept short on
+    /// purpose: Git for Windows refuses a `$GIT_DIR` (`<clone>/.git/worktrees/<name>`) over
+    /// 260 characters, and the build trees inside need headroom too.
     pub fn worktree(&self, repo: &str, branch: &str) -> PathBuf {
-        self.root.join("work").join("worktrees").join(repo.replace('/', "_")).join(branch.replace('/', "_"))
+        let name = repo.rsplit('/').next().unwrap_or(repo);
+        let tail = branch.rsplit('/').next().unwrap_or(branch);
+        let short = |s: &str, n: usize| s.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '.').take(n).collect::<String>();
+        self.root.join("work").join("wt").join(format!("{}_{}_{:06x}", short(name, 16), short(tail, 24), fnv(&format!("{repo}
+{branch}")) & 0xff_ffff))
     }
 
     pub fn ensure(&self) -> std::io::Result<()> {
@@ -64,6 +70,11 @@ impl Paths {
         }
         Ok(())
     }
+}
+
+/// FNV-1a — a stable hash (std's hasher may change between Rust versions).
+fn fnv(text: &str) -> u64 {
+    text.bytes().fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3))
 }
 
 #[cfg(test)]
@@ -75,7 +86,12 @@ mod tests {
         let p = Paths::new("R");
         assert_eq!(p.config(), Path::new("R").join("team.toml"));
         assert_eq!(p.clone_dir("coder", "o/r"), Path::new("R").join("work").join("coder").join("o_r"));
-        assert_eq!(p.worktree("o/r", "agent/issue-7"), Path::new("R").join("work").join("worktrees").join("o_r").join("agent_issue-7"));
+        let wt = p.worktree("o/r", "agent/issue-7");
+        assert!(wt.starts_with(Path::new("R").join("work").join("wt")));
+        assert!(wt.file_name().unwrap().to_str().unwrap().starts_with("r_issue-7_"));
+        assert_ne!(wt, p.worktree("o/r", "feat/issue-7"), "same tail, different branch");
+        assert_ne!(wt, p.worktree("x/r", "agent/issue-7"), "same name, different owner");
+        assert!(p.worktree("Akhetonics/akhetonics-desktop-something-long", "agent/issue-1234-1791962038").file_name().unwrap().len() < 50);
     }
 
     #[test]

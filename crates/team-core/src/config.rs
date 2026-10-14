@@ -183,6 +183,13 @@ pub struct Budgets {
     pub max_sessions: u32,
     /// a Claude session without any output for this long is killed
     pub inactivity_minutes: u64,
+    /// cumulative tokens per issue before the coder stops (third-party providers cost money)
+    pub max_tokens_regular: u64,
+    pub max_tokens_complex: u64,
+    /// failed attempts (errors) per issue before the coder gives up
+    pub max_attempts: u32,
+    /// run the repo's `test_cmd` (.agent.toml) before the reviewer
+    pub test_gate: bool,
 }
 
 impl Default for Budgets {
@@ -198,6 +205,10 @@ impl Default for Budgets {
             pr_feedback_max_turns: 120,
             max_sessions: 20,
             inactivity_minutes: 30,
+            max_tokens_regular: 20_000_000,
+            max_tokens_complex: 50_000_000,
+            max_attempts: 3,
+            test_gate: true,
         }
     }
 }

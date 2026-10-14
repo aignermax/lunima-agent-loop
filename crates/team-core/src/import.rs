@@ -133,6 +133,11 @@ pub fn apply_env(c: &mut TeamConfig, env: &BTreeMap<String, String>) {
     set_num(&mut b.reviewer_max_turns, env, "AGENT_REVIEWER_MAX_TURNS");
     set_num(&mut b.pr_feedback_max_rounds, env, "AGENT_PR_FEEDBACK_MAX_ROUNDS");
     set_num(&mut b.pr_feedback_max_turns, env, "AGENT_PR_FEEDBACK_MAX_TURNS");
+    set_num(&mut b.max_tokens_regular, env, "AGENT_MAX_TOKENS_REGULAR");
+    set_num(&mut b.max_tokens_complex, env, "AGENT_MAX_TOKENS_COMPLEX");
+    if let Some(v) = env.get("AGENT_TEST_GATE") {
+        b.test_gate = v.eq_ignore_ascii_case("true");
+    }
     set_str(&mut c.pr_feedback_marker, env, "AGENT_PR_FEEDBACK_MARKER");
 }
 

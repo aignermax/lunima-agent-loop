@@ -7,10 +7,12 @@ fn parses_issue_and_pr_payloads() {
     assert!(i[0].has_label("agent-task"));
     assert_eq!(i[0].assignees[0].login, "aignermax");
     assert!(i[0].pull_request.is_none());
-    let pr = r#"{"number":5,"title":"Agent: x","html_url":"u","head":{"ref":"agent/issue-1-2","sha":"abc"},"base":{"ref":"dev"},"labels":[],"updated_at":"2026-10-14T10:00:00Z"}"#;
+    let pr = r#"{"number":5,"title":"Agent: x","html_url":"u","head":{"ref":"agent/issue-1-2","sha":"abc","repo":{"full_name":"fork/r"}},"base":{"ref":"dev"},"labels":[],"updated_at":"2026-10-14T10:00:00Z"}"#;
     let p: Vec<PullRequest> = parse_ndjson(pr).unwrap();
     assert_eq!(p[0].head.name, "agent/issue-1-2");
     assert_eq!(p[0].base.name, "dev");
+    assert_eq!(p[0].head.repo.as_ref().unwrap().full_name, "fork/r");
+    assert!(p[0].base.repo.is_none());
 }
 
 #[test]

@@ -64,6 +64,12 @@ fn worktree_starts_from_origin_when_the_local_branch_is_stale() {
     c.fetch().unwrap();
     let again = c.worktree(&tmp.path().join("wt").join("two"), "agent/issue-8", "dev").unwrap();
     assert!(again.join("c.txt").exists(), "worktree must contain the other machine's commit");
+    // a kept worktree that fell behind follows origin when reused
+    std::fs::write(other.join("d.txt"), "more").unwrap();
+    commit_and_push(&other, "agent/issue-8", "third").unwrap();
+    c.fetch().unwrap();
+    let reused = c.worktree(&tmp.path().join("wt").join("two"), "agent/issue-8", "dev").unwrap();
+    assert!(reused.join("d.txt").exists());
 }
 
 #[test]
