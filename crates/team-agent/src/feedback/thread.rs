@@ -26,10 +26,16 @@ pub fn claim_ttl() -> Duration {
 #[derive(Debug, Default)]
 pub struct Thread {
     pub done: BTreeSet<u64>,
+    /// triggers the former Python agent already answered (no rounds counted)
+    legacy: BTreeSet<u64>,
     claims: HashMap<u64, Vec<DateTime<Utc>>>,
     failed: HashMap<u64, usize>,
     pub cap_notified: bool,
 }
+
+/// The Python agent's trigger (`AGENT_PR_FEEDBACK_MARKER` default) — only used to read
+/// its old threads.
+const LEGACY_MARKER: &str = "@agent";
 
 fn marker_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
@@ -44,6 +50,7 @@ pub fn created(c: &Comment) -> DateTime<Utc> {
 impl Thread {
     pub fn parse(comments: &[Comment]) -> Self {
         let mut t = Self::default();
+        t.parse_legacy(comments);
         for c in comments.iter().filter(|c| c.body.contains(REPLY_MARKER)) {
             if c.body.contains("<!-- pr-feedback:cap -->") {
                 t.cap_notified = true;
@@ -62,9 +69,44 @@ impl Thread {
         t
     }
 
+    /// Replies of the former Python agent carry the reply marker but none of the state
+    /// markers. A success reply links its trigger (`#issuecomment-<id>`); a decline or
+    /// give-up has no link and answered the oldest open trigger before it (one per cycle,
+    /// oldest first). Its cap notice ends further rounds.
+    fn parse_legacy(&mut self, comments: &[Comment]) {
+        static LINK: OnceLock<Regex> = OnceLock::new();
+        let link = LINK.get_or_init(|| Regex::new(r"#issuecomment-(\d+)").expect("regex"));
+        let is_legacy = |c: &Comment| c.body.contains(REPLY_MARKER) && !c.body.contains("<!-- pr-feedback:");
+        let mut ordered: Vec<&Comment> = comments.iter().collect();
+        ordered.sort_by_key(|c| (created(c), c.id));
+        for c in ordered.iter().filter(|c| is_legacy(c)) {
+            self.legacy.extend(link.captures_iter(&c.body).filter_map(|m| m[1].parse::<u64>().ok()));
+            if c.body.contains("Reached the maximum of") {
+                self.cap_notified = true;
+            }
+        }
+        let mut open: std::collections::VecDeque<u64> = std::collections::VecDeque::new();
+        for c in &ordered {
+            if is_legacy(c) {
+                if !link.is_match(&c.body) && !c.body.contains("Reached the maximum of") {
+                    if let Some(id) = open.pop_front() {
+                        self.legacy.insert(id);
+                    }
+                }
+            } else if !c.body.contains(REPLY_MARKER) && c.body.contains(LEGACY_MARKER) && !self.legacy.contains(&c.id) {
+                open.push_back(c.id);
+            }
+        }
+    }
+
+    /// Answered — by this agent or by its Python predecessor.
+    pub fn is_done(&self, id: u64) -> bool {
+        self.done.contains(&id) || self.legacy.contains(&id)
+    }
+
     /// Feedback rounds used on this PR (every finished trigger counts).
     pub fn rounds(&self) -> usize {
-        self.done.len()
+        self.done.len() + self.legacy.len()
     }
 
     /// Claims made for a trigger so far (abandoned ones included).
@@ -88,7 +130,7 @@ pub fn is_trigger(body: &str, marker: &str) -> bool {
 
 /// Trigger comments without a final reply, oldest first.
 pub fn pending<'a>(comments: &'a [Comment], thread: &Thread, marker: &str) -> Vec<&'a Comment> {
-    let mut out: Vec<&Comment> = comments.iter().filter(|c| is_trigger(&c.body, marker) && !thread.done.contains(&c.id)).collect();
+    let mut out: Vec<&Comment> = comments.iter().filter(|c| is_trigger(&c.body, marker) && !thread.is_done(c.id)).collect();
     out.sort_by_key(|c| (created(c), c.id));
     out
 }
@@ -191,7 +233,7 @@ mod tests {
         assert!(is_trigger("mail x@agent.com", "@agent"));
         assert!(!is_trigger(&format!("{REPLY_MARKER}\n@agent"), "@agent"));
         assert!(!is_trigger("", "@agent"));
-        let list = vec![comment(3, "@agent t3"), comment(1, "@agent t1"), comment(2, "plain"), comment(4, &format!("{REPLY_MARKER} @agent")), comment(5, "@agent t5"), comment(9, &format!("{REPLY_MARKER}\nx\n<!-- pr-feedback:done 1 -->"))];
+        let list = vec![comment(3, "@agent t3"), comment(1, "@agent t1"), comment(2, "plain"), comment(4, &format!("{REPLY_MARKER} @agent <!-- pr-feedback:claim 99 machine=X -->")), comment(5, "@agent t5"), comment(9, &format!("{REPLY_MARKER}\nx\n<!-- pr-feedback:done 1 -->"))];
         let th = Thread::parse(&list);
         assert_eq!(pending(&list, &th, "@agent").iter().map(|c| c.id).collect::<Vec<_>>(), vec![3, 5]);
         assert_eq!(th.rounds(), 1);
@@ -220,5 +262,36 @@ mod tests {
         let r = feedback_report(&long);
         assert!(r.starts_with("...\n") && r.chars().count() <= 810);
         assert_eq!(short_error(&"e".repeat(400)).chars().count(), 301);
+    }
+
+    #[test]
+    fn python_agent_replies_count_as_handled() {
+        let c = |id: u64, t: &str, body: &str| Comment { id, body: body.into(), user: None, created_at: t.into() };
+        let comments = vec![
+            c(1, "2026-10-01T10:00:00Z", "@agent rename"),
+            c(2, "2026-10-01T10:05:00Z", "<!-- pr-feedback-agent -->
+[pr-feedback] I couldn't complete this request after 2 attempts"),
+            c(3, "2026-10-02T10:00:00Z", "@agent and the icon"),
+            c(4, "2026-10-02T10:10:00Z", "<!-- pr-feedback-agent -->
+[pr-feedback] Done — addressed the feedback from comment [above](#issuecomment-3)."),
+            c(5, "2026-10-03T10:00:00Z", "@agent new request"),
+        ];
+        let t = Thread::parse(&comments);
+        assert!(t.is_done(1) && t.is_done(3), "answered before the cut-over");
+        assert!(!t.is_done(5), "newer requests are still open");
+        assert_eq!(t.rounds(), 2, "legacy answers count as rounds");
+        // a request written while the old agent was busy is not swallowed
+        let busy = vec![
+            c(1, "2026-10-01T10:00:00Z", "@agent rename"),
+            c(2, "2026-10-01T10:03:00Z", "@agent also the icon"),
+            c(3, "2026-10-01T10:10:00Z", "<!-- pr-feedback-agent -->
+[pr-feedback] Done — addressed the feedback from comment [above](#issuecomment-1)."),
+        ];
+        let t = Thread::parse(&busy);
+        assert!(t.is_done(1) && !t.is_done(2));
+        // the old cap notice still applies
+        let capped = vec![c(1, "2026-10-01T10:00:00Z", "<!-- pr-feedback-agent -->
+[pr-feedback] Reached the maximum of 3 feedback rounds on this PR.")];
+        assert!(Thread::parse(&capped).cap_notified);
     }
 }

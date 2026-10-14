@@ -84,7 +84,7 @@ impl PrFeedback {
             return Ok(None);
         }
         let max_rounds = ctx.cfg.budgets.pr_feedback_max_rounds;
-        if thread.rounds() >= max_rounds as usize {
+        if thread.rounds() >= max_rounds as usize || thread.cap_notified {
             if !thread.cap_notified {
                 self.notify_cap(forge, pr.number, max_rounds, &ctx.machine)?;
             }
