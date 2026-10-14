@@ -3,7 +3,7 @@
 use crate::collector::{Action, Handle};
 use crate::core::health::{self, Health, Level};
 use crate::core::snapshot::{relative, Snapshot};
-use crate::ui::{activity::ActivityPage, github, logs::LogsPage, overview, rules::RulesPage, projects::ProjectsPage, settings::SettingsPage, team::TeamPage};
+use crate::ui::{activity::ActivityPage, github, logs::LogsPage, overview, projects::ProjectsPage, rules::RulesPage, settings::SettingsPage, setup, team::TeamPage};
 use crate::ui::theme::{self, MUTED};
 use crate::ui::widgets::level_dot;
 use crate::{tray, win};
@@ -21,6 +21,7 @@ pub enum Page {
     Settings,
     Rules,
     Logs,
+    Setup,
 }
 
 const PAGES: &[(Page, &str, &str)] = &[
@@ -32,15 +33,16 @@ const PAGES: &[(Page, &str, &str)] = &[
     (Page::Settings, "⚙", "Einstellungen"),
     (Page::Rules, "📜", "Regeln"),
     (Page::Logs, "🗒", "Protokolle"),
+    (Page::Setup, "🧭", "Einrichtung"),
 ];
 
 const NOTICE_SECONDS: u64 = 6;
 
 impl Page {
-    /// `--page overview|activity|github|settings|rules|logs`
+    /// `--page overview|team|projects|activity|github|settings|rules|logs|setup`
     pub fn from_arg(name: &str) -> Option<Self> {
-        let all = [Page::Overview, Page::Team, Page::Projects, Page::Activity, Page::Github, Page::Settings, Page::Rules, Page::Logs];
-        let names = ["overview", "team", "projects", "activity", "github", "settings", "rules", "logs"];
+        let all = [Page::Overview, Page::Team, Page::Projects, Page::Activity, Page::Github, Page::Settings, Page::Rules, Page::Logs, Page::Setup];
+        let names = ["overview", "team", "projects", "activity", "github", "settings", "rules", "logs", "setup"];
         names.iter().position(|n| n.eq_ignore_ascii_case(name)).map(|i| all[i])
     }
 }
@@ -61,7 +63,7 @@ impl App {
         theme::apply(&cc.egui_ctx);
         win::register(cc);
         tray::install(handle.clone());
-        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default() }
+        Self { handle, page, activity: ActivityPage::default(), team: TeamPage, projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default() }
     }
 
     fn sidebar(&mut self, ctx: &egui::Context, s: &Snapshot, h: &Health) {
@@ -111,7 +113,7 @@ fn footer(ui: &mut egui::Ui, s: &Snapshot, handle: &Handle) {
     let now = Local::now();
     ui.label(RichText::new(format!("Dateien {}", relative(s.refreshed, now))).size(11.5).color(MUTED));
     let slow = s.slow_refreshed.map(|t| relative(t, now)).unwrap_or_else(|| "läuft …".into());
-    ui.label(RichText::new(format!("GitHub & Zeitplan {slow}")).size(11.5).color(MUTED));
+    ui.label(RichText::new(format!("GitHub & Werkzeuge {slow}")).size(11.5).color(MUTED));
     if ui.small_button("⟳ Jetzt prüfen").clicked() {
         handle.send(Action::RefreshAll);
     }
@@ -133,19 +135,29 @@ impl eframe::App for App {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 ui.set_max_width(ui.available_width().min(1080.0));
                 match self.page {
-                    Page::Overview => overview::show(ui, &s, &h, &self.handle),
+                    Page::Overview => {
+                        if let Some(target) = overview::show(ui, &s, &h, &self.handle) {
+                            self.page = target;
+                        }
+                    }
                     Page::Team => self.team.show(ui, &s, &self.handle),
                     Page::Projects => self.projects.show(ui, &s, &self.handle),
                     Page::Activity => self.activity.show(ui, &s),
                     Page::Github => github::show(ui, &s),
-                    Page::Settings => self.settings.show(ui, &s, &self.handle),
+                    Page::Settings => {
+                        if self.settings.show(ui, &s, &self.handle) {
+                            self.page = Page::Setup;
+                        }
+                    }
+                    Page::Setup => setup::show(ui, &s, &self.handle),
                     Page::Rules => self.rules.show(ui, &s, &self.handle),
                     Page::Logs => self.logs.show(ui, &s),
                 }
             });
         });
         self.notice(ctx);
-        let poll = if h.overall == Level::Pending || s.loop_running { 1 } else { 5 };
+        let working = s.heartbeats.values().any(|hb| hb.state == "working");
+        let poll = if h.overall == Level::Pending || working { 1 } else { 5 };
         ctx.request_repaint_after(Duration::from_secs(poll));
     }
 }

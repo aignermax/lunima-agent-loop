@@ -1,18 +1,14 @@
-//! Coder tab of the activity page: the issue agent's run history (.sessions/issue-history.jsonl).
+//! Coder tab of the activity page: the team agent's run history (state/issue-history.jsonl).
 
 use super::theme::{self, MUTED};
 use super::widgets::{card, link, muted, pill, stat};
 use crate::core::snapshot::{relative, Snapshot};
-use crate::core::state::parse_time;
+use team_core::state::parse_time;
 use chrono::{Duration, Local};
 use eframe::egui::{self, RichText, Ui};
 
 pub fn show(ui: &mut Ui, s: &Snapshot) {
-    let history = &s.team.history;
-    if s.team.dir.is_none() {
-        muted(ui, "Issue-Agent nicht verbunden — siehe Seite Team.");
-        return;
-    }
+    let history = &s.history;
     let now = Local::now();
     let week: Vec<_> = history.iter().filter(|h| parse_time(&h.timestamp).is_some_and(|t| now - t < Duration::days(7))).collect();
     let done = week.iter().filter(|h| h.completed).count();
@@ -20,7 +16,7 @@ pub fn show(ui: &mut Ui, s: &Snapshot) {
     ui.columns(3, |c| {
         stat(&mut c[0], "Läufe (7 Tage)", &week.len().to_string(), "");
         stat(&mut c[1], "Mit PR abgeschlossen", &done.to_string(), "");
-        stat(&mut c[2], "API-Kosten (7 Tage)", &format!("${cost:.2}"), "laut Claude-Abrechnung je Lauf");
+        stat(&mut c[2], "Kosten-Schätzung (7 Tage)", &format!("${cost:.2}"), "Token × Listenpreis — im Abo nicht abgerechnet");
     });
     ui.add_space(10.0);
     card(ui, Some("Letzte Läufe des Coders"), |ui| {
@@ -42,6 +38,7 @@ pub fn show(ui: &mut Ui, s: &Snapshot) {
                         h.duration_sec.map(|d| format!("{} min", d / 60)),
                         h.total_cost_usd.map(|c| format!("${c:.2}")),
                         Some(h.repository.rsplit('/').next().unwrap_or("").to_string()),
+                        h.machine.clone(),
                     ];
                     ui.label(RichText::new(meta.into_iter().flatten().collect::<Vec<_>>().join(" · ")).color(MUTED).size(12.0));
                     if let Some(url) = &h.pr_url {

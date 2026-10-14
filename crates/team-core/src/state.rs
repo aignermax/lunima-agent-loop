@@ -130,6 +130,37 @@ pub fn append_history(state_dir: &Path, record: &HistoryRecord) -> std::io::Resu
     writeln!(f, "{}", serde_json::to_string(record).unwrap_or_default())
 }
 
+pub const PO_STATE_FILE: &str = "po-state.json";
+
+/// The product owner's progress (`state/po-state.json`): the role writes it, the Control
+/// Center shows it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PoState {
+    /// "YYYY-MM-DD" the counter belongs to
+    pub day: String,
+    pub runs_today: u32,
+    /// RFC 3339
+    pub last_start: Option<String>,
+    pub last_end: Option<String>,
+    /// "ok" | "error" | "timeout" | "usage-limit" | "skipped"
+    pub last_result: String,
+    pub last_note: String,
+    pub next_due: Option<String>,
+}
+
+impl PoState {
+    /// Missing or unreadable file → `None`.
+    pub fn load(state_dir: &Path) -> Option<Self> {
+        let text = std::fs::read_to_string(state_dir.join(PO_STATE_FILE)).ok()?;
+        serde_json::from_str(&text).ok()
+    }
+
+    pub fn save(&self, state_dir: &Path) -> std::io::Result<()> {
+        write_atomic(&state_dir.join(PO_STATE_FILE), serde_json::to_string_pretty(self).unwrap_or_default().as_bytes())
+    }
+}
+
 #[cfg(test)]
 #[path = "state_tests.rs"]
 mod tests;

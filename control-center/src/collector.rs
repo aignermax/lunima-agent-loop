@@ -1,52 +1,49 @@
 //! Background worker: keeps the snapshot fresh and executes user actions off the UI thread.
 
-use crate::core::config::ConfigDoc;
+use crate::core::agent_files;
 use crate::core::logs::{self, PassCache};
-use crate::core::root::CONFIG_FILE;
 use crate::core::snapshot::Snapshot;
-use crate::core::state::LoopState;
-use crate::sys::{autostart, cli, git, github, schedtask};
+use crate::core::team::{role_label, ROLES};
+use crate::sys::agent_service::{self, Verb};
+use crate::sys::{autostart, github, probes};
 use chrono::Local;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use team_core::config::TeamConfig;
+use team_core::paths::Paths;
 
 const FAST: Duration = Duration::from_secs(5);
 const SLOW: Duration = Duration::from_secs(90);
 const PASSES_SHOWN: usize = 40;
+const HISTORY_SHOWN: usize = 60;
+const TOML_REFRESH: Duration = Duration::from_secs(600);
 
 #[derive(Debug, Clone)]
 pub enum Action {
-    Pause,
-    Resume,
-    RunOwner,
-    SetTaskEnabled(bool),
-    EnableConfig,
-    RescueWip,
-    SetAutostart(bool),
-    SaveConfig(ConfigDoc),
+    RefreshAll,
+    SaveConfig(Box<TeamConfig>),
+    /// import legacy settings (.env / agent-loop.json) and write team.toml
+    CreateConfig,
     SavePrompt(PathBuf, String),
     /// Back to the built-in prompt: remove the override file.
     DeletePrompt(PathBuf),
-    RefreshAll,
-    /// issue-agent role + systemctl verb (start/stop/restart)
-    Unit(String, &'static str),
     SetRolePaused(String, bool),
-    /// boolean in agent-loop.json, e.g. workersEnabled
-    SetLoopFlag(&'static str, bool),
-    SetAgentDir(PathBuf),
-    /// key-level edits to the issue agent's .env; true = restart its daemons afterwards
-    SaveEnv(crate::core::envfile::EnvEdits, bool),
+    PauseAll(bool),
+    Agent(Verb),
+    SetAgentAutostart(bool),
+    SetAutostart(bool),
+    Terminal(&'static str),
 }
 
 impl Action {
     /// Short German label for the "busy" toast.
     fn label(&self) -> String {
         match self {
-            Action::Unit(role, verb) => format!("{} {verb}", crate::core::team::role_label(role)),
-            Action::SaveEnv(..) => ".env speichern".into(),
+            Action::Agent(v) => format!("Team-Agent {v:?}"),
             Action::SaveConfig(_) => "Einstellungen speichern".into(),
+            Action::CreateConfig => "Konfiguration anlegen".into(),
             other => format!("{other:?}").chars().take(40).collect(),
         }
     }
@@ -83,22 +80,17 @@ impl Handle {
 }
 
 /// Starts the worker thread. `on_change` is called after every update (repaint + tray).
-pub fn start(root: PathBuf, cli_path: Option<PathBuf>, on_change: Arc<dyn Fn() + Send + Sync>) -> Handle {
-    let shared = Arc::new(Shared {
-        snapshot: Mutex::new(Snapshot::empty(root.clone(), cli_path.clone())),
-        notice: Mutex::new(None),
-        busy: Mutex::new(None),
-    });
+pub fn start(paths: Paths, on_change: Arc<dyn Fn() + Send + Sync>) -> Handle {
+    let shared = Arc::new(Shared { snapshot: Mutex::new(Snapshot::empty(paths.clone())), notice: Mutex::new(None), busy: Mutex::new(None) });
     let (tx, rx) = mpsc::channel();
-    let worker = Worker { shared: shared.clone(), root, cli: cli_path, cache: PassCache::default(), on_change };
+    let worker = Worker { shared: shared.clone(), paths, cache: PassCache::default(), on_change };
     std::thread::Builder::new().name("collector".into()).spawn(move || worker.run(rx)).expect("spawn collector");
     Handle { shared, tx }
 }
 
 struct Worker {
     shared: Arc<Shared>,
-    root: PathBuf,
-    cli: Option<PathBuf>,
+    paths: Paths,
     cache: PassCache,
     on_change: Arc<dyn Fn() + Send + Sync>,
 }
@@ -123,54 +115,67 @@ impl Worker {
         }
     }
 
+    fn snap(&self) -> Snapshot {
+        self.shared.snapshot.lock().expect("snapshot lock").clone()
+    }
+
     fn update(&self, f: impl FnOnce(&mut Snapshot)) {
         f(&mut self.shared.snapshot.lock().expect("snapshot lock"));
         (self.on_change)();
     }
 
     fn refresh_fast(&mut self) {
-        let config = ConfigDoc::load(&self.root.join(CONFIG_FILE));
-        let state = LoopState::load(&self.root.join("state").join("state.json"));
-        let files = logs::list(&self.root.join("logs"));
-        let mut passes = self.cache.passes(&files, PASSES_SHOWN);
-        if let Ok(st) = &state {
-            logs::attach_records(&mut passes, &st.last_runs);
-        }
-        let running = cli::loop_running();
-        let prev_team = self.shared.snapshot.lock().expect("snapshot lock").team.clone();
-        let team = crate::team_ops::refresh_fast(&self.root, &prev_team);
+        let (state, now) = (self.paths.state(), Local::now());
+        let missing = !self.paths.config().is_file();
+        let config = if missing { Err("team.toml fehlt".to_string()) } else { TeamConfig::load(&self.paths.config()) };
+        let expiry = config.as_ref().map(|c| c.discovery.expiry_days).unwrap_or(8);
+        let files = logs::list(&self.paths.logs());
+        let passes = self.cache.passes(&files, PASSES_SHOWN);
+        let fresh = (
+            agent_files::read_heartbeats(&state),
+            agent_files::read_pauses(&state, now),
+            agent_files::read_history(&state, HISTORY_SHOWN),
+            agent_files::read_discovered(&state, expiry, now.naive_local()),
+            team_core::state::PoState::load(&state),
+            agent_files::agent_running(&state),
+        );
         self.update(|s| {
-            s.team = team;
+            (s.heartbeats, s.pauses, s.history, s.discovered, s.po, s.agent_running) = fresh;
             s.config = config;
-            s.state = state;
+            s.config_missing = missing;
             s.logs = files;
             s.passes = passes;
-            s.loop_running = running;
-            s.refreshed = Local::now();
+            s.agent_exe = agent_service::find_exe();
+            s.refreshed = now;
         });
     }
 
     fn refresh_slow(&mut self) {
-        let snap = self.shared.snapshot.lock().expect("snapshot lock").clone();
-        let task = schedtask::query();
-        let clone = snap.clone_path().map(|p| git::status(&p)).unwrap_or_else(|| Err("clonePath fehlt in der Konfiguration".into()));
-        let gh_auth = github::auth_status();
-        let repo = snap.config_str("githubRepo");
-        let gh_data = if repo.is_empty() { Err("githubRepo fehlt".into()) } else { github::fetch(&repo) };
+        let snap = self.snap();
+        let service = Some(agent_service::query());
+        let setup = crate::core::setup::evaluate(&probes::System, !snap.config_missing);
+        let repo = snap.github_repo();
+        let gh = if repo.is_empty() { Err("kein Repository konfiguriert".into()) } else { github::fetch(&repo) };
+        let (mut tomls, mut toml_at) = (snap.agent_tomls.clone(), snap.agent_toml_at.clone());
+        if let Some(cfg) = snap.cfg() {
+            // one gh call per repo, at most every TOML_REFRESH — actions trigger slow refreshes
+            for p in crate::core::projects::list(cfg, &snap.discovered) {
+                if toml_at.get(&p.repo).is_some_and(|t| t.elapsed() < TOML_REFRESH) {
+                    continue;
+                }
+                tomls.insert(p.repo.clone(), github::fetch_raw(&p.repo, ".agent.toml").map(|t| crate::core::projects::parse_agents_enabled(&t)));
+                toml_at.insert(p.repo, Instant::now());
+            }
+        }
+        let log = agent_files::scan_log(&self.paths.logs());
         let autostart = autostart::is_enabled();
-        let mut team = snap.team.clone();
-        crate::team_ops::refresh_slow(&mut team, &snap.config_str("githubRepo"));
         self.update(|s| {
-            s.team.units = team.units;
-            s.team.claude_version = team.claude_version;
-            s.team.wsl_offset = team.wsl_offset;
-            s.team.agent_tomls = team.agent_tomls;
-            s.team.agent_toml_at = team.agent_toml_at;
-            s.team.log = team.log;
-            s.task = Some(task);
-            s.clone = Some(clone);
-            s.gh_auth = Some(gh_auth);
-            s.github = Some(gh_data);
+            s.service = service;
+            s.setup = Some(setup);
+            s.github = Some(gh);
+            s.agent_tomls = tomls;
+            s.agent_toml_at = toml_at;
+            s.log = Some(log);
             s.autostart = autostart;
             s.slow_refreshed = Some(Local::now());
         });
@@ -190,44 +195,45 @@ impl Worker {
     }
 
     fn perform(&mut self, action: &Action) -> Result<String, String> {
-        let cli = || self.cli.clone().ok_or_else(|| "lunima-agent-loop nicht gefunden".to_string());
+        let state = self.paths.state();
+        let exe = || agent_service::find_exe().ok_or_else(|| "lunima-team-agent nicht gefunden".to_string());
         match action {
-            Action::Pause => cli::run_cli(&cli()?, &self.root, &["pause", "Control Center"]).map(|_| "Loop pausiert".into()),
-            Action::Resume => cli::run_cli(&cli()?, &self.root, &["resume"]).map(|_| "Loop läuft wieder".into()),
-            // the loop has no locking: two concurrent passes would fight over clone and state
-            Action::RunOwner if cli::loop_running() => Err("Es läuft bereits ein Loop-Prozess — bitte warten.".into()),
-            Action::RunOwner => cli::spawn_cli(&cli()?, &self.root, &["own"]).map(|_| "PO-Lauf gestartet — Fortschritt unter Aktivität".into()),
-            Action::SetTaskEnabled(on) => schedtask::set_enabled(*on).map(|_| if *on { "Zeitplan eingeschaltet" } else { "Zeitplan ausgeschaltet" }.into()),
-            Action::EnableConfig => self.enable_config(),
-            Action::RescueWip if cli::loop_running() => Err("Ein Lauf arbeitet gerade im Clone — nichts angefasst.".into()),
-            Action::RescueWip => self.rescue(),
-            Action::SetAutostart(on) => autostart::set_enabled(*on, &self.root).map(|_| if *on { "Startet mit Windows" } else { "Autostart aus" }.into()),
-            Action::SaveConfig(doc) => doc.validate().and_then(|_| doc.save()).map(|_| "Einstellungen gespeichert".into()),
+            Action::RefreshAll => Ok("Aktualisiert".into()),
+            Action::SaveConfig(cfg) => cfg.validate().and_then(|_| cfg.save(&self.paths.config())).map(|_| "Gespeichert — gilt ab dem nächsten Zyklus jeder Rolle".into()),
+            Action::CreateConfig => crate::core::setup::create_config(&self.paths, team_core::import::legacy_candidates()),
             Action::SavePrompt(path, text) => save_prompt(path, text),
             Action::DeletePrompt(path) => match std::fs::remove_file(path) {
                 Ok(()) => Ok("Eingebaute Regeln aktiv (Override gelöscht)".into()),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("Eingebaute Regeln sind bereits aktiv".into()),
                 Err(e) => Err(e.to_string()),
             },
-            Action::RefreshAll => Ok("Aktualisiert".into()),
-            Action::Unit(role, verb) => crate::team_ops::unit(role, verb),
-            Action::SetRolePaused(role, paused) => crate::team_ops::set_paused(&self.root, role, *paused),
-            Action::SetLoopFlag(key, value) => crate::team_ops::set_loop_flag(&self.root, key, *value),
-            Action::SetAgentDir(path) => crate::team_ops::set_agent_dir(&self.root, path),
-            Action::SaveEnv(edits, restart) => crate::team_ops::save_env(&self.root, edits, *restart),
+            Action::SetRolePaused(role, paused) => {
+                agent_files::set_pause(&state, role, paused.then_some("Control Center"))?;
+                Ok(format!("{} {}", role_label(role), if *paused { "pausiert (ab dem nächsten Zyklus)" } else { "läuft wieder" }))
+            }
+            Action::PauseAll(paused) => {
+                for (role, _) in ROLES {
+                    agent_files::set_pause(&state, role, paused.then_some("Control Center"))?;
+                }
+                Ok(if *paused { "Alle Rollen pausiert (laufende Arbeit wird noch beendet)" } else { "Alle Rollen laufen wieder" }.into())
+            }
+            Action::Agent(verb) => {
+                let info = self.snap().service.and_then(|s| s.ok());
+                agent_service::control(*verb, &exe()?, info.as_ref())?;
+                Ok(match verb {
+                    Verb::Start => "Team-Agent gestartet",
+                    Verb::Stop => "Team-Agent gestoppt",
+                    Verb::Restart => "Team-Agent neu gestartet",
+                }
+                .into())
+            }
+            Action::SetAgentAutostart(on) => {
+                agent_service::set_autostart(*on, &exe()?)?;
+                Ok(if *on { "Team-Agent startet ab jetzt mit der Anmeldung" } else { "Autostart des Team-Agents aus" }.into())
+            }
+            Action::SetAutostart(on) => autostart::set_enabled(*on).map(|_| if *on { "Control Center startet mit der Anmeldung" } else { "Autostart aus" }.into()),
+            Action::Terminal(command) => probes::open_terminal(command).map(|_| format!("Terminal geöffnet: {command}")),
         }
-    }
-
-    fn enable_config(&self) -> Result<String, String> {
-        let mut doc = ConfigDoc::load(&self.root.join(CONFIG_FILE))?;
-        let spec = crate::core::config::FIELDS.iter().find(|f| f.key == "enabled").ok_or("enabled fehlt")?;
-        doc.set_from_text(spec, "true")?;
-        doc.save().map(|_| "Loop aktiviert".into())
-    }
-
-    fn rescue(&self) -> Result<String, String> {
-        let clone = self.shared.snapshot.lock().expect("snapshot lock").clone_path().ok_or("clonePath fehlt")?;
-        git::rescue_wip(&clone).map(|b| format!("Änderungen gesichert auf lokalem Branch {b}"))
     }
 }
 

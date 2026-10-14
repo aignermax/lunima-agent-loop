@@ -1,10 +1,11 @@
 //! Health checks: turns a snapshot into a traffic light plus concrete, fixable findings.
-//! Each check exists because its failure once stopped the loop unnoticed.
+//! Each check exists because its failure once stopped the team unnoticed.
 
-use super::logs::{is_newest_run_log, Outcome};
+use super::agent_files::LogFindings;
 use super::snapshot::{relative, Snapshot};
-use super::state::{parse_time, Pause};
+use super::team::{role_label, role_status, stale_since, ROLES};
 use chrono::{DateTime, Duration, Local};
+use team_core::state::parse_time;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Level {
@@ -18,16 +19,11 @@ pub enum Level {
 /// One-click remedies the UI can offer next to a finding.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Fix {
-    Resume,
-    EnableConfig,
-    EnableTask,
-    RescueWip,
-    RunOwner,
-    /// issue-agent role (coder/qa/pr-feedback)
-    StartUnit(String),
-    RestartUnit(String),
+    OpenSetup,
+    StartAgent,
+    RestartAgent,
+    EnableAgentAutostart,
     ResumeRole(String),
-    DisableLoopWorkers,
 }
 
 #[derive(Debug, Clone)]
@@ -46,173 +42,122 @@ pub struct Health {
     pub checks: Vec<Check>,
 }
 
-fn check(level: Level, title: &str, detail: impl Into<String>) -> Check {
-    Check { level, title: title.to_string(), detail: detail.into(), fix: None }
-}
-
-fn with_fix(mut c: Check, label: &'static str, fix: Fix) -> Check {
-    c.fix = Some((label, fix));
-    c
+fn check(level: Level, title: impl Into<String>, detail: impl Into<String>, fix: Option<(&'static str, Fix)>) -> Check {
+    Check { level, title: title.into(), detail: detail.into(), fix }
 }
 
 pub fn evaluate(s: &Snapshot, now: DateTime<Local>) -> Health {
-    let checks: Vec<Check> = [
-        config_check(s),
-        pause_check(s, now),
-        task_check(s, now),
-        owner_check(s, now),
-        worker_check(s),
-        clone_check(s),
-        gh_check(s),
-    ]
-    .into_iter()
-    .flatten()
-    .chain(super::team::checks(s, now))
-    .collect();
+    let mut checks = Vec::new();
+    config_checks(s, &mut checks);
+    setup_checks(s, &mut checks);
+    agent_checks(s, now, &mut checks);
+    if s.agent_running {
+        role_checks(s, now, &mut checks);
+    }
+    po_check(s, now, &mut checks);
+    if let Some(f) = &s.log {
+        log_checks(f, now, &mut checks);
+    }
     let overall = checks.iter().map(|c| c.level).max().unwrap_or(Level::Pending);
     let (headline, subline) = headline(s, &checks, overall, now);
     Health { overall, headline, subline, checks }
 }
 
-fn config_check(s: &Snapshot) -> Option<Check> {
-    if s.cli.is_none() {
-        return Some(check(Level::Error, "CLI nicht gefunden", "lunima-agent-loop(.exe) liegt weder in publish/ noch neben dieser App noch im PATH."));
-    }
+fn config_checks(s: &Snapshot, out: &mut Vec<Check>) {
     match &s.config {
-        Err(e) => Some(check(Level::Error, "Konfiguration fehlerhaft", e.clone())),
-        Ok(c) if !c.bool("enabled") => Some(with_fix(
-            check(Level::Warn, "Loop deaktiviert", "\"enabled\": false in agent-loop.json — der Zeitplan feuert, tut aber nichts."),
-            "Aktivieren",
-            Fix::EnableConfig,
-        )),
-        Ok(_) => Some(check(Level::Ok, "Konfiguration", "agent-loop.json geladen")),
+        Err(_) if s.config_missing => out.push(check(Level::Error, "Keine Konfiguration", format!("{} fehlt — der Einrichtungsassistent legt sie an.", s.paths.config().display()), Some(("Einrichten", Fix::OpenSetup)))),
+        Err(e) => out.push(check(Level::Error, "Konfiguration fehlerhaft", e.clone(), None)),
+        Ok(c) => out.push(check(Level::Ok, "Konfiguration", format!("team.toml · Rechner „{}“ · {} Repos", c.machine, c.repos.len()), None)),
     }
 }
 
-fn pause_check(s: &Snapshot, now: DateTime<Local>) -> Option<Check> {
-    let state = s.state.as_ref().ok()?;
-    let reason = state.pause_reason.clone().filter(|r| !r.is_empty()).map(|r| format!(" — Grund: {r}")).unwrap_or_default();
-    let detail = match state.pause(now) {
-        Pause::None => return None,
-        Pause::Indefinitely => format!("auf unbestimmte Zeit{reason}. Es laufen weder PO noch Worker."),
-        Pause::Until(t) => format!("bis {}{reason}", t.format("%d.%m. %H:%M")),
+fn setup_checks(s: &Snapshot, out: &mut Vec<Check>) {
+    let Some(checks) = &s.setup else { return };
+    for c in checks.iter().filter(|c| !c.ok && !c.optional && !c.title.starts_with("Konfiguration")) {
+        out.push(check(Level::Error, c.title, c.detail.clone(), Some(("Einrichten", Fix::OpenSetup))));
+    }
+}
+
+fn agent_checks(s: &Snapshot, now: DateTime<Local>, out: &mut Vec<Check>) {
+    if s.agent_exe.is_none() {
+        out.push(check(Level::Error, "Team-Agent nicht installiert", "lunima-team-agent liegt weder neben dieser App noch im PATH.", None));
+        return;
+    }
+    if !s.agent_running {
+        let fix = s.config.is_ok().then_some(("Starten", Fix::StartAgent));
+        out.push(check(Level::Error, "Team-Agent läuft nicht", "Ohne ihn arbeitet keine Rolle.", fix));
+    } else {
+        let busy = s.heartbeats.values().filter(|h| h.state == "working" && stale_since(h, now).is_none()).count();
+        out.push(check(Level::Ok, "Team-Agent", format!("läuft · {busy} Rolle(n) arbeiten gerade"), None));
+    }
+    match &s.service {
+        Some(Ok(i)) if !i.autostart => out.push(check(Level::Info, "Kein Autostart", "Der Team-Agent startet nicht von selbst mit der Anmeldung.", Some(("Einschalten", Fix::EnableAgentAutostart)))),
+        Some(Err(e)) => out.push(check(Level::Warn, "Autostart unbekannt", format!("Abfrage fehlgeschlagen: {e}"), None)),
+        _ => {}
+    }
+}
+
+fn role_checks(s: &Snapshot, now: DateTime<Local>, out: &mut Vec<Check>) {
+    for (role, _) in ROLES.iter().filter(|(r, _)| s.enabled_roles().contains(r)) {
+        let name = role_label(role);
+        if let Some(reason) = s.pauses.get(*role) {
+            out.push(check(Level::Warn, format!("{name} pausiert"), format!("Grund: {reason}"), Some(("Fortsetzen", Fix::ResumeRole(role.to_string())))));
+            continue;
+        }
+        let (level, text) = role_status(s, role, now);
+        if level == Level::Warn {
+            let fix = text.starts_with("reagiert nicht").then_some(("Neu starten", Fix::RestartAgent));
+            out.push(check(Level::Warn, format!("{name}: {}", if fix.is_some() { "reagiert nicht" } else { "wartet" }), text, fix));
+        }
+    }
+}
+
+fn po_check(s: &Snapshot, now: DateTime<Local>, out: &mut Vec<Check>) {
+    if !s.enabled_roles().contains(&"product-owner") {
+        return;
+    }
+    let Some(po) = &s.po else {
+        out.push(check(Level::Info, "Product Owner", "Noch kein PO-Lauf protokolliert.", None));
+        return;
     };
-    Some(with_fix(check(Level::Warn, "Pausiert", detail), "Fortsetzen", Fix::Resume))
-}
-
-fn task_check(s: &Snapshot, now: DateTime<Local>) -> Option<Check> {
-    Some(match s.task.as_ref()? {
-        Err(e) => check(Level::Warn, "Zeitplan", format!("Abfrage fehlgeschlagen: {e}")),
-        Ok(t) if !t.exists => check(Level::Error, "Kein Zeitplan", "Scheduled Task 'LunimaAgentLoop' fehlt — scripts\\Register-AgentLoop.ps1 ausführen."),
-        Ok(t) if t.state == "Disabled" => with_fix(check(Level::Error, "Zeitplan deaktiviert", "Der stündliche Task ist in Windows abgeschaltet."), "Einschalten", Fix::EnableTask),
-        Ok(t) => {
-            let next = t.next_run.map(|n| format!("nächster Lauf {}", relative(n, now))).unwrap_or_else(|| "kein nächster Lauf geplant".into());
-            let last = t.last_run.map(|l| format!(" · zuletzt {}", relative(l, now))).unwrap_or_default();
-            // 0 = success; 0x41301 = currently running; 0x41303 = has not run yet
-            let failed = t.last_result.is_some_and(|r| ![0, 0x41301, 0x41303].contains(&r));
-            let result = if failed { format!(" (Ergebnis {})", t.last_result.unwrap_or_default()) } else { String::new() };
-            check(if failed { Level::Warn } else { Level::Ok }, "Zeitplan", format!("{} · {next}{last}{result}", t.state))
+    let last = po.last_start.as_deref().and_then(parse_time).map(|t| relative(t, now)).unwrap_or_else(|| "—".into());
+    let note = if po.last_note.is_empty() { String::new() } else { format!(": {}", po.last_note) };
+    match po.last_result.as_str() {
+        "error" | "timeout" => out.push(check(Level::Warn, "Letzter PO-Lauf fehlgeschlagen", format!("{last} ({}){note}", po.last_result), None)),
+        _ => {
+            let overdue = po.next_due.as_deref().and_then(parse_time).filter(|d| s.agent_running && now - *d > Duration::hours(1));
+            match overdue {
+                Some(d) => out.push(check(Level::Warn, "PO-Lauf überfällig", format!("war fällig {}", relative(d, now)), Some(("Neu starten", Fix::RestartAgent)))),
+                None => out.push(check(Level::Ok, "Product Owner", format!("letzter Lauf {last}{note}"), None)),
+            }
         }
-    })
-}
-
-fn owner_check(s: &Snapshot, now: DateTime<Local>) -> Option<Check> {
-    let Some(latest) = s.passes.first() else {
-        return Some(check(Level::Info, "Product Owner", "Noch kein PO-Lauf protokolliert."));
-    };
-    let when = latest.file.started.map(|t| relative(t, now)).unwrap_or_default();
-    let actions = latest.pass.actions.len();
-    let running = s.loop_running && is_newest_run_log(&s.logs, &latest.file);
-    Some(match latest.outcome(running) {
-        Outcome::Running => check(Level::Info, "Product Owner arbeitet", format!("Lauf gestartet {when} · {actions} Aktionen bisher")),
-        Outcome::Aborted => check(Level::Warn, "PO-Lauf abgebrochen", format!("Lauf {when} endete ohne Abschluss (Timeout oder Absturz).")),
-        Outcome::Failed(msg) => {
-            let hint = if msg.to_lowercase().contains("authenticat") {
-                "\n→ Claude-Anmeldung abgelaufen: in einem Terminal `claude` starten und /login ausführen."
-            } else {
-                ""
-            };
-            // no restart offer while another loop process runs (no locking in the loop)
-            let c = check(Level::Error, "Letzter PO-Lauf fehlgeschlagen", format!("{when}: {msg}{hint}"));
-            if s.loop_running { c } else { with_fix(c, "Erneut starten", Fix::RunOwner) }
-        }
-        Outcome::Succeeded => {
-            let stale = latest.file.started.is_some_and(|t| now - t > Duration::hours(24));
-            check(if stale { Level::Warn } else { Level::Ok }, "Product Owner", format!("letzter Lauf {when} · {actions} Aktionen"))
-        }
-    })
-}
-
-fn worker_check(s: &Snapshot) -> Option<Check> {
-    // the loop's own workers are off in team mode — their old failures don't matter
-    if !s.config.as_ref().is_ok_and(|c| c.bool("workersEnabled")) {
-        return None;
     }
-    let streak = s.state.as_ref().ok()?.failure_streak("task");
-    if streak.len() < 2 {
-        return None;
+}
+
+fn log_checks(f: &LogFindings, now: DateTime<Local>, out: &mut Vec<Check>) {
+    if let Some(at) = f.not_logged_in.filter(|t| now - *t < Duration::hours(2)) {
+        out.push(check(Level::Error, "Claude nicht angemeldet", format!("{}: Claude meldet „not logged in“.", relative(at, now)), Some(("Einrichten", Fix::OpenSetup))));
     }
-    let note = streak[0].note.clone().unwrap_or_else(|| format!("Exit {}", streak[0].exit_code));
-    let since = streak.last().and_then(|r| parse_time(&r.timestamp)).map(|t| format!(" seit {}", t.format("%d.%m. %H:%M"))).unwrap_or_default();
-    let clone_clean = matches!(s.clone.as_ref(), Some(Ok(c)) if c.exists && c.dirty.is_empty() && c.untracked.is_empty());
-    if note.contains("branch setup") && clone_clean {
-        let detail = format!("{} Läufe in Folge{since}: {note}. Der Clone ist jetzt sauber — der nächste Lauf sollte klappen.", streak.len());
-        return Some(check(Level::Warn, "Worker scheiterten", detail));
+    let failures = LogFindings::count_since(&f.claude_failures, now, 2);
+    if failures >= 3 {
+        out.push(check(Level::Warn, "Claude-Läufe scheitern", format!("{failures} abgebrochene oder hängende Claude-Läufe in 2 Std. — siehe Protokolle."), None));
     }
-    let hint = if note.contains("branch setup") { " — meist blockieren uncommittete Änderungen im Clone." } else { "" };
-    Some(check(Level::Error, "Worker scheitern", format!("{} Läufe in Folge{since}: {note}{hint}", streak.len())))
-}
-
-fn clone_check(s: &Snapshot) -> Option<Check> {
-    Some(match s.clone.as_ref()? {
-        Err(e) => check(Level::Warn, "Clone", e.clone()),
-        Ok(c) if !c.exists => check(Level::Error, "Clone fehlt", "clonePath ist kein Git-Repo — `lunima-agent-loop init` ausführen."),
-        // a running pass works in the clone: changes there are expected, never "rescue" them
-        Ok(c) if !c.dirty.is_empty() && s.loop_running => check(Level::Info, "Clone in Benutzung", format!("Ein Lauf arbeitet gerade darin ({} geänderte Dateien).", c.dirty.len())),
-        Ok(c) if !c.dirty.is_empty() => with_fix(
-            check(Level::Error, "Clone blockiert", format!("{} geänderte, versionierte Dateien verhindern jeden Branch-Wechsel (z. B. {}).", c.dirty.len(), c.dirty[0])),
-            "Als WIP sichern",
-            Fix::RescueWip,
-        ),
-        // untracked files normally don't stop `git checkout -B` — unless one collides with a
-        // tracked file; the worker's "branch setup failed" streak tells that case apart
-        Ok(c) if !c.untracked.is_empty() && branch_setup_failing(s) => with_fix(
-            check(Level::Error, "Clone blockiert", format!("Unversionierte Dateien kollidieren mit dem Branch-Wechsel (z. B. {}).", c.untracked[0])),
-            "Als WIP sichern",
-            Fix::RescueWip,
-        ),
-        Ok(c) if !c.untracked.is_empty() => check(Level::Info, "Clone: unversionierte Dateien", format!("{} Datei(en), z. B. {} — blockieren nichts.", c.untracked.len(), c.untracked[0])),
-        Ok(c) => check(Level::Ok, "Clone", format!("sauber · {}", c.branch_line)),
-    })
-}
-
-/// The loop's own workers keep failing at branch setup (only relevant while they run).
-fn branch_setup_failing(s: &Snapshot) -> bool {
-    let workers_on = s.config.as_ref().is_ok_and(|c| c.bool("workersEnabled"));
-    let streak = s.state.as_ref().map(|st| st.failure_streak("task")).unwrap_or_default();
-    workers_on && streak.len() >= 2 && streak[0].note.as_deref().is_some_and(|n| n.contains("branch setup"))
-}
-
-fn gh_check(s: &Snapshot) -> Option<Check> {
-    Some(match s.gh_auth.as_ref()? {
-        Ok(()) => check(Level::Ok, "GitHub CLI", "angemeldet"),
-        Err(e) => check(Level::Error, "GitHub CLI", format!("{e} → `gh auth login`")),
-    })
+    let panics = LogFindings::count_since(&f.panics, now, 24);
+    if panics > 0 {
+        out.push(check(Level::Warn, "Interne Fehler im Agent", format!("{panics} abgefangene Abstürze in 24 Std. — siehe agent.log."), None));
+    }
 }
 
 fn headline(s: &Snapshot, checks: &[Check], overall: Level, now: DateTime<Local>) -> (String, String) {
-    let next = s.task.as_ref().and_then(|t| t.as_ref().ok()).and_then(|t| t.next_run).map(|n| format!("Nächster Lauf {}", relative(n, now)));
-    let paused = checks.iter().any(|c| c.title == "Pausiert");
+    let next = s.po.as_ref().and_then(|p| p.next_due.as_deref()).and_then(parse_time).filter(|t| *t > now).map(|t| format!("Nächster PO-Lauf {}", relative(t, now)));
+    let working = s.heartbeats.values().any(|h| h.state == "working" && stale_since(h, now).is_none());
     match overall {
-        Level::Error => {
-            let first = checks.iter().find(|c| c.level == Level::Error).map(|c| c.title.clone()).unwrap_or_default();
-            ("Braucht Aufmerksamkeit".into(), first)
-        }
-        _ if paused => ("Pausiert".into(), "Es wird nichts bearbeitet, bis du fortsetzt.".into()),
-        _ if s.loop_running => ("Arbeitet gerade".into(), next.unwrap_or_default()),
+        Level::Error => ("Braucht Aufmerksamkeit".into(), checks.iter().find(|c| c.level == Level::Error).map(|c| c.title.clone()).unwrap_or_default()),
+        _ if s.all_paused() => ("Pausiert".into(), "Es wird nichts bearbeitet, bis du fortsetzt.".into()),
+        _ if working => ("Arbeitet gerade".into(), next.unwrap_or_default()),
         Level::Warn => ("Läuft mit Hinweisen".into(), next.unwrap_or_default()),
         Level::Pending => ("Wird geprüft …".into(), String::new()),
-        _ => ("Alles in Ordnung".into(), next.unwrap_or_else(|| "Läuft stündlich".into())),
+        _ => ("Alles in Ordnung".into(), next.unwrap_or_else(|| "Wartet auf Arbeit".into())),
     }
 }
 

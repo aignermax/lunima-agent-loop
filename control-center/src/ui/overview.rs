@@ -2,21 +2,25 @@
 
 use super::theme::{self, MUTED};
 use super::widgets::{self, card, level_dot, pill, primary, secondary, stat};
+use crate::app::Page;
 use crate::collector::{Action, Handle};
 use crate::core::health::{Fix, Health, Level};
 use crate::core::snapshot::{relative, Snapshot};
-use crate::core::state::{parse_time, Pause};
-use chrono::Local;
+use crate::sys::agent_service::Verb;
+use chrono::{Duration, Local};
 use eframe::egui::{self, RichText, Ui};
+use team_core::state::parse_time;
 
-pub fn show(ui: &mut Ui, s: &Snapshot, health: &Health, handle: &Handle) {
+/// Returns a page to switch to (a fix that lives elsewhere, e.g. the setup assistant).
+pub fn show(ui: &mut Ui, s: &Snapshot, health: &Health, handle: &Handle) -> Option<Page> {
     hero(ui, s, health, handle);
     ui.add_space(12.0);
     stats(ui, s);
     ui.add_space(12.0);
-    checks(ui, health, handle);
+    let target = checks(ui, health, handle);
     ui.add_space(12.0);
     recent_runs(ui, s);
+    target
 }
 
 fn hero(ui: &mut Ui, s: &Snapshot, health: &Health, handle: &Handle) {
@@ -45,35 +49,40 @@ fn hero_buttons(ui: &mut Ui, s: &Snapshot, handle: &Handle) {
     if ui.button("⟳").on_hover_text("Alles neu prüfen").clicked() {
         handle.send(Action::RefreshAll);
     }
-    let paused = s.state.as_ref().map(|st| st.pause(Local::now()) != Pause::None).unwrap_or(false);
-    if paused {
-        if primary(ui, "▶  Fortsetzen") {
-            handle.send(Action::Resume);
+    if !s.agent_running {
+        if s.config.is_ok() && s.agent_exe.is_some() && primary(ui, "▶  Team-Agent starten") {
+            handle.send(Action::Agent(Verb::Start));
         }
-    } else if secondary(ui, "⏸  Pausieren") {
-        handle.send(Action::Pause);
+        return;
     }
-    if !s.loop_running && secondary(ui, "🚀  PO jetzt starten") {
-        handle.send(Action::RunOwner);
+    if s.all_paused() {
+        if primary(ui, "▶  Fortsetzen") {
+            handle.send(Action::PauseAll(false));
+        }
+    } else if secondary(ui, "⏸  Alle pausieren") {
+        handle.send(Action::PauseAll(true));
     }
 }
 
 fn stats(ui: &mut Ui, s: &Snapshot) {
     let now = Local::now();
-    let today = s.state.as_ref().map(|st| st.today(now)).unwrap_or_default();
-    let cap = s.config.as_ref().ok().and_then(|c| c.int("maxTasksPerDay")).map(|c| format!(" / {c}")).unwrap_or_default();
-    let last_owner = s.state.as_ref().ok().and_then(|st| st.last_owner_run()).map(|t| relative(t, now)).unwrap_or_else(|| "—".into());
-    let next = s.task.as_ref().and_then(|t| t.as_ref().ok()).and_then(|t| t.next_run);
-    let created = s.passes.iter().filter(|p| p.file.started.is_some_and(|t| now - t < chrono::Duration::hours(48))).flat_map(|p| &p.pass.actions).filter(|a| a.kind == crate::core::activity::ActionKind::IssueCreated).count();
+    let within = |h: &crate::core::agent_files::HistoryEntry, hours: i64| parse_time(&h.timestamp).is_some_and(|t| now - t < Duration::hours(hours));
+    let day = s.history.iter().filter(|h| within(h, 24)).count();
+    let prs = s.history.iter().filter(|h| within(h, 24 * 7) && h.pr_url.is_some()).count();
+    let po = s.po.as_ref();
+    let last = po.and_then(|p| p.last_start.as_deref()).and_then(parse_time).map(|t| relative(t, now)).unwrap_or_else(|| "—".into());
+    let result = po.map(|p| p.last_result.clone()).filter(|r| !r.is_empty()).unwrap_or_default();
+    let next = po.and_then(|p| p.next_due.as_deref()).and_then(parse_time);
     ui.columns(4, |cols| {
-        stat(&mut cols[0], "Worker-Tasks heute", &format!("{}{cap}", today.tasks), "");
-        stat(&mut cols[1], "Issues vom PO (48 h)", &created.to_string(), &format!("{} PO-Läufe heute", today.owner_runs));
-        stat(&mut cols[2], "Letzter PO-Lauf", &last_owner, "");
-        stat(&mut cols[3], "Nächster Lauf", &next.map(|n| n.format("%H:%M").to_string()).unwrap_or_else(|| "—".into()), &next.map(|n| relative(n, now)).unwrap_or_default());
+        stat(&mut cols[0], "Coder-Läufe (24 h)", &day.to_string(), "");
+        stat(&mut cols[1], "PRs vom Coder (7 Tage)", &prs.to_string(), "");
+        stat(&mut cols[2], "Letzter PO-Lauf", &last, &result);
+        stat(&mut cols[3], "Nächster PO-Lauf", &next.map(|n| n.format("%H:%M").to_string()).unwrap_or_else(|| "—".into()), &next.map(|n| relative(n, now)).unwrap_or_default());
     });
 }
 
-fn checks(ui: &mut Ui, health: &Health, handle: &Handle) {
+fn checks(ui: &mut Ui, health: &Health, handle: &Handle) -> Option<Page> {
+    let mut target = None;
     card(ui, Some("Gesundheit"), |ui| {
         for (i, c) in health.checks.iter().enumerate() {
             if i > 0 {
@@ -89,53 +98,53 @@ fn checks(ui: &mut Ui, health: &Health, handle: &Handle) {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let clicked = if c.level == Level::Error { primary(ui, label) } else { secondary(ui, label) };
                         if clicked {
-                            handle.send(fix_action(fix));
+                            match fix_action(fix) {
+                                Some(a) => handle.send(a),
+                                None => target = Some(Page::Setup),
+                            }
                         }
                     });
                 }
             });
         }
     });
+    target
 }
 
-fn fix_action(fix: &Fix) -> Action {
-    match fix {
-        Fix::Resume => Action::Resume,
-        Fix::EnableConfig => Action::EnableConfig,
-        Fix::EnableTask => Action::SetTaskEnabled(true),
-        Fix::RescueWip => Action::RescueWip,
-        Fix::RunOwner => Action::RunOwner,
-        Fix::StartUnit(role) => Action::Unit(role.clone(), "start"),
-        Fix::RestartUnit(role) => Action::Unit(role.clone(), "restart"),
+/// `None` = the fix is a page (setup assistant), not an action.
+fn fix_action(fix: &Fix) -> Option<Action> {
+    Some(match fix {
+        Fix::OpenSetup => return None,
+        Fix::StartAgent => Action::Agent(Verb::Start),
+        Fix::RestartAgent => Action::Agent(Verb::Restart),
+        Fix::EnableAgentAutostart => Action::SetAgentAutostart(true),
         Fix::ResumeRole(role) => Action::SetRolePaused(role.clone(), false),
-        Fix::DisableLoopWorkers => Action::SetLoopFlag("workersEnabled", false),
-    }
+    })
 }
 
 fn recent_runs(ui: &mut Ui, s: &Snapshot) {
-    card(ui, Some("Letzte Läufe"), |ui| {
-        let runs = s.state.as_ref().map(|st| st.recent_runs(12)).unwrap_or_default();
-        if runs.is_empty() {
+    card(ui, Some("Letzte Läufe des Coders"), |ui| {
+        if s.history.is_empty() {
             widgets::muted(ui, "Noch keine Läufe protokolliert.");
             return;
         }
         let now = Local::now();
         egui::Grid::new("runs").num_columns(5).striped(true).spacing([18.0, 6.0]).show(ui, |ui| {
-            for h in ["Zeit", "Art", "Issue", "Ergebnis", "Notiz"] {
+            for h in ["Zeit", "Repo", "Issue", "Ergebnis", "Rechner"] {
                 ui.label(RichText::new(h).color(MUTED).size(12.0));
             }
             ui.end_row();
-            for r in runs {
+            for r in s.history.iter().take(12) {
                 let when = parse_time(&r.timestamp).map(|t| format!("{} · {}", t.format("%d.%m. %H:%M"), relative(t, now))).unwrap_or(r.timestamp.clone());
                 ui.label(when);
-                ui.label(if r.kind == "owner" { "Product Owner" } else { "Worker" });
-                ui.label(r.issue.map(|i| format!("#{i}")).unwrap_or_else(|| "—".into()));
-                if r.exit_code == 0 {
-                    pill(ui, &format!("ok · {:.0} min", r.duration_sec / 60.0), theme::OK);
-                } else {
-                    pill(ui, &format!("Exit {}", r.exit_code), theme::ERROR);
+                ui.label(r.repository.rsplit('/').next().unwrap_or(""));
+                ui.label(format!("#{}", r.number));
+                match (&r.pr_url, r.completed) {
+                    (Some(_), _) => pill(ui, &format!("PR · {} min", r.duration_sec.unwrap_or(0) / 60), theme::OK),
+                    (None, true) => pill(ui, "nichts zu tun", theme::MUTED),
+                    (None, false) => pill(ui, "aufgegeben", theme::ERROR),
                 }
-                ui.label(RichText::new(r.note.unwrap_or_default()).color(MUTED));
+                ui.label(RichText::new(r.machine.clone().unwrap_or_default()).color(MUTED));
                 ui.end_row();
             }
         });
