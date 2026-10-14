@@ -45,11 +45,17 @@ pub struct RepoClone {
 impl RepoClone {
     /// Clones if missing, then fetches. Never touches a working tree that isn't ours to reset.
     pub fn ensure(dir: &Path, repo: &str) -> Result<Self, String> {
+        Self::ensure_from(dir, repo, &remote_url(repo))
+    }
+
+    /// `ensure` with an explicit clone URL (tests use a local bare repository).
+    pub fn ensure_from(dir: &Path, repo: &str, url: &str) -> Result<Self, String> {
         if !dir.join(".git").exists() {
             if let Some(parent) = dir.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            run_git(None, &["clone", &remote_url(repo), &dir.display().to_string()], true)?;
+            run_git(None, &["-c", "core.longpaths=true", "clone", url, &dir.display().to_string()], true)?;
+            let _ = run_git(Some(dir), &["config", "core.longpaths", "true"], false);
         }
         let c = Self { dir: dir.to_path_buf(), repo: repo.to_string() };
         c.fetch()?;

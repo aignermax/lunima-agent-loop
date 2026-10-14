@@ -53,6 +53,14 @@ pub struct Ref {
     pub name: String,
     #[serde(default)]
     pub sha: String,
+    /// repository the branch lives in (`None` when the fork was deleted)
+    #[serde(default)]
+    pub repo: Option<RepoName>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct RepoName {
+    pub full_name: String,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
@@ -220,6 +228,28 @@ impl Repo {
 
     pub fn edit_pr_body(&self, number: u64, body: &str) -> Result<(), String> {
         api("PATCH", &self.p(&format!("pulls/{number}")), Some(&json!({ "body": body }))).map(|_| ())
+    }
+
+    /// Atomic claim between machines: creates the hidden ref `refs/team-locks/<key>`.
+    /// `Ok(false)` when it already exists (someone else holds the lock). Not a branch, so it
+    /// shows up neither in the branch list nor in PRs.
+    pub fn try_lock(&self, key: &str) -> Result<bool, String> {
+        let base = self.default_branch()?;
+        let sha: Value = get_json(&self.p(&format!("git/ref/heads/{}", encode(&base))))?;
+        let sha = sha.pointer("/object/sha").and_then(Value::as_str).ok_or("Sperre: SHA fehlt")?.to_string();
+        match api("POST", &self.p("git/refs"), Some(&json!({ "ref": format!("refs/team-locks/{key}"), "sha": sha }))) {
+            Ok(_) => Ok(true),
+            Err(e) if is_status(&e, 422) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Releases a lock from `try_lock` (missing lock is fine).
+    pub fn unlock(&self, key: &str) -> Result<(), String> {
+        match api("DELETE", &self.p(&format!("git/refs/team-locks/{key}")), None) {
+            Err(e) if is_status(&e, 404) || is_status(&e, 422) => Ok(()),
+            other => other.map(|_| ()),
+        }
     }
 
     /// `true` if a branch exists on GitHub.
