@@ -37,22 +37,6 @@ fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.windows(2).find(|w| w[0] == name).map(|w| PathBuf::from(&w[1]))
 }
 
-/// Legacy files on this machine: the Python agent's `.env` and the PO loop's
-/// `agent-loop.json` (loop root order as in the loop's README: current folder, exe folder,
-/// `%LOCALAPPDATA%\lunima-agent-loop`, then the developer checkout `~/lunima-agent-loop`).
-fn legacy_candidates() -> (Option<PathBuf>, Option<PathBuf>) {
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
-    let env = home.as_ref().map(|h| h.join("autonomous-issue-agent").join(".env")).filter(|p| p.is_file());
-    let roots = [
-        std::env::current_dir().ok(),
-        std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from)),
-        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("lunima-agent-loop")),
-        home.as_ref().map(|h| h.join("lunima-agent-loop")),
-    ];
-    let lp = roots.into_iter().flatten().map(|r| r.join("agent-loop.json")).find(|p| p.is_file());
-    (env, lp)
-}
-
 fn init(args: &[String]) -> i32 {
     let Some(p) = paths() else {
         eprintln!("Kein Datenordner bestimmbar (LOCALAPPDATA/HOME fehlt) — LUNIMA_TEAM_HOME setzen.");
@@ -62,7 +46,7 @@ fn init(args: &[String]) -> i32 {
         println!("{} existiert bereits — nichts geändert.", p.config().display());
         return 0;
     }
-    let (auto_env, auto_loop) = legacy_candidates();
+    let (auto_env, auto_loop) = team_core::import::legacy_candidates();
     let env = arg(args, "--from-env").or(auto_env);
     let lp = arg(args, "--from-loop").or(auto_loop);
     let cfg = match team_core::import::from_legacy(env.as_deref(), lp.as_deref()) {

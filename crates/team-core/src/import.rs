@@ -178,6 +178,24 @@ pub fn apply_loop_config(c: &mut TeamConfig, json: &serde_json::Value) {
 }
 
 /// Builds a config from whatever of the two legacy files exists.
+/// Legacy files on this machine: the Python agent's `.env` and the PO loop's
+/// `agent-loop.json` (loop root order as in the loop's README: current folder, exe folder,
+/// `%LOCALAPPDATA%\lunima-agent-loop`, then the developer checkout `~/lunima-agent-loop`).
+/// Used by `lunima-team-agent init` and the Control Center's setup assistant.
+pub fn legacy_candidates() -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
+    use std::path::PathBuf;
+    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
+    let env = home.as_ref().map(|h| h.join("autonomous-issue-agent").join(".env")).filter(|p| p.is_file());
+    let roots = [
+        std::env::current_dir().ok(),
+        std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from)),
+        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("lunima-agent-loop")),
+        home.as_ref().map(|h| h.join("lunima-agent-loop")),
+    ];
+    let lp = roots.into_iter().flatten().map(|r| r.join("agent-loop.json")).find(|p| p.is_file());
+    (env, lp)
+}
+
 /// Builds a config from the legacy files. Each given file that cannot be read or parsed is
 /// an error (a silently ignored typo would leave a config without repos).
 pub fn from_legacy(env_file: Option<&Path>, loop_config: Option<&Path>) -> Result<TeamConfig, String> {

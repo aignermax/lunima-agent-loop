@@ -80,3 +80,21 @@ pub fn page_title(ui: &mut Ui, title: &str, subtitle: &str) {
     }
     ui.add_space(12.0);
 }
+
+/// iOS-style switch.
+pub fn toggle(on: &mut bool) -> impl egui::Widget + '_ {
+    move |ui: &mut Ui| {
+        let size = egui::vec2(40.0, 22.0);
+        let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
+        if response.clicked() {
+            *on = !*on;
+            response.mark_changed();
+        }
+        let t = ui.ctx().animate_bool_responsive(response.id, *on);
+        let fill = if *on { ACCENT } else { Color32::from_rgb(0x33, 0x3B, 0x4F) };
+        ui.painter().rect_filled(rect, CornerRadius::same(11), fill);
+        let x = egui::lerp((rect.left() + 11.0)..=(rect.right() - 11.0), t);
+        ui.painter().circle_filled(egui::pos2(x, rect.center().y), 8.0, Color32::WHITE);
+        response
+    }
+}

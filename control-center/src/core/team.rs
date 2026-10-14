@@ -1,137 +1,121 @@
-//! The whole team: the PO loop (Windows) plus the issue agent's roles (WSL). Health checks
-//! here cover the issue agent — each one is a failure that once stalled it for days.
+//! The four roles of the team agent and what each one is doing, from its heartbeat,
+//! the pauses in control.json and team.toml.
 
-use super::envfile::EnvFile;
-use super::health::{Check, Fix, Level};
-use super::issue_agent::{Heartbeat, HistoryEntry, LogFindings};
-use super::snapshot::{relative, Probe, Snapshot};
-use crate::sys::wsl::UNITS;
+use super::agent_files::Heartbeat;
+use super::health::Level;
+use super::snapshot::{relative, Snapshot};
 use chrono::{DateTime, Duration, Local};
-use std::collections::BTreeMap;
-use std::path::PathBuf;
+use team_core::config::TeamConfig;
 
-const LOG_WARN_BYTES: u64 = 200 * 1024 * 1024;
-const QA_LOOP_ROUNDS: u64 = 5;
-/// Longer than the agent's maximum poll backoff (900 s), so a role that is backing off
-/// during an API outage is not mistaken for a dead one.
-const IDLE_SILENCE_MINUTES: i64 = 20;
+/// (role key, German name) in pipeline order.
+pub const ROLES: [(&str, &str); 4] = [("product-owner", "Product Owner"), ("coder", "Coder"), ("qa", "QA-Tester"), ("pr-feedback", "PR-Feedback")];
 
-/// Everything known about the issue agent.
-#[derive(Clone, Default)]
-pub struct TeamSnapshot {
-    pub dir: Option<PathBuf>,
-    pub heartbeats: BTreeMap<String, Heartbeat>,
-    pub pauses: BTreeMap<String, String>,
-    pub history: Vec<HistoryEntry>,
-    /// Repos found by the agent's org discovery.
-    pub discovered: Vec<String>,
-    /// repo → roles enabled by its .agent.toml (Err: not readable / no file)
-    pub agent_tomls: BTreeMap<String, Result<Vec<String>, String>>,
-    /// When each .agent.toml was fetched (re-fetched at most every few minutes).
-    pub agent_toml_at: BTreeMap<String, std::time::Instant>,
-    pub env: Option<EnvFile>,
-    pub units: Probe<BTreeMap<String, String>>,
-    pub claude_version: Probe<String>,
-    /// WSL's time zone (agent.log timestamps are WSL local time).
-    pub wsl_offset: Option<chrono::FixedOffset>,
-    pub log: Option<LogFindings>,
-}
+/// Longer than the daemon's maximum backoff (900 s): a role backing off during an outage
+/// is not mistaken for a dead one.
+pub const IDLE_SILENCE_MINUTES: i64 = 20;
+/// Builds and test suites run without heartbeat touches.
+pub const WORKING_SILENCE_MINUTES: i64 = 60;
 
-/// German display name of an issue-agent role.
 pub fn role_label(role: &str) -> &'static str {
+    ROLES.iter().find(|(r, _)| *r == role).map(|(_, l)| *l).unwrap_or("Rolle")
+}
+
+pub fn role_enabled(cfg: &TeamConfig, role: &str) -> bool {
     match role {
-        "coder" => "Coder",
-        "qa" => "QA-Tester",
-        "pr-feedback" => "PR-Feedback",
-        _ => "Rolle",
+        "coder" => cfg.roles.coder,
+        "qa" => cfg.roles.qa,
+        "pr-feedback" => cfg.roles.pr_feedback,
+        "product-owner" => cfg.roles.product_owner,
+        _ => false,
     }
 }
 
-fn check(level: Level, title: String, detail: impl Into<String>, fix: Option<(&'static str, Fix)>) -> Check {
-    Check { level, title, detail: detail.into(), fix }
+/// A heartbeat that hasn't been refreshed for too long.
+pub fn stale_since(hb: &Heartbeat, now: DateTime<Local>) -> Option<DateTime<Local>> {
+    let limit = if hb.state == "working" { WORKING_SILENCE_MINUTES } else { IDLE_SILENCE_MINUTES };
+    hb.updated.filter(|u| now - *u > Duration::minutes(limit))
 }
 
-fn recent(t: Option<DateTime<Local>>, now: DateTime<Local>, hours: i64) -> Option<DateTime<Local>> {
-    t.filter(|t| now - *t < Duration::hours(hours))
-}
-
-/// Health checks for the issue agent. A PO-only setup (no issue agent) is not a finding —
-/// the Team page explains how to connect one.
-pub fn checks(s: &Snapshot, now: DateTime<Local>) -> Vec<Check> {
-    let t = &s.team;
-    if t.dir.is_none() {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    unit_checks(t, now, &mut out);
-    log_checks(t, now, &mut out);
-    collision_check(s, &mut out);
-    out
-}
-
-fn unit_checks(t: &TeamSnapshot, now: DateTime<Local>, out: &mut Vec<Check>) {
-    let units = match &t.units {
-        Some(Ok(u)) => u,
-        Some(Err(e)) => {
-            out.push(check(Level::Warn, "WSL nicht erreichbar".into(), format!("Status der Agents unbekannt: {e}"), None));
-            return;
-        }
-        None => return,
+fn working_text(hb: &Heartbeat, now: DateTime<Local>) -> String {
+    let what = match (hb.detail.get("issue"), hb.detail.get("pr")) {
+        (Some(i), _) => format!("Issue #{i}"),
+        (_, Some(p)) => format!("PR #{p}"),
+        _ => "eine Aufgabe".into(),
     };
-    for (role, _) in UNITS {
-        let name = role_label(role);
-        let state = units.get(*role).map(String::as_str).unwrap_or("unbekannt");
-        if state != "active" {
-            out.push(check(Level::Error, format!("{name} läuft nicht"), format!("systemd-Unit ist '{state}'."), Some(("Starten", Fix::StartUnit(role.to_string())))));
-            continue;
-        }
-        if let Some(reason) = t.pauses.get(*role) {
-            out.push(check(Level::Warn, format!("{name} pausiert"), format!("Grund: {reason}"), Some(("Fortsetzen", Fix::ResumeRole(role.to_string())))));
-            continue;
-        }
-        let Some(hb) = t.heartbeats.get(*role) else { continue };
-        // working without a Claude session (git, builds, test suites) can be quiet for a while
-        let limit = if hb.state == "working" { Duration::minutes(60) } else { Duration::minutes(IDLE_SILENCE_MINUTES) };
-        if let Some(u) = hb.updated.filter(|u| now - *u > limit) {
-            out.push(check(Level::Warn, format!("{name} reagiert nicht"), format!("Letztes Lebenszeichen {} (Zustand '{}').", relative(u, now), hb.state), Some(("Neu starten", Fix::RestartUnit(role.to_string())))));
-        }
-    }
+    let repo = hb.detail.get("repo").and_then(|r| r.as_str()).map(|r| format!(" in {}", r.rsplit('/').next().unwrap_or(r))).unwrap_or_default();
+    let title = hb.detail.get("title").and_then(|t| t.as_str()).filter(|t| !t.is_empty()).map(|t| format!(" „{t}“")).unwrap_or_default();
+    let since = hb.since.map(|s| format!(" · seit {}", relative(s, now).trim_start_matches("vor "))).unwrap_or_default();
+    format!("arbeitet an {what}{repo}{title}{since}")
 }
 
-fn log_checks(t: &TeamSnapshot, now: DateTime<Local>, out: &mut Vec<Check>) {
-    let Some(f) = &t.log else { return };
-    let version = t.claude_version.as_ref().and_then(|v| v.as_ref().ok()).map(|v| format!(" (installiert: {v})")).unwrap_or_default();
-    if let Some(at) = recent(f.model_unsupported, now, 2) {
-        out.push(check(Level::Error, "Claude-CLI in WSL zu alt".into(), format!("{}: das konfigurierte Modell wird nicht unterstützt{version}.\n→ in WSL: npm install -g @anthropic-ai/claude-code@latest", relative(at, now)), None));
+/// Status line of a role: (level, text).
+pub fn role_status(s: &Snapshot, role: &str, now: DateTime<Local>) -> (Level, String) {
+    if s.cfg().is_some_and(|c| !role_enabled(c, role)) {
+        return (Level::Info, "abgeschaltet (Einstellungen → Rollen)".into());
     }
-    if let Some(at) = recent(f.not_logged_in, now, 2) {
-        out.push(check(Level::Error, "Claude in WSL nicht angemeldet".into(), format!("{}: 'Not logged in'. Ohne ANTHROPIC_API_KEY in der .env braucht WSL ein eigenes /login.", relative(at, now)), None));
+    if !s.agent_running {
+        return (Level::Error, "Team-Agent läuft nicht".into());
     }
-    let worst = f.qa_loops.iter().filter(|(_, n, at)| *n >= QA_LOOP_ROUNDS && now - *at < Duration::hours(3)).max_by_key(|(_, n, _)| *n);
-    if let Some(&(pr, n, at)) = worst {
-        out.push(check(Level::Error, "QA-Schleife".into(), format!("PR #{pr} ist {n}× durch die QA gefallen (zuletzt {}). Jede Runde kostet einen Review-Lauf.", relative(at, now)), None));
+    if let Some(reason) = s.pauses.get(role) {
+        return (Level::Warn, format!("pausiert — {reason}"));
     }
-    let failures = f.claude_failures.iter().filter(|t| now - **t < Duration::hours(2)).count();
-    if failures >= 3 {
-        out.push(check(Level::Warn, "Claude-Aufrufe scheitern".into(), format!("{failures} fehlgeschlagene Claude-Läufe in den letzten 2 Std. — siehe Protokolle."), None));
+    let Some(hb) = s.heartbeats.get(role) else { return (Level::Pending, "noch kein Lebenszeichen".into()) };
+    if let Some(u) = stale_since(hb, now) {
+        return (Level::Warn, format!("reagiert nicht · letztes Lebenszeichen {}", relative(u, now)));
     }
-    if f.log_bytes > LOG_WARN_BYTES {
-        out.push(check(Level::Info, "agent.log sehr groß".into(), format!("{} MB — wird nie rotiert.", f.log_bytes / 1024 / 1024), None));
-    }
-}
-
-/// The PO loop's own workers and the issue agent's coder on the same repo pick the same issues.
-fn collision_check(s: &Snapshot, out: &mut Vec<Check>) {
-    let Ok(cfg) = &s.config else { return };
-    let Some(env) = &s.team.env else { return };
-    let repo = cfg.str("githubRepo");
-    let coder_up = matches!(&s.team.units, Some(Ok(u)) if u.get("coder").is_some_and(|st| st == "active"));
-    let shared = env.list("AGENT_REPOS").iter().any(|r| r.eq_ignore_ascii_case(&repo));
-    if cfg.bool("workersEnabled") && coder_up && shared {
-        out.push(check(Level::Warn, "Zwei Coder auf einem Repo".into(), format!("PO-Loop-Worker und Issue-Agent-Coder arbeiten beide an {repo} und konkurrieren um dieselben Issues."), Some(("Loop-Worker abschalten", Fix::DisableLoopWorkers))));
+    match hb.state.as_str() {
+        "working" => (Level::Info, working_text(hb, now)),
+        "paused" => (Level::Warn, format!("wartet — {}", hb.reason().unwrap_or("pausiert"))),
+        _ => (Level::Ok, format!("wartet auf Arbeit · Lebenszeichen {}", hb.updated.map(|u| relative(u, now)).unwrap_or_default())),
     }
 }
 
 #[cfg(test)]
-#[path = "team_tests.rs"]
-mod tests;
+mod tests {
+    use super::*;
+    use team_core::paths::Paths;
+
+    fn snap() -> Snapshot {
+        let mut s = Snapshot::empty(Paths::new("x"));
+        s.config = Ok(TeamConfig::default());
+        s.agent_running = true;
+        s
+    }
+
+    fn hb(state: &str, minutes_ago: i64) -> Heartbeat {
+        let now = Local::now();
+        let mut h = Heartbeat { state: state.into(), updated: Some(now - Duration::minutes(minutes_ago)), since: Some(now - Duration::minutes(90)), ..Default::default() };
+        h.detail.insert("issue".into(), 7.into());
+        h.detail.insert("repo".into(), "o/Lunima".into());
+        h.detail.insert("reason".into(), "Claude-Nutzungslimit bis 15:00".into());
+        h
+    }
+
+    #[test]
+    fn status_follows_config_process_pause_and_heartbeat() {
+        let now = Local::now();
+        let mut s = snap();
+        assert_eq!(role_status(&s, "product-owner", now).0, Level::Info, "PO is off by default");
+        assert_eq!(role_status(&s, "coder", now).0, Level::Pending);
+        s.heartbeats.insert("coder".into(), hb("working", 1));
+        let (level, text) = role_status(&s, "coder", now);
+        assert_eq!(level, Level::Info);
+        assert!(text.contains("Issue #7 in Lunima") && text.contains("seit"), "{text}");
+        s.heartbeats.insert("qa".into(), hb("paused", 0));
+        assert!(role_status(&s, "qa", now).1.contains("Nutzungslimit"));
+        s.heartbeats.insert("pr-feedback".into(), hb("idle", 30));
+        assert_eq!(role_status(&s, "pr-feedback", now).0, Level::Warn);
+        s.pauses.insert("coder".into(), "Control Center".into());
+        assert_eq!(role_status(&s, "coder", now), (Level::Warn, "pausiert — Control Center".into()));
+        s.agent_running = false;
+        assert_eq!(role_status(&s, "qa", now).0, Level::Error);
+    }
+
+    #[test]
+    fn working_roles_may_be_quiet_longer() {
+        let now = Local::now();
+        assert!(stale_since(&hb("working", 40), now).is_none());
+        assert!(stale_since(&hb("idle", 40), now).is_some());
+        assert_eq!(role_label("qa"), "QA-Tester");
+    }
+}

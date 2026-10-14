@@ -101,9 +101,15 @@ mod imp {
 
 #[cfg(not(windows))]
 mod imp {
+    use std::sync::OnceLock;
+
+    static LOCK: OnceLock<std::fs::File> = OnceLock::new();
+
     pub fn show_main() {
         if let Some(ctx) = super::CTX.get() {
             ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Focus);
+            ctx.request_repaint();
         }
     }
     pub fn hide_main() {
@@ -111,7 +117,15 @@ mod imp {
             ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Visible(false));
         }
     }
+    /// An OS file lock in the runtime folder (released automatically when the app exits).
     pub fn claim_single_instance() -> bool {
+        let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let Ok(file) = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(dir.join("lunima-po.lock")) else { return true };
+        if file.try_lock().is_err() {
+            eprintln!("Das Control Center läuft bereits.");
+            return false;
+        }
+        let _ = LOCK.set(file);
         true
     }
     pub fn start_timer(_ms: u32, _f: impl Fn() + 'static) {}

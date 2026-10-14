@@ -1,8 +1,10 @@
-//! Lunima PO Control Center — status, health, activity, settings and rules of the
-//! Product-Owner loop, with a tray icon.
+//! Lunima Team Control Center — status, health, activity, settings and rules of the team
+//! agent (`lunima-team-agent`), with a tray icon.
 //!
-//! Usage: `lunima-po [--root <loop folder>] [--tray] [--page <name>]`
-//! (`--tray` starts hidden in the tray; pages: overview, activity, github, settings, rules, logs)
+//! Usage: `lunima-po [--home <data folder>] [--tray] [--page <name>]`
+//! (`--tray` starts hidden in the tray; `--home` defaults to the agent's data folder,
+//! `LUNIMA_TEAM_HOME` or `%LOCALAPPDATA%\lunima-team`; pages: overview, team, projects,
+//! activity, github, settings, rules, logs, setup)
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -10,7 +12,6 @@ mod app;
 mod collector;
 mod core;
 mod sys;
-mod team_ops;
 mod tray;
 mod ui;
 mod win;
@@ -20,17 +21,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 struct Args {
-    root: Option<PathBuf>,
+    home: Option<PathBuf>,
     start_hidden: bool,
     page: app::Page,
 }
 
 fn parse_args() -> Args {
     let mut args = std::env::args().skip(1);
-    let mut parsed = Args { root: None, start_hidden: false, page: app::Page::Overview };
+    let mut parsed = Args { home: None, start_hidden: false, page: app::Page::Overview };
     while let Some(a) = args.next() {
         match a.as_str() {
-            "--root" => parsed.root = args.next().map(PathBuf::from),
+            "--home" => parsed.home = args.next().map(PathBuf::from),
             "--tray" => parsed.start_hidden = true,
             "--page" => parsed.page = args.next().and_then(|p| app::Page::from_arg(&p)).unwrap_or(parsed.page),
             _ => {}
@@ -57,11 +58,12 @@ fn main() -> eframe::Result<()> {
         return Ok(());
     }
     let args = parse_args();
-    let root = core::root::resolve_root(args.root);
-    let cli = core::root::find_cli(&root);
-    let on_change: Arc<dyn Fn() + Send + Sync> = Arc::new(|| win::request_repaint());
-    let handle = collector::start(root, cli, on_change);
-    let page = args.page;
+    let home = args.home.or_else(team_core::paths::Paths::default_root).unwrap_or_else(|| PathBuf::from("lunima-team"));
+    let paths = team_core::paths::Paths::new(home);
+    // a new machine starts in the setup assistant
+    let page = if paths.config().is_file() { args.page } else { app::Page::Setup };
+    let on_change: Arc<dyn Fn() + Send + Sync> = Arc::new(win::request_repaint);
+    let handle = collector::start(paths, on_change);
 
     let viewport = egui::ViewportBuilder::default()
         .with_title(win::TITLE)

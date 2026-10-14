@@ -3,7 +3,7 @@
 use super::theme::{self, MUTED};
 use super::widgets::{card, link, muted, page_title, pill};
 use crate::core::activity::{ActionKind, Pass};
-use crate::core::logs::{is_newest_run_log, Outcome, PassEntry};
+use crate::core::logs::{newest_of, Outcome, PassEntry, PO_ROLE};
 use crate::core::snapshot::{relative, Snapshot};
 use crate::sys;
 use chrono::Local;
@@ -22,7 +22,7 @@ impl ActivityPage {
             if ui.selectable_label(!self.coder_tab, "Product Owner").clicked() {
                 self.coder_tab = false;
             }
-            if ui.selectable_label(self.coder_tab, "Coder (Issue-Agent)").clicked() {
+            if ui.selectable_label(self.coder_tab, "Coder").clicked() {
                 self.coder_tab = true;
             }
         });
@@ -41,8 +41,10 @@ impl ActivityPage {
         if entries.is_empty() {
             muted(ui, "Keine PO-Läufe gefunden.");
         }
+        let po_working = s.agent_running && s.heartbeats.get(PO_ROLE).is_some_and(|h| h.state == "working");
+        let newest = newest_of(&s.logs, PO_ROLE).map(|f| f.path.clone());
         for (i, entry) in entries.into_iter().enumerate() {
-            pass_card(ui, entry, i == 0, s.loop_running && is_newest_run_log(&s.logs, &entry.file));
+            pass_card(ui, entry, i == 0, po_working && newest.as_ref() == Some(&entry.file.path));
             ui.add_space(10.0);
         }
     }

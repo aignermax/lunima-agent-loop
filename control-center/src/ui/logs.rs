@@ -1,9 +1,9 @@
-//! Logs: raw view of every log file — including the loop's own console mirror, where
-//! the real error behind a failed run shows up.
+//! Logs: raw view of agent.log (where the real error behind a failure shows up) and of
+//! every role's Claude sessions.
 
 use super::theme::MUTED;
 use super::widgets::{card, page_title};
-use crate::core::logs::{tail, LogKind};
+use crate::core::logs::{tail, LogFile, LogKind};
 use crate::core::snapshot::Snapshot;
 use crate::sys;
 use eframe::egui::{self, RichText, Ui};
@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 const TAIL_LINES: usize = 400;
 const FILES_SHOWN: usize = 80;
-const LIST_WIDTH: f32 = 300.0;
+const LIST_WIDTH: f32 = 320.0;
 
 #[derive(Default)]
 pub struct LogsPage {
@@ -23,39 +23,45 @@ pub struct LogsPage {
 #[derive(Default, Clone, Copy, PartialEq)]
 enum Filter {
     #[default]
-    Loop,
-    Owner,
-    Task,
+    Agent,
+    Role(&'static str),
     All,
 }
 
 impl Filter {
-    fn matches(self, kind: LogKind) -> bool {
+    fn matches(self, f: &LogFile) -> bool {
         match self {
-            Filter::Loop => kind == LogKind::Loop,
-            Filter::Owner => kind == LogKind::Owner,
-            Filter::Task => matches!(kind, LogKind::Task(_)),
+            Filter::Agent => f.kind == LogKind::Agent,
+            Filter::Role(r) => f.role() == Some(r),
             Filter::All => true,
         }
     }
 }
 
+const FILTERS: [(Filter, &str); 6] = [
+    (Filter::Agent, "agent.log"),
+    (Filter::Role("product-owner"), "Product Owner"),
+    (Filter::Role("coder"), "Coder"),
+    (Filter::Role("qa"), "QA"),
+    (Filter::Role("pr-feedback"), "PR-Feedback"),
+    (Filter::All, "Alle"),
+];
+
 impl LogsPage {
     pub fn show(&mut self, ui: &mut Ui, s: &Snapshot) {
-        page_title(ui, "Protokolle", "Loop-Konsole (Fehlerursachen), PO-Läufe und Worker-Läufe im Rohformat.");
+        page_title(ui, "Protokolle", "agent.log (alle Rollen, Fehlerursachen) und die Claude-Sitzungen jeder Rolle im Rohformat.");
         ui.horizontal(|ui| {
-            for (f, label) in [(Filter::Loop, "Loop-Konsole"), (Filter::Owner, "PO-Läufe"), (Filter::Task, "Worker"), (Filter::All, "Alle")] {
+            for (f, label) in FILTERS {
                 if ui.selectable_label(self.filter == f, label).clicked() {
                     self.filter = f;
                 }
             }
+            if ui.small_button("📁 Ordner").clicked() {
+                sys::open_path(&s.paths.logs());
+            }
         });
         ui.add_space(8.0);
-        // the console mirror only exists from loop v0.3 on — fall back to PO passes until then
-        if self.filter == Filter::Loop && !s.logs.iter().any(|f| f.kind == LogKind::Loop) {
-            self.filter = Filter::Owner;
-        }
-        let files: Vec<_> = s.logs.iter().filter(|f| self.filter.matches(f.kind)).take(FILES_SHOWN).collect();
+        let files: Vec<_> = s.logs.iter().filter(|f| self.filter.matches(f)).take(FILES_SHOWN).collect();
         if self.selected.as_ref().is_none_or(|sel| !files.iter().any(|f| &f.path == sel)) {
             self.selected = files.first().map(|f| f.path.clone());
         }
