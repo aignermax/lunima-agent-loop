@@ -8,7 +8,7 @@ use chrono::{DateTime, Duration, Local};
 use team_core::config::TeamConfig;
 
 /// (role key, German name) in pipeline order.
-pub const ROLES: [(&str, &str); 4] = [("product-owner", "Product Owner"), ("coder", "Coder"), ("qa", "QA-Tester"), ("pr-feedback", "PR-Feedback")];
+pub const ROLES: [(&str, &str); 5] = [("product-owner", "Product Owner"), ("coder", "Coder"), ("qa", "QA-Tester"), ("pr-feedback", "PR-Feedback"), ("ux-review", "UX-Review")];
 
 /// Longer than the daemon's maximum backoff (900 s): a role backing off during an outage
 /// is not mistaken for a dead one.
@@ -26,6 +26,7 @@ pub fn role_enabled(cfg: &TeamConfig, role: &str) -> bool {
         "qa" => cfg.roles.qa,
         "pr-feedback" => cfg.roles.pr_feedback,
         "product-owner" => cfg.roles.product_owner,
+        "ux-review" => cfg.roles.ux_review,
         _ => false,
     }
 }

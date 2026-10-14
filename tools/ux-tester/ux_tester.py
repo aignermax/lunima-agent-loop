@@ -793,9 +793,9 @@ def file_issues(s: Session, report_dir: Path, args: argparse.Namespace) -> None:
         if f.screenshot and sha:
             img = f"\n\n![screenshot](https://github.com/{args.repo}/blob/{sha}/docs/ux-findings/{report_dir.name}/shot-{f.screenshot:03d}.png?raw=true)"
         elif f.screenshot:
-            img = f"\n\nScreenshot: `shot-{f.screenshot:03d}.png` in the local report `{report_dir}` (not published — desktop capture)."
+            img = f"\n\nScreenshot: `shot-{f.screenshot:03d}.png` in report `{report_dir.name}` on the tester machine (not published — desktop capture)."
         source = (f"Full report: `docs/ux-findings/{report_dir.name}/report.md` on branch `{branch}`." if sha
-                  else f"Full report kept locally: `{report_dir / 'report.md'}`.")
+                  else f"Full report kept on the tester machine (`{report_dir.name}/report.md`).")
         body = (f"**Category:** {f.category} · **Severity:** {f.severity} · **Where:** {f.where}\n\n"
                 f"## Steps to reproduce\n{f.steps}\n\n## Expected\n{f.expected}\n\n## Observed\n{f.observed}\n\n"
                 f"## Suggested fix (UX)\n{f.suggestion}{img}\n\n"

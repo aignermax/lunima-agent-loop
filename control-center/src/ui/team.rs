@@ -146,6 +146,21 @@ fn details(ui: &mut Ui, s: &Snapshot, role: &str, cfg: &TeamConfig) {
                 model_row(ui, &format!("Kimi für {}:", kimi.join(", ")), &cfg.providers.openrouter.model);
             }
         }
+        "ux-review" => {
+            let ux = &cfg.ux_review;
+            model_row(ui, "Modell:", &ux.model);
+            model_row(ui, "Zeitfenster:", &format!("ab {:02}:00 für {} Std., {} Abläufe pro Nacht", ux.hour, team_core::config::UxReview::WINDOW_HOURS, ux.goals_per_run));
+            muted(ui, "Simulierte Nutzer (Personas) bedienen die Desktop-App; Befunde werden ux-finding-Issues ohne Screenshots, der Bericht geht an den PO.");
+            if let Some(st) = &s.ux {
+                let now = Local::now();
+                let last = st.last_attempt.as_deref().and_then(parse_time).map(|t| relative(t, now)).unwrap_or_else(|| "—".into());
+                let issues = if st.filed_issues.is_empty() { String::new() } else { format!(" · Issues {}", st.filed_issues.iter().map(|n| format!("#{n}")).collect::<Vec<_>>().join(", ")) };
+                muted(ui, format!("letzter Lauf {last} ({}){issues}", if st.last_result.is_empty() { "—" } else { &st.last_result }));
+                if !st.last_note.is_empty() {
+                    ui.add(egui::Label::new(RichText::new(&st.last_note).color(MUTED).size(12.5)).wrap());
+                }
+            }
+        }
         "qa" => {
             model_row(ui, "Review-Modell:", &m.reviewer);
             muted(ui, "Baut und testet jeden Agent-PR; optional LLM-Review (.agent.toml).");

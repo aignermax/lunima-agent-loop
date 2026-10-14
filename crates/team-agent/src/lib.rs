@@ -19,6 +19,7 @@ pub mod review;
 pub mod role;
 pub mod session;
 pub mod shell;
+pub mod ux;
 pub mod walkthrough;
 pub mod workspace;
 

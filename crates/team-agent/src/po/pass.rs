@@ -133,7 +133,7 @@ pub fn prompt(ctx: &Ctx, clone: &Path, prs: &[PullRequest], issues: &[Issue]) ->
     v.insert("ROADMAP", roadmap);
     v.insert("OPEN_PRS", pr_list);
     v.insert("OPEN_TASK_ISSUES", issue_list);
-    Ok(format!("{}{}", ctx.render("po-owner", &v)?, customer_context(ctx)))
+    Ok(format!("{}{}{}", ctx.render("po-owner", &v)?, customer_context(ctx), crate::ux::po_section(ctx)))
 }
 
 /// Clone on the integration branch; the branch is created from the base if missing.
