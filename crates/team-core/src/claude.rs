@@ -103,6 +103,9 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
     cmd.args(args(s)).current_dir(&s.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     s.env.apply(&mut cmd);
     cmd.env("GIT_TERMINAL_PROMPT", "0").env_remove("CLAUDE_CODE_ENTRYPOINT");
+    // the subscription login would hand the agent the user's claude.ai connectors (mail,
+    // drive …) — an autonomous agent gets none of them; a repo's own .mcp.json still works
+    cmd.env("ENABLE_CLAUDEAI_MCP_SERVERS", "false");
     let mut child = cmd.spawn().map_err(|e| Error::Spawn(e.to_string()))?;
 
     let mut stdin = child.stdin.take().expect("piped stdin");
