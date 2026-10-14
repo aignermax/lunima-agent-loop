@@ -27,7 +27,8 @@ fn setup() -> (tempfile::TempDir, RepoClone) {
 #[test]
 fn working_branch_prefers_dev() {
     let (_t, c) = setup();
-    assert_eq!(c.working_branch("main"), "dev");
+    assert_eq!(c.working_branch("main", "dev"), "dev");
+    assert_eq!(c.working_branch("main", "integration"), "main");
     assert!(!c.remote_branch_exists("nope"));
 }
 
@@ -45,6 +46,24 @@ fn worktree_commit_push_and_reuse() {
     assert!(again.join("wip.txt").exists());
     c.remove_worktree(&wt).unwrap();
     assert!(!wt.exists());
+}
+
+#[test]
+fn worktree_starts_from_origin_when_the_local_branch_is_stale() {
+    let (tmp, c) = setup();
+    let wt = tmp.path().join("wt").join("one");
+    let path = c.worktree(&wt, "agent/issue-8", "dev").unwrap();
+    std::fs::write(path.join("a.txt"), "mine").unwrap();
+    commit_and_push(&path, "agent/issue-8", "first").unwrap();
+    c.remove_worktree(&wt).unwrap();
+    // another machine pushes on top
+    let other = tmp.path().join("other");
+    run_git(None, &["clone", "-q", "-b", "agent/issue-8", &tmp.path().join("origin.git").display().to_string(), &other.display().to_string()], false).unwrap();
+    std::fs::write(other.join("c.txt"), "theirs").unwrap();
+    commit_and_push(&other, "agent/issue-8", "second").unwrap();
+    c.fetch().unwrap();
+    let again = c.worktree(&tmp.path().join("wt").join("two"), "agent/issue-8", "dev").unwrap();
+    assert!(again.join("c.txt").exists(), "worktree must contain the other machine's commit");
 }
 
 #[test]

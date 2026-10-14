@@ -5,7 +5,7 @@
 //! * `status-<role>.json` — heartbeat: `{role, pid, state, detail, since, updated}` (agent writes)
 //! * `issue-history.jsonl` — one record per coder run
 
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use std::io::Write;
@@ -15,17 +15,28 @@ use std::sync::Mutex;
 pub const CONTROL_FILE: &str = "control.json";
 pub const HISTORY_FILE: &str = "issue-history.jsonl";
 
+/// RFC 3339, or naive local `YYYY-MM-DD[T ]HH:MM:SS[.fff]` (the Control Center writes both).
+/// Ambiguous local times (DST fall-back) take the earlier instant, times in the spring-forward
+/// gap the hour after.
+pub fn parse_time(raw: &str) -> Option<DateTime<Local>> {
+    let raw = raw.trim();
+    if let Ok(t) = DateTime::parse_from_rfc3339(raw) {
+        return Some(t.with_timezone(&Local));
+    }
+    let trimmed = raw.split('.').next().unwrap_or(raw);
+    let naive = ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"].iter().find_map(|f| NaiveDateTime::parse_from_str(trimmed, f).ok())?;
+    Local.from_local_datetime(&naive).earliest().or_else(|| Local.from_local_datetime(&(naive + chrono::Duration::hours(1))).earliest())
+}
+
 /// The pause reason when `role` is paused right now. Never fails: a malformed file means
-/// "not paused" (the UI may be writing it this very moment).
+/// "not paused" (the UI may be writing it this very moment); an unreadable `until` means
+/// paused without end.
 pub fn pause_reason(state_dir: &Path, role: &str, now: DateTime<Local>) -> Option<String> {
     let text = std::fs::read_to_string(state_dir.join(CONTROL_FILE)).ok()?;
     let doc: Value = serde_json::from_str(&text).ok()?;
     let entry = doc.get("paused")?.get(role)?.as_object()?;
     if let Some(until) = entry.get("until").and_then(Value::as_str).filter(|u| !u.is_empty()) {
-        let end = DateTime::parse_from_rfc3339(until)
-            .map(|t| t.with_timezone(&Local))
-            .or_else(|_| chrono::NaiveDateTime::parse_from_str(until, "%Y-%m-%dT%H:%M:%S").map(|n| n.and_local_timezone(Local).unwrap()));
-        if let Ok(end) = end {
+        if let Some(end) = parse_time(until) {
             if end <= now {
                 return None;
             }

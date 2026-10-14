@@ -77,6 +77,13 @@ enum Line {
     Done,
 }
 
+/// After the `result` event the CLI should exit; past this it is killed and the result used.
+const RESULT_GRACE: Duration = Duration::from_secs(60);
+
+fn is_result_event(line: &str) -> bool {
+    line.contains("\"result\"") && serde_json::from_str::<serde_json::Value>(line).ok().and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|t| t == "result")).unwrap_or(false)
+}
+
 pub fn run(s: &Session) -> Result<Outcome, Error> {
     let cli = find_cli().ok_or(Error::NotInstalled)?;
     let mut cmd = command(&cli);
@@ -116,6 +123,7 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
         std::fs::OpenOptions::new().create(true).append(true).open(p).ok()
     });
     let mut lines = Vec::new();
+    let mut result_at: Option<Instant> = None;
     let mut last_activity = Instant::now();
     let mut last_tick = Instant::now();
     loop {
@@ -123,6 +131,9 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
             Ok(Line::Out(l)) => {
                 if let Some(f) = log.as_mut() {
                     let _ = writeln!(f, "{l}");
+                }
+                if result_at.is_none() && is_result_event(&l) {
+                    result_at = Some(Instant::now());
                 }
                 lines.push(l);
                 last_activity = Instant::now();
@@ -135,6 +146,11 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
             if let Some(tick) = s.on_tick {
                 tick();
             }
+        }
+        // the final result is in, but something (MCP server, hook child) keeps the CLI alive
+        if result_at.is_some_and(|t| t.elapsed() >= RESULT_GRACE) {
+            kill_tree(&mut child);
+            break;
         }
         if last_activity.elapsed() >= s.inactivity {
             kill_tree(&mut child);
@@ -153,6 +169,12 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recognises_the_result_event() {
+        assert!(is_result_event(r#"{"type":"result","subtype":"success","result":"x"}"#));
+        assert!(!is_result_event(r#"{"type":"assistant","message":{"content":"result"}}"#));
+    }
 
     #[test]
     fn command_line_is_headless_stream_json() {

@@ -14,6 +14,18 @@ fn parses_issue_and_pr_payloads() {
 }
 
 #[test]
+fn status_matching_ignores_numbers_in_the_path() {
+    assert!(is_status("gh api DELETE repos/o/r/issues/7/labels/x: gh: Label does not exist (HTTP 404)", 404));
+    assert!(!is_status("gh api DELETE repos/o/r/issues/1404/labels/x: gh: Forbidden (HTTP 403)", 404));
+}
+
+#[test]
+fn ndjson_error_excerpt_is_char_safe() {
+    let line = format!("{{\"number\": \"{}\"}}", "ä".repeat(100));
+    assert!(parse_ndjson::<Issue>(&line).is_err());
+}
+
+#[test]
 fn encodes_path_segments() {
     assert_eq!(encode("agent-task"), "agent-task");
     assert_eq!(encode("needs human"), "needs%20human");

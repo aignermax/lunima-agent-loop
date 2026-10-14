@@ -4,6 +4,7 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Captured result of a finished process.
@@ -42,6 +43,12 @@ pub fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
         const CREATE_NO_WINDOW: u32 = 0x0800_0000;
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
+    #[cfg(unix)]
+    {
+        // own process group, so `kill_tree` reaches grandchildren too
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     cmd
 }
 
@@ -64,13 +71,40 @@ pub fn which(name: &str) -> Option<PathBuf> {
     None
 }
 
-fn drain(mut pipe: impl Read + Send + 'static) -> std::thread::JoinHandle<String> {
-    std::thread::spawn(move || {
-        let mut buf = Vec::new();
-        let _ = pipe.read_to_end(&mut buf);
-        String::from_utf8_lossy(&buf).into_owned()
-    })
+/// Reads a pipe in the background. A grandchild may keep the pipe open after the child is
+/// gone, so the result is collected with a deadline instead of an unbounded join.
+struct Drain {
+    buf: Arc<Mutex<Vec<u8>>>,
+    done: mpsc::Receiver<()>,
 }
+
+impl Drain {
+    fn start(mut pipe: impl Read + Send + 'static) -> Self {
+        let buf = Arc::new(Mutex::new(Vec::new()));
+        let (tx, done) = mpsc::channel();
+        let sink = buf.clone();
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 8192];
+            while let Ok(n) = pipe.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                sink.lock().unwrap_or_else(|p| p.into_inner()).extend_from_slice(&chunk[..n]);
+            }
+            let _ = tx.send(());
+        });
+        Self { buf, done }
+    }
+
+    fn collect(self, grace: Duration) -> String {
+        let _ = self.done.recv_timeout(grace);
+        let bytes = std::mem::take(&mut *self.buf.lock().unwrap_or_else(|p| p.into_inner()));
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+}
+
+/// How long output may still trickle in after the process ended.
+const DRAIN_GRACE: Duration = Duration::from_secs(10);
 
 fn wait_with_timeout(child: &mut Child, timeout: Duration) -> std::io::Result<Option<ExitStatus>> {
     let deadline = Instant::now() + timeout;
@@ -87,11 +121,16 @@ fn wait_with_timeout(child: &mut Child, timeout: Duration) -> std::io::Result<Op
     }
 }
 
-/// Kills the process and, on Windows, its children (`taskkill /T`).
+/// Kills the process and its children: `taskkill /T` on Windows, the process group
+/// (see `command`) elsewhere.
 pub fn kill_tree(child: &mut Child) {
     #[cfg(windows)]
     {
         let _ = command("taskkill").args(["/PID", &child.id().to_string(), "/T", "/F"]).stdout(Stdio::null()).stderr(Stdio::null()).status();
+    }
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill").args(["-KILL", "--", &format!("-{}", child.id())]).stdout(Stdio::null()).stderr(Stdio::null()).status();
     }
     let _ = child.kill();
 }
@@ -115,13 +154,13 @@ pub fn run_with_input(mut cmd: Command, cwd: Option<&Path>, input: Option<&[u8]>
             let _ = pipe.write_all(&data);
         });
     }
-    let out = drain(child.stdout.take().expect("piped stdout"));
-    let err = drain(child.stderr.take().expect("piped stderr"));
+    let out = Drain::start(child.stdout.take().expect("piped stdout"));
+    let err = Drain::start(child.stderr.take().expect("piped stderr"));
     let status = wait_with_timeout(&mut child, timeout)?;
     Ok(Output {
         status: status.and_then(|s| s.code()),
-        stdout: out.join().unwrap_or_default(),
-        stderr: err.join().unwrap_or_default(),
+        stdout: out.collect(DRAIN_GRACE),
+        stderr: err.collect(DRAIN_GRACE),
         timed_out: status.is_none(),
     })
 }
@@ -157,6 +196,15 @@ mod tests {
         let script = if cfg!(windows) { "ping -n 30 127.0.0.1 >NUL" } else { "sleep 30" };
         let out = run(shell(script), None, Duration::from_millis(500)).unwrap();
         assert!(out.timed_out && !out.ok());
+    }
+
+    #[test]
+    fn timeout_is_bounded_even_if_a_grandchild_holds_the_pipes() {
+        let script = if cfg!(windows) { "start /B ping -n 60 127.0.0.1 & ping -n 60 127.0.0.1 >NUL" } else { "sleep 60 & sleep 60" };
+        let t = Instant::now();
+        let out = run(shell(script), None, Duration::from_millis(500)).unwrap();
+        assert!(out.timed_out);
+        assert!(t.elapsed() < Duration::from_secs(20), "took {:?}", t.elapsed());
     }
 
     #[test]

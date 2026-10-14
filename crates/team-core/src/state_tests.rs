@@ -60,3 +60,12 @@ fn history_is_appended_as_jsonl_compatible_with_python() {
     let back: HistoryRecord = serde_json::from_str(text.lines().next().unwrap()).unwrap();
     assert_eq!(back, rec);
 }
+
+#[test]
+fn parse_time_accepts_control_center_formats() {
+    assert!(parse_time("2026-10-14T10:00:00+02:00").is_some());
+    assert!(parse_time("2026-10-14T10:00:00.1234567").is_some());
+    assert!(parse_time("2026-10-14 10:00:00").is_some());
+    assert!(parse_time("9999-12-31T23:59:59.9999999").is_some());
+    assert!(parse_time("soon").is_none());
+}

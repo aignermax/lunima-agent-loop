@@ -293,6 +293,16 @@ impl TeamConfig {
     }
 
     /// Plausibility checks before saving or starting.
+    /// Branch agent work targets in `repo` (if it exists there): the PO's integration branch
+    /// for the PO repo, `dev` elsewhere.
+    pub fn integration_branch(&self, repo: &str) -> String {
+        if !self.product_owner.repo.is_empty() && self.product_owner.repo.eq_ignore_ascii_case(repo) && !self.product_owner.integration_branch.is_empty() {
+            self.product_owner.integration_branch.clone()
+        } else {
+            "dev".into()
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         for r in &self.repos {
             if r.name.split('/').filter(|p| !p.is_empty()).count() != 2 {

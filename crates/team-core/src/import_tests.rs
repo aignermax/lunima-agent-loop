@@ -70,8 +70,21 @@ fn from_legacy_reads_both_files() {
     let json = tmp.path().join("agent-loop.json");
     std::fs::write(&env, "AGENT_REPOS=o/r\n").unwrap();
     std::fs::write(&json, "\u{feff}{\"githubRepo\":\"o/r\"}").unwrap();
-    let c = from_legacy(Some(&env), Some(&json));
+    let c = from_legacy(Some(&env), Some(&json)).unwrap();
     assert_eq!(c.coder_repos(), ["o/r"]);
     assert_eq!(c.product_owner.repo, "o/r");
-    assert_eq!(from_legacy(None, None), TeamConfig::default());
+    assert_eq!(from_legacy(None, None).unwrap(), TeamConfig::default());
+    assert!(from_legacy(Some(&tmp.path().join("missing.env")), None).is_err());
+    std::fs::write(tmp.path().join("bad.json"), "{ nope").unwrap();
+    assert!(from_legacy(None, Some(&tmp.path().join("bad.json"))).is_err());
+}
+
+#[test]
+fn provider_list_repos_keep_their_routing_and_premium_follows_coder() {
+    let mut c = TeamConfig::default();
+    let env = parse_env("AGENT_REPOS=o/a\nAGENT_OPENROUTER_FORCE_REPOS=o/forced\nAGENT_OPENROUTER_REPOS=o/kimi\nAGENT_CODER_MODEL=m1\n");
+    apply_env(&mut c, &env);
+    assert_eq!(c.repo("o/forced").unwrap().routing, Routing::KimiOnly);
+    assert_eq!(c.repo("o/kimi").unwrap().routing, Routing::Kimi);
+    assert_eq!(c.models.premium, "m1");
 }

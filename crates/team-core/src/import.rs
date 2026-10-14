@@ -69,6 +69,12 @@ pub fn apply_env(c: &mut TeamConfig, env: &BTreeMap<String, String>) {
         repos = list(env, "AGENT_REPO");
     }
     let (kimi, force) = (list(env, "AGENT_OPENROUTER_REPOS"), list(env, "AGENT_OPENROUTER_FORCE_REPOS"));
+    // repos only named in a provider list (e.g. found by discovery) keep their routing too
+    for name in force.iter().chain(&kimi) {
+        if !has(&repos, name) {
+            repos.push(name.clone());
+        }
+    }
     for name in &repos {
         let routing = if has(&force, name) {
             Routing::KimiOnly
@@ -98,6 +104,10 @@ pub fn apply_env(c: &mut TeamConfig, env: &BTreeMap<String, String>) {
 
     let m = &mut c.models;
     set_str(&mut m.coder, env, "AGENT_CODER_MODEL");
+    // Python: premium defaults to the coder model
+    if env.get("AGENT_PREMIUM_CODER_MODEL").is_none_or(|v| v.is_empty()) && env.get("AGENT_CODER_MODEL").is_some_and(|v| !v.is_empty()) {
+        m.premium = m.coder.clone();
+    }
     set_str(&mut m.premium, env, "AGENT_PREMIUM_CODER_MODEL");
     set_str(&mut m.reviewer, env, "AGENT_REVIEWER_MODEL");
     set_str(&mut m.reviewer_critical, env, "AGENT_REVIEWER_MODEL_CRITICAL");
@@ -163,15 +173,21 @@ pub fn apply_loop_config(c: &mut TeamConfig, json: &serde_json::Value) {
 }
 
 /// Builds a config from whatever of the two legacy files exists.
-pub fn from_legacy(env_file: Option<&Path>, loop_config: Option<&Path>) -> TeamConfig {
+/// Builds a config from the legacy files. Each given file that cannot be read or parsed is
+/// an error (a silently ignored typo would leave a config without repos).
+pub fn from_legacy(env_file: Option<&Path>, loop_config: Option<&Path>) -> Result<TeamConfig, String> {
     let mut c = TeamConfig::default();
-    if let Some(text) = env_file.and_then(|p| std::fs::read_to_string(p).ok()) {
+    if let Some(p) = env_file {
+        let text = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
         apply_env(&mut c, &parse_env(&text));
     }
-    if let Some(json) = loop_config.and_then(|p| std::fs::read_to_string(p).ok()).and_then(|t| serde_json::from_str(t.trim_start_matches('\u{feff}')).ok()) {
+    if let Some(p) = loop_config {
+        let text = std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()))?;
+        let json = serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| format!("{}: {e}", p.display()))?;
         apply_loop_config(&mut c, &json);
     }
-    c
+    c.validate()?;
+    Ok(c)
 }
 
 #[cfg(test)]

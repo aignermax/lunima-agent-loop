@@ -72,9 +72,14 @@ impl RepoClone {
         self.git(&["rev-parse", "--verify", "--quiet", &format!("refs/remotes/origin/{branch}")]).is_ok()
     }
 
-    /// `dev` when it exists on origin, else the given default branch.
-    pub fn working_branch(&self, default_branch: &str) -> String {
-        if self.remote_branch_exists("dev") { "dev".into() } else { default_branch.into() }
+    /// The integration branch (e.g. `dev`, see `TeamConfig::integration_branch`) when it
+    /// exists on origin, else the default branch.
+    pub fn working_branch(&self, default_branch: &str, integration: &str) -> String {
+        if !integration.is_empty() && self.remote_branch_exists(integration) { integration.into() } else { default_branch.into() }
+    }
+
+    fn is_ancestor(&self, a: &str, b: &str) -> bool {
+        self.git(&["merge-base", "--is-ancestor", a, b]).is_ok()
     }
 
     /// Checks out `branch` exactly as on origin, discarding local state (role clones only).
@@ -95,7 +100,13 @@ impl RepoClone {
             std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
         let p = path.display().to_string();
-        if self.git(&["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok() {
+        let local = self.git(&["rev-parse", "--verify", "--quiet", &format!("refs/heads/{branch}")]).is_ok();
+        let remote = format!("origin/{branch}");
+        if local && self.remote_branch_exists(branch) && self.is_ancestor(branch, &remote) {
+            // another machine (QA fix, PR feedback) pushed since — start from origin
+            self.git(&["worktree", "add", "-B", branch, &p, &remote])?;
+        } else if local {
+            // ahead of / diverged from origin: keep the unpushed commits
             self.git(&["worktree", "add", &p, branch])?;
         } else if self.remote_branch_exists(branch) {
             self.git(&["worktree", "add", "-b", branch, &p, &format!("origin/{branch}")])?;

@@ -45,6 +45,14 @@ fn app_icon() -> egui::IconData {
 }
 
 fn main() -> eframe::Result<()> {
+    // The workspace builds with panic = "unwind" (the team agent survives a panicking role
+    // thread). Here a dead collector thread would leave a UI showing stale data as healthy,
+    // so any panic still ends the app.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        std::process::abort();
+    }));
     if !win::claim_single_instance() {
         return Ok(());
     }

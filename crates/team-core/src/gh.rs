@@ -114,7 +114,13 @@ pub fn list<T: for<'de> Deserialize<'de>>(path: &str, jq: &str) -> Result<Vec<T>
 }
 
 pub fn parse_ndjson<T: for<'de> Deserialize<'de>>(text: &str) -> Result<Vec<T>, String> {
-    text.lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).map_err(|e| format!("{e}: {}", &l[..l.len().min(120)]))).collect()
+    text.lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).map_err(|e| format!("{e}: {}", l.chars().take(120).collect::<String>()))).collect()
+}
+
+/// `gh` reports HTTP errors as `… (HTTP 404)`; matching the bare number would also hit
+/// issue #404 or a branch name inside the request path that is part of the error text.
+pub fn is_status(err: &str, code: u16) -> bool {
+    err.contains(&format!("(HTTP {code})"))
 }
 
 /// Percent-encodes a path segment (label names may contain spaces, colons …).
@@ -164,7 +170,7 @@ impl Repo {
     /// Removing a label that isn't there is not an error.
     pub fn remove_label(&self, number: u64, label: &str) -> Result<(), String> {
         match api("DELETE", &self.p(&format!("issues/{number}/labels/{}", encode(label))), None) {
-            Err(e) if e.contains("404") || e.contains("Label does not exist") => Ok(()),
+            Err(e) if is_status(&e, 404) => Ok(()),
             other => other.map(|_| ()),
         }
     }
@@ -220,7 +226,7 @@ impl Repo {
     pub fn branch_exists(&self, branch: &str) -> Result<bool, String> {
         match api("GET", &self.p(&format!("branches/{}", encode(branch))), None) {
             Ok(_) => Ok(true),
-            Err(e) if e.contains("404") || e.contains("Branch not found") => Ok(false),
+            Err(e) if is_status(&e, 404) => Ok(false),
             Err(e) => Err(e),
         }
     }

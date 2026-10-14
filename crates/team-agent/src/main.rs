@@ -35,11 +35,19 @@ fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.windows(2).find(|w| w[0] == name).map(|w| PathBuf::from(&w[1]))
 }
 
-/// Legacy files on this machine (Python agent .env, PO loop agent-loop.json).
+/// Legacy files on this machine: the Python agent's `.env` and the PO loop's
+/// `agent-loop.json` (loop root order as in the loop's README: current folder, exe folder,
+/// `%LOCALAPPDATA%\lunima-agent-loop`, then the developer checkout `~/lunima-agent-loop`).
 fn legacy_candidates() -> (Option<PathBuf>, Option<PathBuf>) {
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
     let env = home.as_ref().map(|h| h.join("autonomous-issue-agent").join(".env")).filter(|p| p.is_file());
-    let lp = home.as_ref().map(|h| h.join("lunima-agent-loop").join("agent-loop.json")).filter(|p| p.is_file());
+    let roots = [
+        std::env::current_dir().ok(),
+        std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from)),
+        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("lunima-agent-loop")),
+        home.as_ref().map(|h| h.join("lunima-agent-loop")),
+    ];
+    let lp = roots.into_iter().flatten().map(|r| r.join("agent-loop.json")).find(|p| p.is_file());
     (env, lp)
 }
 
@@ -55,7 +63,14 @@ fn init(args: &[String]) -> i32 {
     let (auto_env, auto_loop) = legacy_candidates();
     let env = arg(args, "--from-env").or(auto_env);
     let lp = arg(args, "--from-loop").or(auto_loop);
-    let cfg = team_core::import::from_legacy(env.as_deref(), lp.as_deref());
+    let cfg = match team_core::import::from_legacy(env.as_deref(), lp.as_deref()) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Übernahme fehlgeschlagen: {e}
+Nichts geschrieben — Pfad prüfen oder ohne --from-… starten.");
+            return 1;
+        }
+    };
     if let Err(e) = p.ensure().map_err(|e| e.to_string()).and_then(|_| cfg.save(&p.config())) {
         eprintln!("Konnte {} nicht schreiben: {e}", p.config().display());
         return 1;
