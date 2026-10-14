@@ -30,6 +30,8 @@ pub struct Session<'a> {
     /// raw stream-json is appended here (the Control Center shows these logs)
     pub log_file: Option<PathBuf>,
     pub inactivity: Duration,
+    /// hard limit for the whole session (`None` = only the inactivity watchdog)
+    pub deadline: Option<Duration>,
     /// called about once a minute while the session runs (heartbeat)
     pub on_tick: Option<&'a (dyn Fn() + Sync)>,
 }
@@ -42,6 +44,8 @@ pub enum Error {
     Stuck(u64),
     /// exited without a result event
     Crashed { code: Option<i32>, stderr_tail: String },
+    /// ran longer than the session's deadline (seconds) — killed
+    TimedOut(u64),
 }
 
 impl std::fmt::Display for Error {
@@ -51,6 +55,7 @@ impl std::fmt::Display for Error {
             Error::Spawn(e) => write!(f, "Claude konnte nicht gestartet werden: {e}"),
             Error::Stuck(s) => write!(f, "Claude hing ({s} s ohne Ausgabe) und wurde beendet"),
             Error::Crashed { code, stderr_tail } => write!(f, "Claude beendet ohne Ergebnis (Exit {code:?}): {stderr_tail}"),
+            Error::TimedOut(s) => write!(f, "{TIMED_OUT_TEXT} ({s} s) — Claude wurde beendet"),
         }
     }
 }
@@ -82,6 +87,14 @@ const RESULT_GRACE: Duration = Duration::from_secs(60);
 
 fn is_result_event(line: &str) -> bool {
     line.contains("\"result\"") && serde_json::from_str::<serde_json::Value>(line).ok().and_then(|v| v.get("type").and_then(|t| t.as_str()).map(|t| t == "result")).unwrap_or(false)
+}
+
+/// Start of `Error::TimedOut`'s message (callers classify failures by it).
+pub const TIMED_OUT_TEXT: &str = "Zeitlimit der Sitzung überschritten";
+
+/// `true` once a session started at `started` has used up its `deadline`.
+pub fn over_deadline(started: Instant, deadline: Option<Duration>) -> bool {
+    deadline.is_some_and(|d| started.elapsed() >= d)
 }
 
 pub fn run(s: &Session) -> Result<Outcome, Error> {
@@ -123,6 +136,7 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
         std::fs::OpenOptions::new().create(true).append(true).open(p).ok()
     });
     let mut lines = Vec::new();
+    let started = Instant::now();
     let mut result_at: Option<Instant> = None;
     let mut last_activity = Instant::now();
     let mut last_tick = Instant::now();
@@ -157,6 +171,11 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
             let _ = child.wait();
             return Err(Error::Stuck(s.inactivity.as_secs()));
         }
+        if result_at.is_none() && over_deadline(started, s.deadline) {
+            kill_tree(&mut child);
+            let _ = child.wait();
+            return Err(Error::TimedOut(s.deadline.map(|d| d.as_secs()).unwrap_or(0)));
+        }
     }
     let status = child.wait().map_err(|e| Error::Spawn(e.to_string()))?;
     let stderr_tail = stderr_reader.join().unwrap_or_default();
@@ -169,6 +188,15 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deadline_is_optional_and_measured_from_start() {
+        let start = Instant::now() - Duration::from_secs(120);
+        assert!(!over_deadline(start, None));
+        assert!(!over_deadline(start, Some(Duration::from_secs(600))));
+        assert!(over_deadline(start, Some(Duration::from_secs(60))));
+        assert!(Error::TimedOut(60).to_string().starts_with(TIMED_OUT_TEXT));
+    }
 
     #[test]
     fn recognises_the_result_event() {
@@ -187,6 +215,7 @@ mod tests {
             settings_file: Some("hooks.json".into()),
             log_file: None,
             inactivity: Duration::from_secs(1800),
+            deadline: None,
             on_tick: None,
         };
         let a = args(&s);
@@ -223,6 +252,7 @@ mod live {
             settings_file: None,
             log_file: None,
             inactivity: Duration::from_secs(120),
+            deadline: None,
             on_tick: None,
         };
         let o = run(&s).expect("session");

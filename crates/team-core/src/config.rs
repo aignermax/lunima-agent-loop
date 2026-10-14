@@ -222,11 +222,35 @@ pub struct ProductOwner {
     pub base_branch: String,
     pub interval_minutes: u64,
     pub timeout_minutes: u64,
+    /// passes per day on this machine (0 = no cap)
+    pub max_runs_per_day: u32,
+    /// fewer open task issues than this = backlog needs seeding (a pass is worth it)
+    pub backlog_min: usize,
+    pub max_turns: u32,
+    /// optional customer/UX review run before each pass (shell command, "" = off); it gets
+    /// the evidence file path in `LUNIMA_CUSTOMER_FEEDBACK` and the PO reads that file
+    pub customer_command: String,
+    /// evidence older than this is not acceptable for a merge
+    pub customer_max_age_hours: u32,
+    /// time budget of the customer command (desktop reviews + checkout/build per review)
+    pub customer_timeout_minutes: u64,
 }
 
 impl Default for ProductOwner {
     fn default() -> Self {
-        Self { repo: String::new(), integration_branch: "dev".into(), base_branch: "main".into(), interval_minutes: 240, timeout_minutes: 60 }
+        Self {
+            repo: String::new(),
+            integration_branch: "dev".into(),
+            base_branch: "main".into(),
+            interval_minutes: 240,
+            timeout_minutes: 60,
+            max_runs_per_day: 6,
+            backlog_min: 5,
+            max_turns: 150,
+            customer_command: String::new(),
+            customer_max_age_hours: 24,
+            customer_timeout_minutes: 95,
+        }
     }
 }
 
@@ -284,14 +308,27 @@ impl TeamConfig {
     }
 
     /// Writes via a temp file so a crash never leaves a half-written config.
+    /// Writes the file atomically. Keys this version doesn't know (written by a newer agent
+    /// or by hand) are kept; comments are not (TOML round trip).
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        let text = toml::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let mut doc: toml::Table = toml::Table::try_from(self).map_err(|e| e.to_string())?;
+        if let Some(old) = std::fs::read_to_string(path).ok().and_then(|t| t.parse::<toml::Table>().ok()) {
+            keep_unknown(&mut doc, old);
+        }
+        let text = toml::to_string_pretty(&doc).map_err(|e| e.to_string())?;
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
         let tmp = path.with_extension("toml.tmp");
         std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    }
+
+    /// Applies settings edited elsewhere onto the file's current content: everything but
+    /// the repository list (the Projects page owns that).
+    pub fn with_repos_of(mut self, current: &TeamConfig) -> Self {
+        self.repos = current.repos.clone();
+        self
     }
 
     pub fn repo(&self, name: &str) -> Option<&RepoConfig> {
@@ -324,6 +361,19 @@ impl TeamConfig {
             return Err("poll_seconds muss größer als 0 sein.".into());
         }
         Ok(())
+    }
+}
+
+/// Copies keys of `old` that `new` lacks, recursively through tables.
+fn keep_unknown(new: &mut toml::Table, old: toml::Table) {
+    for (k, v) in old {
+        match (new.get_mut(&k), v) {
+            (None, v) => {
+                new.insert(k, v);
+            }
+            (Some(toml::Value::Table(n)), toml::Value::Table(o)) => keep_unknown(n, o),
+            _ => {}
+        }
     }
 }
 

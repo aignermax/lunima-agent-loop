@@ -3,13 +3,13 @@
 use super::theme::{self, MUTED};
 use super::widgets::{card, muted, page_title, pill};
 use crate::core::snapshot::{relative, Snapshot};
-use crate::core::state::parse_time;
+use team_core::state::parse_time;
 use crate::sys::github::{GithubData, Label};
 use chrono::{Duration, Local};
 use eframe::egui::{self, RichText, Ui};
 
 pub fn show(ui: &mut Ui, s: &Snapshot) {
-    let repo = s.config_str("githubRepo");
+    let repo = s.github_repo();
     page_title(ui, "GitHub", &format!("Live aus {repo} über die GitHub CLI · alle 90 s aktualisiert"));
     match &s.github {
         None => muted(ui, "Wird geladen …"),
@@ -17,8 +17,8 @@ pub fn show(ui: &mut Ui, s: &Snapshot) {
             ui.label(RichText::new(format!("GitHub nicht erreichbar: {e}")).color(theme::ERROR));
         }
         Some(Ok(data)) => {
-            let task_label = s.config_str("taskLabel");
-            let integration = s.config_str("integrationBranch");
+            let task_label = s.cfg().map(|c| c.labels.task.clone()).unwrap_or_else(|| "agent-task".into());
+            let integration = s.cfg().map(|c| c.integration_branch(&repo)).unwrap_or_else(|| "dev".into());
             summary(ui, data, &task_label);
             ui.add_space(12.0);
             issues(ui, data, &task_label);
@@ -38,7 +38,7 @@ fn summary(ui: &mut Ui, data: &GithubData, task_label: &str) {
     let open_tasks = data.recent_issues.iter().filter(|i| i.state == "OPEN" && i.has_label(task_label)).count();
     ui.columns(3, |c| {
         super::widgets::stat(&mut c[0], "Neue Issues (48 h)", &recent.len().to_string(), "");
-        super::widgets::stat(&mut c[1], &format!("Offen mit '{task_label}'"), &open_tasks.to_string(), "warten auf Worker");
+        super::widgets::stat(&mut c[1], &format!("Offen mit '{task_label}'"), &open_tasks.to_string(), "warten auf den Coder");
         super::widgets::stat(&mut c[2], &format!("Neu ohne '{task_label}'"), &unlabeled.to_string(), if unlabeled > 0 { "werden nie bearbeitet" } else { "" });
     });
 }

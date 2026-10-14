@@ -33,6 +33,7 @@ pub fn review(ctx: &Ctx, repo: &str, pr: &PullRequest, dir: &Path) -> Result<(Ve
         max_turns: ctx.cfg.budgets.reviewer_max_turns,
         env: ChildEnv::subscription(),
         label: format!("qa_{}_pr-{}", repo.replace('/', "_"), pr.number),
+        max_duration: None,
     };
     match ctx.llm.run(&job) {
         Ok(out) => {

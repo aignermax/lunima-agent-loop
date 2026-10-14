@@ -1,5 +1,5 @@
-//! The loop's log folder: PO passes (`*_owner.jsonl`), worker runs (`*_task-<n>.jsonl`)
-//! and the daily console mirror (`loop-<date>.log`).
+//! The team agent's log folder: `agent.log` (+ rotated `.1`…) with every role's text log,
+//! and `<role>/<YYYY-MM-DD_HHMMSS>_<label>.jsonl` with each Claude session's raw stream-json.
 
 use super::activity::{parse_pass, Pass};
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
@@ -7,12 +7,14 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub const PO_ROLE: &str = "product-owner";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogKind {
-    Owner,
-    Task(u32),
-    Loop,
-    Other,
+    /// agent.log or a rotated copy
+    Agent,
+    /// one Claude session of a role (folder name)
+    Session(String),
 }
 
 #[derive(Debug, Clone)]
@@ -25,16 +27,23 @@ pub struct LogFile {
     pub size: u64,
 }
 
-/// A PO pass with the file it came from.
+impl LogFile {
+    pub fn role(&self) -> Option<&str> {
+        match &self.kind {
+            LogKind::Session(r) => Some(r),
+            LogKind::Agent => None,
+        }
+    }
+}
+
+/// A product-owner session with the file it came from.
 #[derive(Debug, Clone)]
 pub struct PassEntry {
     pub file: LogFile,
     pub pass: Pass,
-    /// Exit code the loop recorded for this pass (state.json) — works for any runner.
-    pub record_exit: Option<i32>,
 }
 
-/// How a PO pass ended, combining its log with the loop's own run record.
+/// How a PO pass ended.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Outcome {
     Running,
@@ -44,73 +53,57 @@ pub enum Outcome {
 }
 
 impl PassEntry {
-    /// `running`: a loop process is active *and* this is the newest log.
+    /// `running`: the product owner reports `working` *and* this is its newest log.
     pub fn outcome(&self, running: bool) -> Outcome {
-        match (self.pass.finished, self.pass.is_error, self.record_exit) {
-            (true, true, _) => Outcome::Failed(self.pass.summary.clone().unwrap_or_default()),
-            (true, false, _) | (false, _, Some(0)) => Outcome::Succeeded,
-            (false, _, Some(code)) => Outcome::Failed(format!("Exit-Code {code}")),
-            (false, _, None) if running => Outcome::Running,
-            (false, _, None) => Outcome::Aborted,
+        match (self.pass.finished, self.pass.is_error) {
+            (true, true) => Outcome::Failed(self.pass.summary.clone().unwrap_or_default()),
+            (true, false) => Outcome::Succeeded,
+            (false, _) if running => Outcome::Running,
+            (false, _) => Outcome::Aborted,
         }
     }
 }
 
-/// Matches each pass (newest first) to the owner run record written while it ran.
-pub fn attach_records(passes: &mut [PassEntry], runs: &[crate::core::state::RunRecord]) {
-    let mut until: Option<DateTime<Local>> = None;
-    for entry in passes.iter_mut() {
-        let Some(start) = entry.file.started else { continue };
-        entry.record_exit = runs
-            .iter()
-            .filter(|r| r.kind == "owner")
-            .filter_map(|r| crate::core::state::parse_time(&r.timestamp).map(|t| (t, r.exit_code)))
-            .find(|(t, _)| *t >= start && until.is_none_or(|u| *t < u))
-            .map(|(_, code)| code);
-        until = Some(start);
-    }
+/// "2026-10-09_083052_po_o_r.jsonl" → start time.
+pub fn started_from_name(name: &str) -> Option<DateTime<Local>> {
+    let n = NaiveDateTime::parse_from_str(name.get(..17)?, "%Y-%m-%d_%H%M%S").ok()?;
+    Local.from_local_datetime(&n).earliest()
 }
 
-/// True if `file` is the newest PO or worker log — i.e. a running loop is in that pass.
-pub fn is_newest_run_log(files: &[LogFile], file: &LogFile) -> bool {
-    files.iter().find(|f| matches!(f.kind, LogKind::Owner | LogKind::Task(_))).is_some_and(|f| f.path == file.path)
-}
-
-/// "2026-10-09_083052_owner.jsonl" → kind + start time.
-pub fn classify_name(name: &str) -> (LogKind, Option<DateTime<Local>>) {
-    if let Some(date) = name.strip_prefix("loop-").and_then(|r| r.strip_suffix(".log")) {
-        let t = NaiveDateTime::parse_from_str(&format!("{date} 00:00:00"), "%Y-%m-%d %H:%M:%S").ok();
-        return (LogKind::Loop, t.and_then(|n| Local.from_local_datetime(&n).single()));
-    }
-    let started = name
-        .get(..17)
-        .and_then(|s| NaiveDateTime::parse_from_str(s, "%Y-%m-%d_%H%M%S").ok())
-        .and_then(|n| Local.from_local_datetime(&n).single());
-    let rest = name.get(18..).unwrap_or("");
-    let kind = if rest.starts_with("owner") {
-        LogKind::Owner
-    } else if let Some(n) = rest.strip_prefix("task-").and_then(|r| r.split('.').next()).and_then(|n| n.parse().ok()) {
-        LogKind::Task(n)
-    } else {
-        LogKind::Other
+fn file_entry(path: PathBuf, kind: LogKind) -> Option<LogFile> {
+    let meta = std::fs::metadata(&path).ok().filter(|m| m.is_file())?;
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let started = match kind {
+        LogKind::Session(_) => started_from_name(&name),
+        LogKind::Agent => None,
     };
-    (kind, started)
+    Some(LogFile { started, modified: meta.modified().ok(), size: meta.len(), name, path, kind })
 }
 
-/// All log files, newest first (by start time, then modification time).
+/// agent.log first (current, then rotated), then all session logs newest first.
 pub fn list(dir: &Path) -> Vec<LogFile> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
-    let mut files: Vec<LogFile> = entries
-        .flatten()
-        .filter_map(|e| {
-            let meta = e.metadata().ok().filter(|m| m.is_file())?;
-            let name = e.file_name().to_string_lossy().into_owned();
-            let (kind, started) = classify_name(&name);
-            Some(LogFile { path: e.path(), name, kind, started, modified: meta.modified().ok(), size: meta.len() })
-        })
-        .collect();
-    files.sort_by(|a, b| (b.started, b.modified).cmp(&(a.started, a.modified)));
-    files
+    let mut agent = Vec::new();
+    let mut sessions = Vec::new();
+    for e in entries.flatten() {
+        let path = e.path();
+        let name = e.file_name().to_string_lossy().into_owned();
+        if path.is_dir() {
+            let Ok(files) = std::fs::read_dir(&path) else { continue };
+            sessions.extend(files.flatten().filter_map(|f| file_entry(f.path(), LogKind::Session(name.clone()))));
+        } else if name.starts_with("agent.log") {
+            agent.extend(file_entry(path, LogKind::Agent));
+        }
+    }
+    agent.sort_by(|a, b| a.name.len().cmp(&b.name.len()).then(a.name.cmp(&b.name)));
+    sessions.sort_by(|a, b| (b.started, b.modified).cmp(&(a.started, a.modified)));
+    agent.extend(sessions);
+    agent
+}
+
+/// The newest session log of `role`.
+pub fn newest_of<'a>(files: &'a [LogFile], role: &str) -> Option<&'a LogFile> {
+    files.iter().find(|f| f.role() == Some(role))
 }
 
 /// Parses PO logs once per (path, mtime, size); later calls are cheap.
@@ -120,14 +113,9 @@ pub struct PassCache {
 }
 
 impl PassCache {
-    /// The newest `limit` PO passes.
+    /// The newest `limit` product-owner passes.
     pub fn passes(&mut self, files: &[LogFile], limit: usize) -> Vec<PassEntry> {
-        files
-            .iter()
-            .filter(|f| f.kind == LogKind::Owner)
-            .take(limit)
-            .map(|f| PassEntry { file: f.clone(), pass: self.get(f), record_exit: None })
-            .collect()
+        files.iter().filter(|f| f.role() == Some(PO_ROLE)).take(limit).map(|f| PassEntry { file: f.clone(), pass: self.get(f) }).collect()
     }
 
     fn get(&mut self, file: &LogFile) -> Pass {
@@ -155,27 +143,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn classifies_log_names() {
-        assert_eq!(classify_name("2026-10-09_083052_owner.jsonl").0, LogKind::Owner);
-        assert_eq!(classify_name("2026-08-14_131255_task-879.jsonl").0, LogKind::Task(879));
-        assert_eq!(classify_name("loop-2026-10-09.log").0, LogKind::Loop);
-        assert_eq!(classify_name("notes.txt").0, LogKind::Other);
-        assert!(classify_name("2026-10-09_083052_owner.jsonl").1.is_some());
-    }
-
-    #[test]
-    fn lists_newest_first_and_caches_passes() {
+    fn lists_agent_log_then_sessions_newest_first() {
         let tmp = tempfile::tempdir().unwrap();
+        let po = tmp.path().join(PO_ROLE);
+        let coder = tmp.path().join("coder");
+        std::fs::create_dir_all(&po).unwrap();
+        std::fs::create_dir_all(&coder).unwrap();
+        std::fs::write(tmp.path().join("agent.log.1"), "old").unwrap();
+        std::fs::write(tmp.path().join("agent.log"), "new").unwrap();
         let result = r#"{"type":"result","is_error":false,"result":"ok"}"#;
-        std::fs::write(tmp.path().join("2026-10-01_100000_owner.jsonl"), result).unwrap();
-        std::fs::write(tmp.path().join("2026-10-02_100000_owner.jsonl"), "").unwrap();
-        std::fs::write(tmp.path().join("2026-10-02_110000_task-5.jsonl"), "").unwrap();
+        std::fs::write(po.join("2026-10-01_100000_po_o_r.jsonl"), result).unwrap();
+        std::fs::write(po.join("2026-10-02_100000_po_o_r.jsonl"), "").unwrap();
+        std::fs::write(coder.join("2026-10-02_110000_coder_o_r_issue-5.jsonl"), "").unwrap();
         let files = list(tmp.path());
-        assert_eq!(files[0].kind, LogKind::Task(5));
+        assert_eq!(files[0].name, "agent.log");
+        assert_eq!(files[1].name, "agent.log.1");
+        assert_eq!(files[2].role(), Some("coder"));
+        assert!(files[2].started.is_some());
+        assert_eq!(newest_of(&files, PO_ROLE).unwrap().name, "2026-10-02_100000_po_o_r.jsonl");
         let mut cache = PassCache::default();
         let passes = cache.passes(&files, 10);
         assert_eq!(passes.len(), 2);
-        assert!(!passes[0].pass.finished);
+        assert_eq!(passes[0].outcome(true), Outcome::Running);
+        assert_eq!(passes[0].outcome(false), Outcome::Aborted);
         assert_eq!(passes[1].pass.summary.as_deref(), Some("ok"));
+        assert_eq!(passes[1].outcome(false), Outcome::Succeeded);
     }
 }

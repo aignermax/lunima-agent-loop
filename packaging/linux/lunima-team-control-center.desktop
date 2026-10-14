@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Lunima Team Control Center
+Comment=Status, control and settings of the Lunima agent team
+Exec=lunima-po
+Icon=lunima-team-control-center
+Terminal=false
+Categories=Development;Utility;
+Keywords=agent;lunima;github;
+StartupNotify=false

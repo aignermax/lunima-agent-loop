@@ -62,3 +62,17 @@ fn endpoint_key_from_file_or_env() {
     assert_eq!(e.api_key().as_deref(), Some("sk-env"));
     assert_eq!(Endpoint::default().api_key(), None);
 }
+
+#[test]
+fn save_keeps_unknown_keys() {
+    let t = tempfile::tempdir().unwrap();
+    let path = t.path().join("team.toml");
+    std::fs::write(&path, "future_key = 1\n[budgets]\nfuture_budget = 7\nmax_turns_regular = 99\n").unwrap();
+    let mut c = TeamConfig::load(&path).unwrap();
+    assert_eq!(c.budgets.max_turns_regular, 99);
+    c.poll_seconds = 30;
+    c.save(&path).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("future_key = 1") && text.contains("future_budget = 7"), "{text}");
+    assert_eq!(TeamConfig::load(&path).unwrap().poll_seconds, 30);
+}

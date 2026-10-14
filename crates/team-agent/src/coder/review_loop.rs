@@ -56,7 +56,7 @@ fn reviewer_model(ctx: &Ctx, issue: &Issue) -> String {
 /// The reviewer always runs on the subscription; a crash counts as BLOCKING (fail-safe).
 fn reviewer(ctx: &Ctx, repo: &str, issue: &Issue, pr: &PullRequest, wt: &Path) -> RoleResult<Verdict> {
     let text = prompt::reviewer(ctx, issue, pr.number, &pr.head.name, &pr.base.name)?;
-    let job = Job { prompt: text, cwd: wt.to_path_buf(), model: reviewer_model(ctx, issue), max_turns: ctx.cfg.budgets.reviewer_max_turns, env: ChildEnv::subscription(), label: label(repo, "review", pr.number) };
+    let job = Job { prompt: text, cwd: wt.to_path_buf(), model: reviewer_model(ctx, issue), max_turns: ctx.cfg.budgets.reviewer_max_turns, env: ChildEnv::subscription(), label: label(repo, "review", pr.number), max_duration: None };
     match ctx.llm.run(&job) {
         Ok(out) => Ok(review::parse(&out.text)),
         Err(LlmError::UsageLimit(t)) => Err(RoleError::UsageLimit(t)),
@@ -70,7 +70,7 @@ fn retry(ctx: &Ctx, setup: &RepoSetup, issue: &Issue, state: &mut SessionState, 
     let choice = team_core::provider::choose(&ctx.cfg, &setup.repo, &labels)?;
     let b = &ctx.cfg.budgets;
     let max_turns = if prompt::is_complex(ctx, issue) { b.max_turns_complex } else { b.max_turns_regular };
-    let job = Job { prompt: prompt::retry(ctx, issue, &state.branch_name, blocking)?, cwd: wt.to_path_buf(), model: choice.model, max_turns, env: choice.env, label: label(&setup.repo, "retry", issue.number) };
+    let job = Job { prompt: prompt::retry(ctx, issue, &state.branch_name, blocking)?, cwd: wt.to_path_buf(), model: choice.model, max_turns, env: choice.env, label: label(&setup.repo, "retry", issue.number), max_duration: None };
     crate::log::info(&format!("#{}: Nachbesserung nach Review (Runde {round})", issue.number));
     let out = ctx.llm.run(&job)?;
     state.add_session(out.num_turns, out.usage.total(), out.estimated_cost());

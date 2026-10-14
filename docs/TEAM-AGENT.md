@@ -101,3 +101,29 @@ branch (`agent/issue-N-*` on origin is reused; continuation sessions push their 
 - PR feedback: new commits drop the stale `qa-passed`/`qa-failed` so QA checks the new head.
 - Session files per repo; worktrees with short paths; no tokens in remote URLs (git uses
   `gh auth git-credential`).
+
+## Product Owner (role `product-owner`, port of the C# loop)
+
+One Claude pass per `interval_minutes` on the PO repo's integration branch (clone
+`work/product-owner/<o_r>`, branch created from `base_branch` if missing): the built-in
+`po-owner` prompt gets the repo, branches, labels, `docs/ROADMAP.md`, the open `agent-pr` PRs and
+the open `agent-task` issues, plus the customer-review section. It runs on the subscription with
+`models.product_owner`, `max_turns`, a hard time limit (`timeout_minutes`, killed when exceeded)
+and the C# loop's headless env (no background tasks, 30-min foreground Bash).
+
+- **Due**: once per slot — time is cut into `interval_minutes` slots counted from the Unix epoch,
+  so every machine computes the same slots; at most `max_runs_per_day` passes per machine and day.
+- **Worth it**: a pass is skipped without Claude when there is no open agent PR, the backlog has at
+  least `backlog_min` task issues and no customer review is configured (checked ≤ every 5 min).
+- **One machine per slot**: the pass claims `refs/team-locks/po-slot-<interval>-<slot>` (atomic
+  create). The ref stays as the record that the slot ran; the other machine gets 422 and records
+  `skipped` ("lief auf einem anderen Rechner"). Refs of the two previous slots are deleted. A usage
+  limit gives the slot back (ref deleted) so the pass runs after the reset.
+- **Customer review**: optional `customer_command` run before the pass with
+  `LUNIMA_CUSTOMER_FEEDBACK=<state>/customer/feedback.md`; the file is first set to BLOCKED so a
+  failed cycle never shows an old acceptance.
+- `state/po-state.json` records day, runs_today, last start/end, result
+  (`ok|error|timeout|usage-limit|skipped`), note and next due time for the Control Center.
+- Differences to the C# loop: no workers (the coder role replaces them), no `agent-loop.json` /
+  `state.json` pause (control.json like every role), one pass per slot team-wide instead of per
+  machine, the prompt goes on stdin instead of a `.agent-loop/owner-pass.md` file.

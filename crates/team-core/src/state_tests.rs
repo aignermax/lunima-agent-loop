@@ -69,3 +69,15 @@ fn parse_time_accepts_control_center_formats() {
     assert!(parse_time("9999-12-31T23:59:59.9999999").is_some());
     assert!(parse_time("soon").is_none());
 }
+
+#[test]
+fn po_state_round_trip_and_contract_names() {
+    let t = tempfile::tempdir().unwrap();
+    assert!(PoState::load(t.path()).is_none());
+    let s = PoState { day: "2026-10-14".into(), runs_today: 2, last_start: Some("2026-10-14T08:00:00+02:00".into()), last_result: "ok".into(), ..Default::default() };
+    s.save(t.path()).unwrap();
+    assert_eq!(PoState::load(t.path()), Some(s));
+    let raw = r#"{"day":"d","runs_today":1,"last_start":null,"last_end":null,"last_result":"timeout","last_note":"n","next_due":"2026-10-14T12:00:00+02:00"}"#;
+    std::fs::write(t.path().join(PO_STATE_FILE), raw).unwrap();
+    assert_eq!(PoState::load(t.path()).unwrap().last_result, "timeout");
+}

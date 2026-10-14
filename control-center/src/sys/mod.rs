@@ -1,11 +1,10 @@
-//! Everything that talks to the outside world: processes, scheduled task, git, gh, registry.
+//! Everything that talks to the outside world: the agent daemon, gh, tool probes, autostart.
 
+pub mod agent_service;
+pub mod process;
 pub mod autostart;
-pub mod cli;
-pub mod git;
 pub mod github;
-pub mod schedtask;
-pub mod wsl;
+pub mod probes;
 
 use std::path::Path;
 use std::process::{Command, Output};
@@ -38,7 +37,7 @@ fn result_of(out: &Output) -> Result<String, String> {
     }
 }
 
-/// Like `run`, but kills the process after `timeout` (a hanging wsl.exe must not freeze
+/// Like `run`, but kills the process after `timeout` (a hanging tool must not freeze
 /// the collector). Returns the raw output so callers can read stdout of non-zero exits.
 pub fn run_output_timeout(mut cmd: Command, timeout: std::time::Duration) -> Result<Output, String> {
     use std::process::Stdio;
@@ -57,10 +56,6 @@ pub fn run_output_timeout(mut cmd: Command, timeout: std::time::Duration) -> Res
     }
 }
 
-/// `run` with a timeout.
-pub fn run_timeout(cmd: Command, timeout: std::time::Duration) -> Result<String, String> {
-    result_of(&run_output_timeout(cmd, timeout)?)
-}
 
 /// Opens a URL or folder with the system handler.
 pub fn open(target: &str) {

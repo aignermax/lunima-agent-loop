@@ -4,14 +4,21 @@
 //!   lunima-team-agent init [--from-env <.env>] [--from-loop <agent-loop.json>]
 //!   lunima-team-agent status
 //!   lunima-team-agent run                 all roles, forever (one instance per machine)
-//!   lunima-team-agent once <role>         one cycle of coder | qa | pr-feedback
+//!   lunima-team-agent once <role>         one cycle of coder | qa | pr-feedback | product-owner
 
 use std::path::PathBuf;
 use team_core::config::TeamConfig;
 use team_core::paths::Paths;
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // `--home <dir>` anywhere = data folder (the Control Center passes it for non-default homes)
+    if let Some(i) = args.iter().position(|a| a == "--home") {
+        if let Some(dir) = args.get(i + 1).cloned() {
+            std::env::set_var(team_core::paths::ENV_HOME, dir);
+            args.drain(i..=i + 1);
+        }
+    }
     let code = match args.first().map(String::as_str) {
         Some("init") => init(&args[1..]),
         Some("status") => status(),
@@ -37,22 +44,6 @@ fn arg(args: &[String], name: &str) -> Option<PathBuf> {
     args.windows(2).find(|w| w[0] == name).map(|w| PathBuf::from(&w[1]))
 }
 
-/// Legacy files on this machine: the Python agent's `.env` and the PO loop's
-/// `agent-loop.json` (loop root order as in the loop's README: current folder, exe folder,
-/// `%LOCALAPPDATA%\lunima-agent-loop`, then the developer checkout `~/lunima-agent-loop`).
-fn legacy_candidates() -> (Option<PathBuf>, Option<PathBuf>) {
-    let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from);
-    let env = home.as_ref().map(|h| h.join("autonomous-issue-agent").join(".env")).filter(|p| p.is_file());
-    let roots = [
-        std::env::current_dir().ok(),
-        std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from)),
-        std::env::var_os("LOCALAPPDATA").map(|d| PathBuf::from(d).join("lunima-agent-loop")),
-        home.as_ref().map(|h| h.join("lunima-agent-loop")),
-    ];
-    let lp = roots.into_iter().flatten().map(|r| r.join("agent-loop.json")).find(|p| p.is_file());
-    (env, lp)
-}
-
 fn init(args: &[String]) -> i32 {
     let Some(p) = paths() else {
         eprintln!("Kein Datenordner bestimmbar (LOCALAPPDATA/HOME fehlt) — LUNIMA_TEAM_HOME setzen.");
@@ -62,7 +53,7 @@ fn init(args: &[String]) -> i32 {
         println!("{} existiert bereits — nichts geändert.", p.config().display());
         return 0;
     }
-    let (auto_env, auto_loop) = legacy_candidates();
+    let (auto_env, auto_loop) = team_core::import::legacy_candidates();
     let env = arg(args, "--from-env").or(auto_env);
     let lp = arg(args, "--from-loop").or(auto_loop);
     let cfg = match team_core::import::from_legacy(env.as_deref(), lp.as_deref()) {
@@ -129,6 +120,8 @@ fn single_instance(p: &Paths) -> Option<std::fs::File> {
     let _ = p.ensure();
     let file = std::fs::OpenOptions::new().create(true).truncate(false).write(true).open(p.state().join("agent.lock")).ok()?;
     file.try_lock().ok()?;
+    // the lock file itself is unreadable for others on Windows: the pid goes next to it
+    let _ = std::fs::write(p.state().join("agent.pid"), std::process::id().to_string());
     Some(file)
 }
 
@@ -160,7 +153,7 @@ fn once(role: &str) -> i32 {
         return 3;
     };
     let Some(mut r) = team_agent::daemon::all_roles().into_iter().find(|r| r.name() == role) else {
-        eprintln!("Unbekannte Rolle „{role}“ (coder | qa | pr-feedback)");
+        eprintln!("Unbekannte Rolle „{role}“ (coder | qa | pr-feedback | product-owner)");
         return 2;
     };
     team_agent::log::init(&p.logs());

@@ -11,7 +11,7 @@ name = "lunima-po"
 path = "src/main.rs"
 
 [dependencies]
-eframe = { version = "0.31", default-features = false, features = ["wgpu", "default_fonts", "persistence"] }
+eframe = { version = "0.31", default-features = false, features = ["wgpu", "default_fonts", "persistence", "x11", "wayland"] }
 egui_extras = { version = "0.31", default-features = false }
 tray-icon = "0.20"
 serde = { version = "1", features = ["derive"] }
@@ -19,6 +19,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
 raw-window-handle = "0.6"
+toml = "0.8"
+team-core = { path = "../crates/team-core" }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [
@@ -28,5 +30,35 @@ windows-sys = { version = "0.59", features = [
     "Win32_Security",
 ] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# tray-icon needs a running GTK main loop on Linux (own thread, see tray.rs)
+gtk = "0.18"
+
 [dev-dependencies]
 tempfile = "3"
+
+# Debian package "lunima-team": Control Center + agent daemon + systemd user unit.
+#   cargo build --release -p team-agent -p lunima-po-center
+#   cargo deb -p lunima-po-center --no-build --deb-version <version>
+[package.metadata.deb]
+name = "lunima-team"
+maintainer = "Max Aigner <max@akhetonics.com>"
+copyright = "Lunima"
+extended-description = """\
+The Lunima agent team: lunima-team-agent (coder, QA, PR feedback and product owner \
+roles, running Claude Code on the user's subscription against GitHub via gh) and \
+lunima-po, the Lunima Team Control Center (status, pause, settings, tray icon). \
+After installing: lunima-team-agent init, then \
+systemctl --user enable --now lunima-team-agent."""
+section = "devel"
+priority = "optional"
+depends = "$auto, git"
+recommends = "gh"
+assets = [
+    ["target/release/lunima-team-agent", "usr/bin/", "755"],
+    ["target/release/lunima-po", "usr/bin/", "755"],
+    ["../packaging/linux/lunima-team-agent.service", "usr/lib/systemd/user/", "644"],
+    ["../packaging/linux/lunima-team-control-center.desktop", "usr/share/applications/", "644"],
+    ["../packaging/linux/lunima-team-control-center.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+    ["../README.md", "usr/share/doc/lunima-team/README.md", "644"],
+]

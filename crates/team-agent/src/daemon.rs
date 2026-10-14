@@ -10,6 +10,7 @@ use crate::ctx::{Ctx, RoleError, Tools};
 use crate::feedback::PrFeedback;
 use crate::forge::Forge;
 use crate::llm::ClaudeCli;
+use crate::po::ProductOwner;
 use crate::qa::Qa;
 use crate::role::{backoff_secs, Role};
 use chrono::{DateTime, Local};
@@ -72,7 +73,7 @@ fn gh_login() -> String {
 }
 
 pub fn all_roles() -> Vec<Box<dyn Role>> {
-    vec![Box::new(Coder::default()), Box::new(Qa::default()), Box::new(PrFeedback::default())]
+    vec![Box::new(Coder::default()), Box::new(Qa::default()), Box::new(PrFeedback::default()), Box::new(ProductOwner::default())]
 }
 
 /// Runs until the process is stopped.
@@ -99,6 +100,7 @@ fn role_loop(mut role: Box<dyn Role>, paths: Paths, login: String, limit: UsageL
     let name = role.name();
     crate::log::set_role(name);
     let hb = Arc::new(Heartbeat::new(&paths.state(), name));
+    crate::shell::set_heartbeat(hb.clone());
     let mut last_good: Option<TeamConfig> = None;
     let mut recovered = false;
     let mut failures = 0u32;
@@ -198,7 +200,7 @@ mod tests {
         paths.ensure().unwrap();
         let mut cfg = TeamConfig::default();
         let limit: UsageLimit = Arc::new(Mutex::new(None));
-        assert_eq!(all_roles().iter().map(|r| r.name()).collect::<Vec<_>>(), vec!["coder", "qa", "pr-feedback"]);
+        assert_eq!(all_roles().iter().map(|r| r.name()).collect::<Vec<_>>(), vec!["coder", "qa", "pr-feedback", "product-owner"]);
         assert!(blocked(&cfg, "coder", &paths, &limit).is_none());
         cfg.roles.qa = false;
         assert!(blocked(&cfg, "qa", &paths, &limit).unwrap().contains("abgeschaltet"));

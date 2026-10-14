@@ -1,16 +1,16 @@
-//! Rules: edit the prompt of every role — PO and loop worker (loop) as well as coder,
-//! reviewer, QA and PR-feedback (issue agent). An override file wins over the built-in.
+//! Rules: edit the prompt of every role — product owner, coder, reviewer, QA and PR
+//! feedback. An override file in `<data>/prompts/` wins over the built-in.
 
 use super::theme::{self, MUTED};
 use super::widgets::{card, page_title, pill, primary, secondary};
 use crate::collector::{Action, Handle};
-use crate::core::prompts::{self, Builtin, PromptDoc};
+use crate::core::prompts::{self, PromptDoc};
 use crate::core::snapshot::Snapshot;
 use eframe::egui::{self, RichText, Ui};
 use std::time::{Duration, Instant};
 
 const LIST_WIDTH: f32 = 250.0;
-/// Prompt files are re-read at most this often (the agent's live on \\wsl$ / a slow mount).
+/// Prompt files are re-read at most this often.
 const RESCAN: Duration = Duration::from_secs(3);
 
 /// Editor state for the selected prompt.
@@ -34,7 +34,7 @@ pub struct RulesPage {
 impl RulesPage {
     pub fn show(&mut self, ui: &mut Ui, s: &Snapshot, handle: &Handle) {
         page_title(ui, "Regeln", "Die Anweisungen jeder Rolle. Änderungen gelten ab dem nächsten Lauf der Rolle.");
-        let docs = prompts::all(&s.root, s.team.dir.as_deref());
+        let docs = prompts::all(&s.paths.prompts());
         if self.customised.as_ref().is_none_or(|(t, _)| t.elapsed() > RESCAN) {
             self.customised = Some((Instant::now(), docs.iter().filter(|d| d.is_customised()).map(|d| d.id.clone()).collect()));
         }
@@ -50,10 +50,6 @@ impl RulesPage {
                 }
             });
         });
-        if s.team.dir.is_none() {
-            ui.add_space(8.0);
-            ui.label(RichText::new("Coder-, Reviewer-, QA- und PR-Feedback-Regeln erscheinen, sobald der Issue-Agent verbunden ist (Seite Team).").color(MUTED));
-        }
     }
 
     fn list(&mut self, ui: &mut Ui, docs: &[PromptDoc], selected: &str) {
@@ -89,7 +85,7 @@ impl RulesPage {
         ui.add_space(6.0);
         ui.scope(|ui| {
             ui.set_max_width(width);
-            placeholder_line(ui, doc, &builtin, &b.text);
+            placeholder_line(ui, &builtin, &b.text);
         });
         ui.add_space(6.0);
         card(ui, None, |ui| {
@@ -118,10 +114,7 @@ fn toolbar(ui: &mut Ui, doc: &PromptDoc, b: &mut Buffer, builtin: &str, handle: 
                 b.text = b.saved.clone();
             }
         });
-        // in a checkout of the loop repo prompts/*.md are the tracked sources: managed with
-        // git, never reset from the (possibly older) copy compiled into this app
-        let hint = if doc.deletable { "Löscht die eigene Datei." } else { "Im Repo-Checkout: Quelldatei — Änderungen per git verwalten." };
-        let reset = ui.add_enabled(b.overridden && doc.deletable, egui::Button::new("Eingebaute Fassung verwenden")).on_disabled_hover_text(hint).on_hover_text(hint);
+        let reset = ui.add_enabled(b.overridden, egui::Button::new("Eingebaute Fassung verwenden")).on_hover_text("Löscht die eigene Datei.");
         if reset.clicked() {
             handle.send(Action::DeletePrompt(doc.override_path.clone()));
             b.overridden = false;
@@ -135,9 +128,9 @@ fn toolbar(ui: &mut Ui, doc: &PromptDoc, b: &mut Buffer, builtin: &str, handle: 
     ui.label(RichText::new(doc.override_path.display().to_string()).color(MUTED).size(11.5));
 }
 
-/// Placeholders of the built-in; for the issue agent (Python `str.format`) unknown ones in
-/// the edited text are flagged — the agent would fall back to its built-in prompt.
-fn placeholder_line(ui: &mut Ui, doc: &PromptDoc, builtin: &str, text: &str) {
+/// Placeholders of the built-in; unknown ones in the edited text (Python `str.format`
+/// rules) are flagged — the agent would fall back to its built-in prompt.
+fn placeholder_line(ui: &mut Ui, builtin: &str, text: &str) {
     let known = prompts::placeholders(builtin);
     // plain wrapped text: framed pills can't wrap (their width is unknown before layout)
     let names: Vec<String> = known.iter().map(|p| format!("{{{p}}}")).collect();
@@ -145,11 +138,9 @@ fn placeholder_line(ui: &mut Ui, doc: &PromptDoc, builtin: &str, text: &str) {
         ui.label(RichText::new("Platzhalter:").color(MUTED).size(12.0));
         ui.add(egui::Label::new(RichText::new(names.join("   ")).monospace().size(12.0).color(theme::ACCENT)).wrap());
     });
-    if matches!(doc.builtin, Builtin::File(_)) {
-        let problems = prompts::format_problems(text, &known);
-        if !problems.is_empty() {
-            let msg = format!("{} — so würde der Agent seine eingebaute Fassung nutzen. Echte geschweifte Klammern verdoppeln: {{{{ }}}}", problems.join("; "));
-            ui.add(egui::Label::new(RichText::new(msg).color(theme::WARN).size(12.5)).wrap());
-        }
+    let problems = prompts::format_problems(text, &known);
+    if !problems.is_empty() {
+        let msg = format!("{} — so würde der Agent seine eingebaute Fassung nutzen. Echte geschweifte Klammern verdoppeln: {{{{ }}}}", problems.join("; "));
+        ui.add(egui::Label::new(RichText::new(msg).color(theme::WARN).size(12.5)).wrap());
     }
 }

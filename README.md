@@ -1,119 +1,99 @@
-# lunima-agent-loop
+# lunima-agent-loop — the Lunima agent team
 
-Autonomous issue → PR loop for the [Lunima](https://github.com/aignermax/Lunima) photonics IDE.
-A small .NET console app that runs on a schedule (e.g. while the maintainer is on vacation),
-picks up GitHub issues labelled `agent-task`, implements them headlessly with the
-[Kimi Code CLI](https://www.kimi.com/code/docs/en/), and opens PRs into a dedicated integration
-branch (`dev`) — never into `main`. A Product-Owner pass reviews and merges those PRs
-and keeps the backlog aligned with `docs/ROADMAP.md`.
+Autonomous issue → PR team for the [Lunima](https://github.com/aignermax/Lunima) photonics IDE
+and the Akhetonics repositories: one native Rust daemon, **`lunima-team-agent`**, runs every role
+on Windows and Linux (no WSL, no Python, Claude on the subscription login, GitHub via the `gh`
+login — no tokens in any config):
 
-## How it works
+| role | what it does |
+|---|---|
+| `coder` | implements `agent-task` issues as PRs (`Agent: …`) into the integration branch (`dev`), repairs `qa-failed` PRs |
+| `qa` | builds/tests agent PRs per the repo's `.agent.toml`, posts a verdict, labels `qa-passed` / `qa-failed` |
+| `pr-feedback` | implements `@agent …` comments on PRs |
+| `product-owner` | one pass per interval: reviews + merges agent PRs, keeps `dev` fresh, grooms and seeds the backlog from `docs/ROADMAP.md` |
 
-```
-Windows Task Scheduler (hourly, windowless, runs on lock screen)
-        │
-        ▼
-lunima-agent-loop run                      ← stateless; state lives in GitHub + one JSON file
-        │
-        ├─ Product-Owner pass (kimi, owner model) — due every `ownerIntervalMinutes`,
-        │  but skipped entirely when there is nothing to do (no open agent PRs and a
-        │  healthy backlog) → idle hours cost no API calls
-        │     review open agent-pr PRs → squash-merge into dev when green
-        │     groom + split + seed agent-task issues from docs/ROADMAP.md
-        │     status report on the "Agent loop — status" tracking issue (only on changes)
-        │
-        └─ up to N/day: worker pass (kimi, worker model, one run per issue)
-              claim the issue (agent-running label) so no other machine starts it too
-              branch agent/issue-<n>-<ts> from dev
-              .agent-loop/task-<n>.md = the work contract (prompts/worker.md)
-              kimi -p "...execute task file..." --output-format stream-json
-              agent implements, runs the test suite, pushes, opens PR → dev
-```
-
-Guardrails: daily task cap, never push to `main`, no force-push/`--admin` by the worker,
-full test suite must be green before a PR, confidential data (customer PDKs) must never be
-committed. Issues being worked on carry the `agent-running` claim label — safe to run the loop
-on more than one machine without duplicate work (but all machines share the same Kimi account
-quota, so two machines burn the budget roughly twice as fast). The real budget cap lives on the
-Kimi account (monthly quota); the daily caps here only pace the spend. Every run is logged to
-`logs/` and `state/state.json`.
-
-## Setup (Windows)
+Architecture, data folder, multi-machine claims and the differences to the former Python
+agent / C# loop: [`docs/TEAM-AGENT.md`](docs/TEAM-AGENT.md).
 
 ```powershell
-git clone https://github.com/aignermax/lunima-agent-loop; cd lunima-agent-loop
-scripts\Setup-Machine.ps1    # checks deps, creates config (edit + re-run), builds, inits, registers
+lunima-team-agent init          # writes team.toml (imports the old .env / agent-loop.json if found)
+lunima-team-agent status        # config, Claude CLI, gh login, repos
+lunima-team-agent once product-owner   # one cycle of a role, for testing
+lunima-team-agent run           # all roles, forever (scheduled task / systemd user unit)
 ```
 
-`Setup-Machine.ps1` verifies the prerequisites (.NET 10 SDK, `kimi` CLI logged in, `gh` CLI
-authenticated), creates `agent-loop.json` from the example on first run, then builds, runs
-`init` (clones Lunima → `clonePath`, creates `dev` on origin if missing) and registers the
-hourly scheduled task. Use `-NoRegister` to skip the scheduler.
+Configuration is a single `team.toml` in the data folder (`%LOCALAPPDATA%\lunima-team`,
+`~/.local/share/lunima-team`); the Control Center edits it. The Product Owner's settings live in
+`[product_owner]` (`repo`, `integration_branch`, `base_branch`, `interval_minutes`,
+`timeout_minutes`, `max_runs_per_day`, `backlog_min`, `max_turns`, `customer_command`) and the
+role is switched on with `[roles] product_owner = true`. Pauses are set per role in the Control
+Center (`state/control.json`).
 
-Manual equivalent:
+## Installation
 
-```powershell
-dotnet build
-copy agent-loop.example.json agent-loop.json   # then edit: clonePath, caps, models
-.\bin\Release\net10.0\lunima-agent-loop.exe init
-scripts\Register-AgentLoop.ps1                 # scheduled task, hourly (first run after ~15 min)
+Every `v*` tag publishes [release](https://github.com/aignermax/lunima-agent-loop/releases)
+assets for Windows (x64, arm64) and Linux (x64, arm64); macOS gets the agent binary only.
+Two programs are installed:
+
+- `lunima-team-agent` — the agent daemon (coder, QA, PR feedback, product owner) that runs
+  in the background as you, using your Claude subscription and your `gh` login;
+- `lunima-po` — the **Lunima Team Control Center** (status, pause/resume, settings, tray icon).
+
+Configuration, state and logs live in the data folder (`%LOCALAPPDATA%\lunima-team` on
+Windows, `~/.local/share/lunima-team` on Linux) and are never touched by upgrades or uninstall.
+
+**Prerequisites** (on every machine that runs the agent): `git`; the GitHub CLI `gh`, logged in
+(`gh auth login`); the Claude Code CLI `claude`, logged in with your subscription (no API key
+needed); optionally the .NET SDK if the agent should build and test Lunima.
+
+### Windows
+
+1. Install `lunima-team-<version>-win-x64.msi` (or `-arm64.msi`). It puts both programs into
+   `C:\Program Files\Lunima Team` (on the PATH) and adds the Start-menu entry
+   *Lunima Team Control Center*. An older *Lunima Agent Loop* install is upgraded in place.
+2. Open the Control Center. Its setup assistant checks git / gh / claude and their logins,
+   imports an existing configuration (`.env` of the Python issue agent, `agent-loop.json` of
+   the old PO loop) into `team.toml`, and enables the agent's autostart (scheduled task
+   `LunimaTeamAgent`, runs at logon as you) and, if you like, the Control Center's own.
+
+Without the UI: `lunima-team-agent init`, then `lunima-team-agent status`, then
+`lunima-team-agent run` (or `once coder|qa|pr-feedback` for a single cycle).
+
+### Linux
+
+Debian/Ubuntu:
+
+```sh
+sudo apt install ./lunima-team_<version>-1_amd64.deb    # or _arm64.deb
+lunima-team-agent init                                  # writes ~/.local/share/lunima-team/team.toml
+systemctl --user enable --now lunima-team-agent         # agent in the background (user unit)
+lunima-po                                               # Control Center
 ```
 
-Useful commands:
+Other distributions: unpack `lunima-team-<version>-linux-x64.tar.gz` and run `./install.sh`
+(installs into `~/.local`, user unit into `~/.config/systemd/user`; `sudo ./install.sh --system`
+for `/usr/local`; `./install.sh --uninstall` removes it again), then the same three commands.
+To keep the agent running while you are logged out: `loginctl enable-linger $USER`.
 
-```powershell
-.\publish\lunima-agent-loop.exe status   # config, today's counters, recent runs
-.\publish\lunima-agent-loop.exe run      # one full cycle right now (owner pass if due + tasks)
-.\publish\lunima-agent-loop.exe work     # only worker passes
-.\publish\lunima-agent-loop.exe own      # force a Product-Owner pass now (ignores the interval)
-```
+The Control Center's tray icon needs a desktop with StatusNotifier/AppIndicator support
+(GNOME: the *AppIndicator* extension).
 
-Pause / stop:
+### Cutting a release
 
-```powershell
-# pause:   set "enabled": false in agent-loop.json  (task stays, does nothing)
-# disable: Disable-ScheduledTask -TaskName LunimaAgentLoop
-# remove:  scripts\Unregister-AgentLoop.ps1
-```
-
-## Install from a release (any PC, no SDK)
-
-Every `v*` tag builds a **NativeAOT** single executable (~4 MB, no .NET runtime needed) for
-`win-x64`, `win-arm64`, `linux-x64`, `linux-arm64` and `osx-arm64` — see
-[Releases](https://github.com/aignermax/lunima-agent-loop/releases). Prompts and the example
-config are compiled in; files in a `prompts/` folder next to the config override them.
-
-**Windows: MSI** (`lunima-agent-loop-<version>-x64.msi` / `-arm64.msi`) installs the exe to
-`C:\Program Files\Lunima Agent Loop` and adds it to the system PATH. Config, state and logs
-then live in `%LOCALAPPDATA%\lunima-agent-loop` (untouched by upgrades and uninstall):
-
-```powershell
-lunima-agent-loop init    # 1st run: writes %LOCALAPPDATA%\lunima-agent-loop\agent-loop.json — edit clonePath/models, set "enabled": true
-lunima-agent-loop init    # 2nd run: clones the repo, ensures the integration branch
-```
-
-**Zip / tar.gz:** unzip anywhere and run the same two `init` calls in that folder — an
-`agent-loop.json` in the current folder (or next to the exe) takes precedence over the data folder.
-Without one, Linux uses `~/.local/share/lunima-agent-loop`, macOS `~/Library/Application Support/lunima-agent-loop`.
-A freshly created config ships with `"enabled": false`, so a scheduler firing early does nothing.
-
-The target machine still needs the tools the loop drives: `git`, `gh` (logged in), `kimi`
-and — for `ownerRunner: "claude"` — the `claude` CLI, plus the .NET SDK the *Lunima* build needs.
-To cut a release: `git tag v0.2.0 && git push origin v0.2.0`.
+`git tag v0.5.0 && git push origin v0.5.0` — CI (`.github/workflows/release.yml`) tests the
+workspace on every platform and attaches the MSIs, zips, `.deb`s and tarballs to the release.
 
 ## Building locally
 
-`dotnet publish` produces the NativeAOT binary (`-r win-arm64`, `-r linux-x64`, … for other
-targets). It needs the platform C/C++ toolchain: on Windows *Visual Studio / Build Tools with
-"Desktop development with C++"* (`Register-AgentLoop.ps1` puts `vswhere.exe` on PATH for the link
-step); on Linux `clang` + `zlib1g-dev`. ARM64 Windows is fully supported natively.
+```sh
+cargo test --workspace
+cargo build --release -p team-agent -p lunima-po-center
+```
 
-## Setup (Linux)
-
-Use a release binary (or `dotnet publish -c Release -r linux-x64`), then run `init` as above.
-
-Schedule with a systemd user timer or cron instead of the Windows-only register script, e.g.
-`7 * * * * /opt/lunima-agent-loop/lunima-agent-loop run >> /var/log/agent-loop.log 2>&1`.
+Linux needs `pkg-config libgtk-3-dev libxdo-dev libayatana-appindicator3-dev` for the Control
+Center. Packages: `dotnet build installer/lunima-team.wixproj -c Release -p:InstallerPlatform=x64`
+(Windows, WiX via the .NET SDK), `sh packaging/linux/make-tarball.sh <version> linux-x64` and
+`cargo deb -p lunima-po-center --no-build` (Linux, `cargo install cargo-deb`).
 
 ## Control Center (tray app)
 
@@ -148,23 +128,6 @@ lunima-po.exe --page activity          # open a page: overview|activity|github|s
 Build: `cargo build --release --manifest-path control-center/Cargo.toml` (tests: `cargo test`).
 Rendering uses wgpu (DirectX 12 on Windows) — Windows-on-ARM GPUs have no OpenGL 2+.
 
-## Configuration (`agent-loop.json`)
-
-| key | default | meaning |
-|---|---|---|
-| `githubRepo` | `aignermax/Lunima` | target repo |
-| `clonePath` | — | dedicated local clone the agent works in (kept separate from your dev checkout) |
-| `integrationBranch` | `dev` | branch all PRs target; `main` is never touched |
-| `maxTasksPerDay` | `2` | worker-run budget per day |
-| `ownerIntervalMinutes` | `60` | min minutes between Product-Owner passes; idle passes are skipped |
-| `workerModel` / `ownerModel` | `kimi-k2.7-code` / `kimi-k3` | model aliases (`kimi provider list`) |
-| `workerTimeoutMinutes` | `120` | hard kill per worker run |
-| `taskLabel` / `prLabel` / `blockedLabel` / `runningLabel` | `agent-task` / `agent-pr` / `needs-human` / `agent-running` | GitHub labels that drive the loop; `agent-running` is the cross-machine claim |
-| `enabled` | `true` | master switch |
-
-A pause (see below) is stored separately in `state/state.json`, not here — so pausing never
-edits your config, and resuming can't accidentally re-enable a loop you turned off on purpose.
-
 ## UX tester — Claude clicks through the real app
 
 `tools/ux-tester/ux_tester.py` closes the gap the headless pipeline cannot: nobody in the
@@ -195,8 +158,9 @@ in screenshots; prompt caching is on.
 
 ## Independent customer role → Product Owner
 
-The existing desktop tester is now part of `run` and `own` when `customerEnabled` is
-true. The customer role uses Claude's [computer-use toolset](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool)
+The desktop tester runs before each Product-Owner pass when `[product_owner]
+customer_command` is set (e.g. `python tools/ux-tester/customer_cycle.py --repo aignermax/Lunima
+--base dev --feedback "%LUNIMA_CUSTOMER_FEEDBACK%"`); the PO reads the evidence file. The customer role uses Claude's [computer-use toolset](https://platform.claude.com/docs/en/agents-and-tools/tool-use/computer-use-tool)
 to operate the real Windows app. It receives persona goals, not source code or a
 developer's click recipe. It assesses task completion **and** visual hierarchy,
 consistency, typography, spacing, discoverability, feedback and recovery.
@@ -252,32 +216,18 @@ this is **not an OS sandbox**: Windows known-folder APIs can still resolve the
 account's normal folders. Use a dedicated account with only public test fixtures.
 
 ```powershell
-scripts\Setup-CustomerReview.ps1
-publish\lunima-agent-loop.exe customer   # test only; no PO, issues, merges or workers
-publish\lunima-agent-loop.exe own        # customer evidence, then the PO
+python -m venv .customer-venv
+.customer-venv\Scripts\pip install -r tools/ux-tester/requirements.txt
+lunima-team-agent once product-owner   # customer evidence, then the PO
 ```
 
-The setup script creates `.customer-venv`, installs dependencies, publishes the
-loop and updates only the customer fields in `agent-loop.json`. It does not store
-an API key, start a test or change Task Scheduler. Keep the existing task's working
-directory pointed at this checkout. Python tools must accompany the executable;
-deploying only the `.exe` is insufficient. Existing installations stay opted out
-until configured; no running service is silently changed by this PR.
+`customer_command` is any shell command; it runs in the PO's clone with
+`LUNIMA_CUSTOMER_FEEDBACK` pointing at the evidence file the PO reads
+(`state/customer/feedback.md` in the data folder). The tool's own options (`--model`,
+`--project`, `--max-reviews`, `--max-age`, `--max-steps`, `--max-turns`, `--timeout`) go on that
+command line; see `python tools/ux-tester/customer_cycle.py --help`.
 
-Manual configuration:
-
-| key | default | meaning |
-|---|---|---|
-| `customerEnabled` | `false` | opt in to desktop customer reviews before every due PO pass |
-| `customerPython` | `python` | Python executable with `tools/ux-tester/requirements.txt` installed |
-| `customerModel` | `claude-fable-5-1` | configurable computer-use model; independent of worker/PO model |
-| `customerProject` | `CAP.Desktop/CAP.Desktop.csproj` | project to build in each fresh checkout |
-| `customerMaxReviewsPerCycle` | `2` | at most two due targets; cache hits consume no slot |
-| `customerMaxAgeHours` | `24` | acceptance expiry, even for an unchanged commit |
-| `customerMaxSteps` / `customerMaxTurns` | `80` / `60` | per-review action and model-turn budgets |
-| `customerTimeoutMinutes` | `20` | desktop-run limit; checkout/build have separate bounds |
-
-Both pause and the master `enabled` switch also apply to `customer`. State caches
+Pausing the product-owner role also pauses the customer. State caches
 are keyed by repo, PR, commit, goals, strategy sources, model and harness policy. New commits invalidate
 old results; a push during a review blocks the result. Infrastructure blocks retry
 after an hour; normal verdicts expire at the configured age. A per-cycle lock
@@ -311,46 +261,24 @@ reproduction and retest criteria, and may choose to create no new feature tasks.
 ### Validate the integration without a desktop or API calls
 
 ```powershell
-dotnet build
-dotnet run --project tests/CustomerIntegration
 python -m unittest discover -s tests -p "test_customer*.py" -v
 ```
 
-The tests drive the real report loop with scripted API/desktop adapters and exercise
-the C# → Python handoff. They do not substitute for a live customer run after setup.
-
-## Pausing the loop
-
-Going on vacation, or just want the machine to stop thinking for a while? Pause it:
-
-```
-lunima-agent-loop pause                       # indefinitely, until you resume
-lunima-agent-loop pause 14 vacation           # 14 days, with a reason
-lunima-agent-loop pause 2026-09-01 vacation   # through the end of that day
-lunima-agent-loop resume
-lunima-agent-loop status                       # shows "Paused: …"
-```
-
-The pause lives in `state/state.json`, so it **survives reboots, Windows updates and
-re-registered scheduled tasks** — the scheduler may fire, but every pass (owner *and*
-worker) exits immediately, printing the pause reason. A dated pause lifts itself when
-it elapses; an indefinite one waits for `resume`.
-
-For a *hard* stop, combine it with the two other switches — they are independent by design:
-`enabled: false` in `agent-loop.json` and `Disable-ScheduledTask -TaskName LunimaAgentLoop`.
+The tests drive the real report loop with scripted API/desktop adapters. They do not
+substitute for a live customer run after setup.
 
 ## Requirements
 
-- .NET 10 SDK (build machine only — published binaries are self-contained)
-- [Kimi Code CLI](https://www.kimi.com/code/docs/en/) on `PATH`, logged in
-- [GitHub CLI](https://cli.github.com/) on `PATH`, authenticated (`gh auth login`)
-- Windows for the Task-Scheduler register script (Linux: cron/systemd, see above)
+- `git`, the [GitHub CLI](https://cli.github.com/) (`gh auth login`) and the
+  [Claude Code CLI](https://code.claude.com/) (logged in with the subscription) on `PATH`
+- whatever the target repos build with (Lunima: .NET 10 SDK)
+- Rust (stable) to build from source: `cargo build --release --workspace`
 
 ## Notes & limitations
 
 - **Desktop availability.** Mechanical tests can run headlessly. The optional customer role
   requires an unlocked test desktop; locked sessions are explicitly `BLOCKED`, never UX-passed.
-- The worker contract and the Product-Owner contract live in `prompts/worker.md` and
-  `prompts/owner.md` — edit those to tune behavior; no recompile needed.
+- Prompts are compiled in (`crates/team-core/prompts/`); a file of the same name in the data
+  folder's `prompts/` overrides one (the Control Center's rules editor writes those).
 - A crashed worker can leave a stale `agent-running` claim behind; the Product-Owner pass
   removes claims older than ~6 h so the issue is retried.
