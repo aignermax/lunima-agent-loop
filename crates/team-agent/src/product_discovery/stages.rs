@@ -103,7 +103,7 @@ fn read(repo: &Path, rel: &str) -> String {
 pub fn evidence_levels(repo: &Path) -> BTreeMap<String, u8> {
     let mut out = BTreeMap::new();
     for f in std::fs::read_dir(repo.join(ROOT).join("evidence")).into_iter().flatten().flatten() {
-        if f.path().extension().is_some_and(|x| x == "md") {
+        if model::is_evidence_file(&f.file_name().to_string_lossy()) {
             for e in parse_evidence(&std::fs::read_to_string(f.path()).unwrap_or_default()) {
                 if let Some(l) = e.level {
                     out.insert(e.id, l);
@@ -141,7 +141,8 @@ pub fn drop_duplicates(repo: &Path, week: &str) -> usize {
     }
     let mut seen: BTreeSet<String> = BTreeSet::new();
     for f in std::fs::read_dir(repo.join(ROOT).join("evidence")).into_iter().flatten().flatten() {
-        if f.file_name().to_string_lossy() != format!("{week}.md") {
+        let name = f.file_name().to_string_lossy().to_string();
+        if name != format!("{week}.md") && model::is_evidence_file(&name) {
             for e in parse_evidence(&std::fs::read_to_string(f.path()).unwrap_or_default()) {
                 if !e.source.is_empty() {
                     seen.insert(dedup_key(&e));

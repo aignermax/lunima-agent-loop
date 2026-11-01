@@ -307,8 +307,10 @@ pub fn week(ctx: &Ctx, repo_name: &str, week: &str, st: &mut DiscoveryState) -> 
         run.note(format!("not filed (privacy): {b}"));
     }
     let previews = page::render_previews(&repo, &previews_dir(ctx));
-    run.summary = acts.summary.clone();
-    run.critic_summary = critique.summary.clone();
+    let names = actions::private_names(&acts);
+    run.summary = actions::scrub(&acts.summary, &names);
+    run.critic_summary = actions::scrub(&critique.summary, &names);
+    run.notes = run.notes.iter().map(|n| actions::scrub(n, &names)).collect();
     commit(&repo, week, &run, "apply")?;
 
     let this_week_drs: Vec<(String, String, String)> = stages::new_this_week(&repo, &base, "decisions")
@@ -323,12 +325,13 @@ pub fn week(ctx: &Ctx, repo_name: &str, week: &str, st: &mut DiscoveryState) -> 
         Some(p) => p,
         None => match forge.pr_by_branch(&branch(week))? {
             Some(p) => p,
-            None => forge.create_draft_pr(&pr_title, &pr_body(week, &acts.summary, &this_week_drs, &st.report_url), &branch(week), &integ)?,
+            None => forge.create_draft_pr(&pr_title, &actions::scrub(&pr_body(week, &acts.summary, &this_week_drs, &st.report_url), &names), &branch(week), &integ)?,
         },
     };
     forge.add_labels(pr.number, &[LABEL_PR])?;
     run.pr = Some(pr.number);
     run.finish("apply");
+    st.stages_done = run.stages_done.clone();
     commit(&repo, week, &run, "run record")?;
 
     let drs = decisions::effective(&repo, forge.as_ref());
@@ -367,12 +370,13 @@ pub fn week(ctx: &Ctx, repo_name: &str, week: &str, st: &mut DiscoveryState) -> 
         previews: &previews,
         outreach: if outreach_file.is_some() { acts.outreach.len() } else { 0 },
     });
+    let body = actions::scrub(&body, &names);
     let _ = std::fs::write(DiscoveryState::dir(&state_dir).join(team_core::state::DISCOVERY_REPORT_FILE), &body);
     match report::publish(forge.as_ref(), &body) {
         Ok((_, url)) => st.report_url = url,
         Err(e) => crate::log::warn(&format!("Discovery-Bericht nicht veröffentlicht: {e}")),
     }
-    let _ = forge.edit_pr_body(pr.number, &pr_body(week, &acts.summary, &this_week_drs, &st.report_url));
+    let _ = forge.edit_pr_body(pr.number, &actions::scrub(&pr_body(week, &acts.summary, &this_week_drs, &st.report_url), &names));
 
     st.pr_url = pr.html_url.clone();
     st.week_cost_usd = week_cost;

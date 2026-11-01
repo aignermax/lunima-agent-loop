@@ -75,7 +75,9 @@ Caps: open opportunities ≤ {MAX_OPEN_OPPORTUNITIES} in total (park one to open
 experiments ≤ {MAX_NEW_EXPERIMENTS}, spikes ≤ {MAX_SPIKES}. Opportunity keys are stable
 lower-case slugs — reuse the key of an existing opportunity to update it, don't create a
 near-duplicate. Outreach: at most 5 people, chosen for demonstrated public technical work
-relevant to one hypothesis; no private contact details, no mass lists. Everything you write
+relevant to one hypothesis; no private contact details, no mass lists. An experiment with
+`autonomy: needs-approval` already asks the maintainer — don't file a second approval for
+it. Never write that a named person is an outreach candidate anywhere but in `outreach`. Everything you write
 goes into a public repository except the outreach entries.
 
 Never invent evidence, users, numbers or quotes. If evidence is thin, say so and propose the

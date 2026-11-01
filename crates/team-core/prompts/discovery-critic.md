@@ -54,4 +54,6 @@ For every item ask:
 requests, spikes, outreach) — use it whenever the evidence does not justify the maintainer's
 time. Your criticism is shown to the maintainer unedited, including when it contradicts the
 strategist. Don't soften it to make the week look productive. Don't invent counter-evidence
-either: if you checked and found nothing, say so.{REPAIR}
+either: if you checked and found nothing, say so. Never mention outreach candidates by
+name in the summary or in reasons (write "the outreach candidate"): everything except the
+outreach drafts is public.{REPAIR}

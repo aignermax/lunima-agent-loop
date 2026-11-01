@@ -181,6 +181,35 @@ pub fn check_actions(a: &Actions) -> Vec<String> {
     errs
 }
 
+/// Names of this week's outreach candidates (full name and surname): they may appear in
+/// public sources, but never as "someone we plan to contact" in a public issue or report.
+pub fn private_names(a: &Actions) -> Vec<String> {
+    let mut out = Vec::new();
+    for o in &a.outreach {
+        let full = o.name.trim().trim_start_matches("Dr. ").trim_start_matches("Prof. ").trim();
+        if full.len() > 3 {
+            out.push(full.to_string());
+        }
+        if let Some(last) = full.split_whitespace().last().filter(|l| l.len() > 3) {
+            out.push(last.to_string());
+        }
+    }
+    out.sort_by_key(|n| std::cmp::Reverse(n.len()));
+    out.dedup();
+    out
+}
+
+/// `text` with every private name replaced.
+pub fn scrub(text: &str, names: &[String]) -> String {
+    let mut t = text.to_string();
+    for n in names {
+        if let Ok(r) = regex::Regex::new(&format!(r"(?i)\b{}\b", regex::escape(n))) {
+            t = r.replace_all(&t, "[outreach contact]").into_owned();
+        }
+    }
+    t
+}
+
 /// One thing to file on GitHub, already gated.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Item {
@@ -309,6 +338,11 @@ pub fn plan_items(a: &Actions, c: &Critique, g: &GateInput) -> Gate {
         let body = format!("**Approval needed: {} outreach drafts** to researchers and engineers with a public, relevant track record.\n\nThe drafts (person, public source, relevance, hypothesis, suggested message) are stored **privately on the agent machine** (Control Center → Discovery), never in this public repository. Nothing has been sent. Send the ones you like personally; record replies as interview summaries.", g.outreach_count);
         consider("R:outreach".into(), format!("Approval: outreach drafts ({})", g.week), body, vec![LABEL_APPROVAL.into(), g.needs_human.into()], &mut gate);
     }
+    let names = private_names(a);
+    for it in gate.items.iter_mut() {
+        it.title = scrub(&it.title, &names);
+        it.body = scrub(&it.body, &names);
+    }
     // nothing personal or confidential goes into a public issue
     gate.items.retain(|it| {
         let problems = privacy_problems(&format!("{}\n{}", it.title, it.body));
@@ -416,6 +450,18 @@ mod tests {
         assert_eq!(g.unreviewed, vec!["O:z"]);
         assert!(g.items.is_empty());
         assert!(g.blocked_privacy[0].starts_with("I:k"));
+    }
+
+    #[test]
+    fn outreach_names_never_reach_public_items() {
+        let actions = Actions { summary: "s".into(), outreach: vec![Outreach { name: "Prof. Ada Lovelace".into(), public_source: "https://x.org".into(), hypothesis: "h".into(), draft: "d".into(), ..Default::default() }], ..Default::default() };
+        let critique = Critique { verdicts: vec![Verdict { item: "R:outreach".into(), verdict: "weaken".into(), reason: "Lovelace already maintains a competing tool; ada lovelace wrote it".into(), ..Default::default() }], ..Default::default() };
+        let mut g = input(&[]);
+        g.outreach_count = 1;
+        let gate = plan_items(&actions, &critique, &g);
+        let body = &gate.items[0].body;
+        assert!(!body.to_lowercase().contains("lovelace") && body.contains("[outreach contact] already maintains"));
+        assert_eq!(scrub("Ada Lovelace and LOVELACE", &private_names(&actions)), "[outreach contact] and [outreach contact]");
     }
 
     #[test]

@@ -81,6 +81,12 @@ pub struct Evidence {
     pub raw: String,
 }
 
+/// `2026-w45.md` — evidence files; README and other notes in the folder are not evidence.
+pub fn is_evidence_file(name: &str) -> bool {
+    static NAME: OnceLock<Regex> = OnceLock::new();
+    re(&NAME, r"^\d{4}-w\d{2}\.md$").is_match(name)
+}
+
 pub fn parse_level(s: &str) -> Option<u8> {
     let s = s.trim().to_uppercase();
     s.strip_prefix('E').and_then(|n| n.parse::<u8>().ok()).filter(|n| *n <= 3)
@@ -598,6 +604,13 @@ mod tests {
         assert!(check_evidence(&mk("external", "E1", "my opinion"), "2026-w44").iter().any(|e| e.contains("source")));
         assert!(check_evidence(&mk("bogus", "E1", "https://x"), "2026-w44").iter().any(|e| e.contains("class")));
         assert!(check_evidence(&mk("external", "E1", "https://x"), "2026-w45").iter().any(|e| e.contains("id must be")));
+    }
+
+    #[test]
+    fn only_week_files_are_evidence() {
+        assert!(is_evidence_file("2026-w45.md"));
+        assert!(!is_evidence_file("README.md"), "the format example in the README is not evidence");
+        assert!(!is_evidence_file("2026-w45.md.bak"));
     }
 
     #[test]

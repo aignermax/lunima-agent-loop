@@ -120,7 +120,7 @@ pub fn write(repo: &Path, forge: &dyn Forge, inp: &Inputs) -> Result<Vec<String>
 
     let mut index = String::from("# Evidence collected so far (do not collect these again)\n\n");
     let ev_dir = repo.join(ROOT).join("evidence");
-    let mut files_ev: Vec<PathBuf> = std::fs::read_dir(&ev_dir).map(|it| it.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "md")).collect()).unwrap_or_default();
+    let mut files_ev: Vec<PathBuf> = std::fs::read_dir(&ev_dir).map(|it| it.flatten().map(|e| e.path()).filter(|p| p.file_name().is_some_and(|n| super::model::is_evidence_file(&n.to_string_lossy()))).collect()).unwrap_or_default();
     files_ev.sort();
     for f in files_ev {
         for e in parse_evidence(&std::fs::read_to_string(&f).unwrap_or_default()) {
