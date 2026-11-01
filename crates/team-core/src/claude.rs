@@ -71,10 +71,12 @@ pub fn args(s: &Session) -> Vec<String> {
     let mut a: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose"].iter().map(|x| x.to_string()).collect();
     match &s.tools {
         // a sandboxed session gets no shell (so no gh, git push or curl) and may edit only
-        // inside its working directory — the code around it does every external write
+        // inside its working directory — the code around it does every external write.
+        // Edit tools stay out of --allowedTools: listed there they may write anywhere, while
+        // acceptEdits alone confines them to the working directory (verified with CLI 2.1).
         Some(tools) => {
-            let list = tools.join(",");
-            a.extend(["--tools".to_string(), list.clone(), "--allowedTools".to_string(), list, "--permission-mode".to_string(), "acceptEdits".to_string()]);
+            let pre_approved: Vec<&str> = tools.iter().map(String::as_str).filter(|t| !matches!(*t, "Write" | "Edit" | "MultiEdit" | "NotebookEdit")).collect();
+            a.extend(["--tools".to_string(), tools.join(","), "--allowedTools".to_string(), pre_approved.join(","), "--permission-mode".to_string(), "acceptEdits".to_string()]);
         }
         None => a.push("--dangerously-skip-permissions".into()),
     }
@@ -261,6 +263,7 @@ mod tests {
         let a = args(&s);
         assert!(!a.iter().any(|x| x == "--dangerously-skip-permissions"));
         assert!(a.windows(2).any(|w| w == ["--tools", "Read,Write,WebSearch"]));
+        assert!(a.windows(2).any(|w| w == ["--allowedTools", "Read,WebSearch"]), "pre-approved Write would escape the working directory");
         assert!(a.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
         assert!(!a.iter().any(|x| x.contains("Bash")));
     }
