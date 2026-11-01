@@ -100,7 +100,14 @@ impl Role for ProductDiscovery {
         let now = (self.clock)();
         let week = plan::week_key(now);
         let mut st = DiscoveryState::load(&ctx.paths.state()).unwrap_or_default();
-        if let Due::No(next) = plan::due(&st, now, cfg) {
+        let trigger = DiscoveryState::dir(&ctx.paths.state()).join(team_core::state::DISCOVERY_RUN_NOW_FILE);
+        let forced = trigger.is_file();
+        if forced {
+            // one request = one try; a week that is already over stays over
+            let _ = std::fs::remove_file(&trigger);
+        }
+        let due = if forced { plan::due_now(&st, now, cfg) } else { plan::due(&st, now, cfg) };
+        if let Due::No(next) = due {
             let next = Some(stamp(next));
             if st.next_due != next {
                 st.next_due = next;

@@ -207,6 +207,8 @@ pub const DISCOVERY_DIR: &str = "discovery";
 pub const DISCOVERY_STATE_FILE: &str = "state.json";
 pub const DISCOVERY_LEDGER_FILE: &str = "ledger.jsonl";
 pub const DISCOVERY_REPORT_FILE: &str = "report.md";
+/// Written by the Control Center ("run now"): the role skips the waiting for the window once.
+pub const DISCOVERY_RUN_NOW_FILE: &str = "run-now";
 
 /// One item the Control Center lists (opportunity, approval, Decision Record …).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

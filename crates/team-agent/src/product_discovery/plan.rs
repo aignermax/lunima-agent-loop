@@ -77,6 +77,19 @@ pub fn due(st: &DiscoveryState, now: DateTime<Local>, cfg: &ProductDiscovery) ->
     }
 }
 
+/// "Run now" from the Control Center: skips the window and the retry wait, nothing else —
+/// a finished, budget-stopped or given-up week stays over.
+pub fn due_now(st: &DiscoveryState, now: DateTime<Local>, cfg: &ProductDiscovery) -> Due {
+    if st.week != week_key(now) {
+        return Due::Run;
+    }
+    match st.last_result.as_str() {
+        "ok" | "budget" => Due::No(next_window(now, cfg)),
+        _ if st.attempts >= cfg.max_attempts.max(1) => Due::No(next_window(now, cfg)),
+        _ => Due::Run,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -115,5 +128,9 @@ mod tests {
         assert_eq!(due(&st("2027-w03", "running", 1, mon), mon + Duration::minutes(1), &c), Due::Run, "resume after a crash");
         assert_eq!(due(&st("2027-w03", "running", 3, mon), mon + Duration::minutes(1), &c), Due::No(at(2027, 1, 25, 6)), "a run that keeps crashing stops too");
         assert_eq!(due(&st("2027-w02", "ok", 0, mon - Duration::days(7)), mon, &c), Due::Run, "new week");
+        // run now: before the window, and without the retry wait — but never twice a week
+        assert_eq!(due_now(&DiscoveryState::default(), at(2027, 1, 18, 5), &c), Due::Run);
+        assert_eq!(due_now(&st("2027-w03", "error", 1, mon), mon + Duration::minutes(1), &c), Due::Run);
+        assert_eq!(due_now(&st("2027-w03", "ok", 1, mon), mon + Duration::hours(1), &c), Due::No(at(2027, 1, 25, 6)));
     }
 }

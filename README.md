@@ -10,7 +10,9 @@ login — no tokens in any config):
 | `coder` | implements `agent-task` issues as PRs (`Agent: …`) into the integration branch (`dev`), repairs `qa-failed` PRs |
 | `qa` | builds/tests agent PRs per the repo's `.agent.toml`, posts a verdict, labels `qa-passed` / `qa-failed` |
 | `pr-feedback` | implements `@agent …` comments on PRs |
-| `product-owner` | one pass per interval: reviews + merges agent PRs, keeps `dev` fresh, grooms and seeds the backlog from `docs/ROADMAP.md` |
+| `product-owner` | one pass per interval: reviews + merges agent PRs, keeps `dev` fresh, grooms and seeds the backlog from `docs/ROADMAP.md` and accepted discovery Decision Records |
+| `ux-review` | nightly simulated users walk the desktop app (off by default) |
+| `product-discovery` | weekly scout → strategist → critic: evidence with provenance, competing hypotheses, pre-registered experiments, critic-reviewed Decision Records, landing-page and outreach drafts for the maintainer's approval (off by default) — [`docs/DISCOVERY.md`](docs/DISCOVERY.md) |
 
 Architecture, data folder, multi-machine claims and the differences to the former Python
 agent / C# loop: [`docs/TEAM-AGENT.md`](docs/TEAM-AGENT.md).
@@ -19,6 +21,9 @@ agent / C# loop: [`docs/TEAM-AGENT.md`](docs/TEAM-AGENT.md).
 lunima-team-agent init          # writes team.toml (imports the old .env / agent-loop.json if found)
 lunima-team-agent status        # config, Claude CLI, gh login, repos
 lunima-team-agent once product-owner   # one cycle of a role, for testing
+lunima-team-agent once product-discovery   # one weekly discovery run (scout → strategist → critic)
+lunima-team-agent experiment publish <Lunima clone> <slug> --approved-by <you> --contact <address>
+                                # maintainer only: render an approved experiment page into docs/x/<slug>/
 lunima-team-agent run           # all roles, forever (scheduled task / systemd user unit)
 ```
 

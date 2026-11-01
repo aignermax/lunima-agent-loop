@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub mod coder_history;
+pub mod discovery;
 pub mod github;
 pub mod logs;
 pub mod overview;

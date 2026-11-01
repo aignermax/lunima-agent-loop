@@ -38,6 +38,10 @@ pub enum Action {
     SetAgentAutostart(bool),
     SetAutostart(bool),
     Terminal(&'static str),
+    /// `lunima-team-agent once <role>` in a visible terminal
+    RunOnce(&'static str),
+    /// asks the running daemon to start the weekly discovery now (trigger file)
+    RequestDiscoveryRun,
 }
 
 impl Action {
@@ -144,9 +148,11 @@ impl Worker {
             agent_files::agent_running(&state),
         );
         let ux = team_core::state::UxState::load(&state);
+        let discovery = crate::core::discovery::load(&state, config.as_ref().ok());
         self.update(|s| {
             (s.heartbeats, s.pauses, s.history, s.discovered, s.po, s.agent_running) = fresh;
             s.ux = ux;
+            s.discovery = discovery;
             s.config = config;
             s.config_missing = missing;
             s.logs = files;
@@ -249,6 +255,13 @@ impl Worker {
             }
             Action::SetAutostart(on) => autostart::set_enabled(*on).map(|_| if *on { "Control Center startet mit der Anmeldung" } else { "Autostart aus" }.into()),
             Action::Terminal(command) => probes::open_terminal(command).map(|_| format!("Terminal geöffnet: {command}")),
+            Action::RequestDiscoveryRun => {
+                let dir = team_core::state::DiscoveryState::dir(&state);
+                std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                std::fs::write(dir.join(team_core::state::DISCOVERY_RUN_NOW_FILE), "").map_err(|e| e.to_string())?;
+                Ok("Discovery startet beim nächsten Zyklus des Team-Agents".into())
+            }
+            Action::RunOnce(role) => probes::open_terminal(&agent_service::once_command(&exe()?, role)).map(|_| format!("{} läuft im Terminal", role_label(role))),
         }
     }
 }

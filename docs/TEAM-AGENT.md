@@ -167,3 +167,13 @@ api_key_file = 'C:\Users\me\.ssh\anthropic-ux.txt'
 # optional: hour = 2, goals_per_run = 3, max_steps = 150, model = "claude-opus-5-5",
 # min_severity = "major", app_project = "CAP.Desktop", python = "py -3", goals_file = ""
 ```
+
+## Product discovery
+
+Role `product-discovery` (off by default, `[roles] product_discovery = true`): one weekly run
+of three sandboxed Claude sessions (scout, strategist, critic; file tools and web search only)
+followed by deterministic validation and filing. Lock `refs/team-locks/discovery-<week>`,
+progress committed on `discovery/<week>` after every step, draft PR labelled `discovery`,
+state in `state/discovery/` (state.json, ledger.jsonl, report.md, previews/, private/). The
+Product Owner reads accepted Decision Records. Architecture, governance and operation:
+[`DISCOVERY.md`](DISCOVERY.md).

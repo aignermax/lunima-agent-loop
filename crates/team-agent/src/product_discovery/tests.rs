@@ -357,3 +357,18 @@ fn the_product_owner_gets_accepted_decisions_and_cannot_merge_discovery_prs() {
     forge.create_issue("Spike: round-trip", "Decision: DR-0001").and_then(|i| forge.add_labels(i.number, &["agent-task"])).unwrap();
     assert!(report::po_section(&ctx, &clone, "o/r").contains("delivery issue exists"));
 }
+
+#[test]
+fn run_now_skips_the_window_once() {
+    let w = world(FakeLlm::new().then(scout_valid).then(strategist).then(critic));
+    let ctx = w.ctx("A");
+    let early = Local.with_ymd_and_hms(2026, 11, 2, 5, 0, 0).unwrap(); // Monday, before the 06:00 window
+    assert_eq!(w.role(early).cycle(&ctx), Ok(false), "window not open yet");
+    let trigger = DiscoveryState::dir(&ctx.paths.state()).join(team_core::state::DISCOVERY_RUN_NOW_FILE);
+    std::fs::write(&trigger, "").unwrap();
+    assert_eq!(w.role(early).cycle(&ctx), Ok(true));
+    assert!(!trigger.exists(), "consumed");
+    std::fs::write(&trigger, "").unwrap();
+    assert_eq!(w.role(early + chrono::Duration::hours(1)).cycle(&ctx), Ok(false), "a finished week stays finished");
+    assert_eq!(w.llm.calls(), 3);
+}
