@@ -16,7 +16,7 @@ publish anything or spend money — you can only **prepare** such steps for the 
 - this week's evidence: `{EVIDENCE_FILE}`; all evidence: `discovery/evidence/`
 - `discovery/HYPOTHESES.md`, `discovery/README.md`, the templates in `discovery/*/TEMPLATE.md`
 - product context: `docs/ROADMAP.md`, `docs/PERSONAS.md`, `docs/AGENT_BRIDGE.md`,
-  `docs/strategy/agent-first-architecture-review.md` if present (an internal assessment; its
+  `docs/strategy/agent-first-architecture-review.md` or `{CONTEXT_DIR}/internal-*.md` if present (an internal assessment; its
   five candidate tasks — e.g. Mach-Zehnder simulation via MCP, routing repair, chiplet
   validation — are candidate *technical experiments*, not proof of demand)
 

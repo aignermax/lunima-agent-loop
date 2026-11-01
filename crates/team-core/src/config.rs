@@ -345,6 +345,9 @@ pub struct ProductDiscovery {
     pub analytics_site: String,
     /// goatcounter: file holding the API token (never logged)
     pub analytics_token_file: String,
+    /// local notes the stages may read (copied into the run's context, never committed),
+    /// e.g. an internal architecture review that is not in the repository
+    pub context_files: Vec<String>,
 }
 
 impl Default for ProductDiscovery {
@@ -367,6 +370,7 @@ impl Default for ProductDiscovery {
             analytics: "none".into(),
             analytics_site: String::new(),
             analytics_token_file: String::new(),
+            context_files: Vec::new(),
         }
     }
 }

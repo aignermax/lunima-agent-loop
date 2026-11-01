@@ -49,6 +49,8 @@ pub struct Inputs<'a> {
     pub metrics: &'a Metrics,
     /// last week's run record (critic summary, notes)
     pub previous: Option<&'a RunRecord>,
+    /// local notes from `product_discovery.context_files`
+    pub extra: &'a [String],
 }
 
 /// Writes the context folder; returns the file names written.
@@ -132,6 +134,13 @@ pub fn write(repo: &Path, forge: &dyn Forge, inp: &Inputs) -> Result<Vec<String>
     put("metrics.md", analytics::markdown(inp.metrics))?;
     let prev = inp.previous.map(|p| format!("# Last week ({})\n\n## Summary\n{}\n\n## Critic\n{}\n\n## Notes\n{}\n", p.week, p.summary, p.critic_summary, p.notes.iter().map(|n| format!("- {n}\n")).collect::<String>())).unwrap_or_else(|| "# Last week\n\n(no previous run)\n".into());
     put("previous-week.md", prev)?;
+    for (n, path) in inp.extra.iter().enumerate() {
+        let name = std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| format!("note-{n}.md"));
+        match std::fs::read_to_string(path) {
+            Ok(text) => put(&format!("internal-{name}"), format!("<!-- internal note supplied by the maintainer ({path}); an assessment, not evidence of demand -->\n{text}"))?,
+            Err(e) => crate::log::warn(&format!("Discovery-Kontextdatei {path} nicht lesbar: {e}")),
+        }
+    }
     Ok(files)
 }
 
@@ -148,7 +157,7 @@ mod tests {
             .with_issue(fake::issue(9, "Approval: publish page", &format!("{}\n", super::super::actions::marker("P:gds")), &[LABEL_APPROVAL, LABEL_DECLINED]));
         forge.add_comment(9, "Not now — first talk to two designers.");
         let m = Metrics { available: false, source: "none".into(), note: "No analytics configured.".into(), pages: vec![] };
-        let files = write(t.path(), &forge, &Inputs { week: "2026-w45", today: "2026-11-02", repo_name: "o/r", budget_left_usd: 25.0, caps: "- max 3".into(), drs: &[], metrics: &m, previous: None }).unwrap();
+        let files = write(t.path(), &forge, &Inputs { week: "2026-w45", today: "2026-11-02", repo_name: "o/r", budget_left_usd: 25.0, caps: "- max 3".into(), drs: &[], metrics: &m, previous: None, extra: &[t.path().join("missing.md").display().to_string()] }).unwrap();
         assert!(files.contains(&"brief.md".to_string()) && files.len() == 8);
         let read = |f: &str| std::fs::read_to_string(context_dir(t.path()).join(f)).unwrap();
         assert!(read("lunima-issues.md").contains("#3 [open] Routing hangs"));

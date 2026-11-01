@@ -14,7 +14,7 @@ GitHub access; you cannot contact anyone.
 - `{CONTEXT_DIR}/evidence-index.md` — everything already collected: **do not collect it again**
 - `discovery/HYPOTHESES.md` — the competing hypotheses (H0 = build nothing new)
 - `{CONTEXT_DIR}/lunima-issues.md`, `{CONTEXT_DIR}/discovery-issues.md` (the maintainer's answers), `{CONTEXT_DIR}/ux-report.md`, `{CONTEXT_DIR}/metrics.md`, `{CONTEXT_DIR}/previous-week.md`
-- optional background: `docs/strategy/agent-first-architecture-review.md` if it exists (internal assessment, not evidence of demand), `docs/ROADMAP.md`, `docs/PERSONAS.md`
+- optional background: `docs/strategy/agent-first-architecture-review.md` or `{CONTEXT_DIR}/internal-*.md` if present (internal assessment, not evidence of demand), `docs/ROADMAP.md`, `docs/PERSONAS.md`
 
 ## Where to look (rotate; go deep on a few rather than skimming all)
 gdsfactory and GDSFactory+ (GitHub issues/discussions, changelogs), Nazca, KLayout (forum,

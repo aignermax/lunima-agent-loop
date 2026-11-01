@@ -226,7 +226,7 @@ pub fn week(ctx: &Ctx, repo_name: &str, week: &str, st: &mut DiscoveryState) -> 
         let spent = ledger::week_cost(&read_ledger(&state_dir), week);
         let caps = format!("- open opportunities: at most {}\n- new experiments per week: at most {}\n- spikes per week: at most {}\n- new GitHub issues per run: at most {}", cfg.max_open_opportunities, cfg.max_new_experiments, cfg.max_spikes, cfg.max_new_issues);
         let prev = previous(&repo, week);
-        context::write(&repo, forge.as_ref(), &Inputs { week, today: &today, repo_name, budget_left_usd: (cfg.weekly_budget_usd - spent).max(0.0), caps, drs: &drs, metrics: &metrics, previous: prev.as_ref() })?;
+        context::write(&repo, forge.as_ref(), &Inputs { week, today: &today, repo_name, budget_left_usd: (cfg.weekly_budget_usd - spent).max(0.0), caps, drs: &drs, metrics: &metrics, previous: prev.as_ref(), extra: &cfg.context_files })?;
         if stage == Stage::Critic {
             stage_run.review_items = review_items(&repo, &base);
         }
