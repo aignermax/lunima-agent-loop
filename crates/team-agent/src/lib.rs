@@ -13,6 +13,7 @@ pub mod llm;
 pub mod log;
 pub mod po;
 pub mod pr_text;
+pub mod product_discovery;
 pub mod qa;
 pub mod repos;
 pub mod review;

@@ -37,6 +37,7 @@ pub fn role_enabled(cfg: &TeamConfig, name: &str) -> bool {
         "pr-feedback" => cfg.roles.pr_feedback,
         "product-owner" => cfg.roles.product_owner,
         "ux-review" => cfg.roles.ux_review,
+        "product-discovery" => cfg.roles.product_discovery,
         _ => false,
     }
 }
@@ -74,7 +75,7 @@ fn gh_login() -> String {
 }
 
 pub fn all_roles() -> Vec<Box<dyn Role>> {
-    vec![Box::new(Coder::default()), Box::new(Qa::default()), Box::new(PrFeedback::default()), Box::new(ProductOwner::default()), Box::new(crate::ux::UxReviewer::default())]
+    vec![Box::new(Coder::default()), Box::new(Qa::default()), Box::new(PrFeedback::default()), Box::new(ProductOwner::default()), Box::new(crate::ux::UxReviewer::default()), Box::new(crate::product_discovery::ProductDiscovery::default())]
 }
 
 /// Runs until the process is stopped.
@@ -201,10 +202,16 @@ mod tests {
         paths.ensure().unwrap();
         let mut cfg = TeamConfig::default();
         let limit: UsageLimit = Arc::new(Mutex::new(None));
-        assert_eq!(all_roles().iter().map(|r| r.name()).collect::<Vec<_>>(), vec!["coder", "qa", "pr-feedback", "product-owner", "ux-review"]);
+        assert_eq!(all_roles().iter().map(|r| r.name()).collect::<Vec<_>>(), vec!["coder", "qa", "pr-feedback", "product-owner", "ux-review", "product-discovery"]);
         assert!(blocked(&cfg, "coder", &paths, &limit).is_none());
         cfg.roles.qa = false;
         assert!(blocked(&cfg, "qa", &paths, &limit).unwrap().contains("abgeschaltet"));
+        assert!(blocked(&cfg, "product-discovery", &paths, &limit).unwrap().contains("abgeschaltet"), "discovery is off unless switched on");
+        cfg.roles.product_discovery = true;
+        std::fs::write(paths.state().join("control.json"), r#"{"paused":{"product-discovery":{"until":null,"reason":"Notstopp"}}}"#).unwrap();
+        assert_eq!(blocked(&cfg, "product-discovery", &paths, &limit).as_deref(), Some("Notstopp"), "discovery pauses independently of delivery");
+        assert!(blocked(&cfg, "coder", &paths, &limit).is_none());
+        std::fs::remove_file(paths.state().join("control.json")).unwrap();
         *limit.lock().unwrap() = Some(Local::now() + chrono::Duration::minutes(5));
         assert!(blocked(&cfg, "coder", &paths, &limit).unwrap().contains("Nutzungslimit"));
         *limit.lock().unwrap() = Some(Local::now() - chrono::Duration::minutes(1));
