@@ -485,7 +485,7 @@ impl TeamConfig {
         if pd.hour > 23 {
             return Err("product_discovery.hour muss 0–23 sein.".into());
         }
-        if !(pd.weekly_budget_usd >= 0.0) {
+        if pd.weekly_budget_usd.is_nan() || pd.weekly_budget_usd < 0.0 {
             return Err("product_discovery.weekly_budget_usd darf nicht negativ sein.".into());
         }
         if !["none", "goatcounter", "file"].contains(&pd.analytics.as_str()) {

@@ -94,7 +94,7 @@ pub fn parse_evidence(text: &str) -> Vec<Evidence> {
     for (k, &start) in starts.iter().enumerate() {
         let end = starts.get(k + 1).copied().unwrap_or(text.len());
         let raw = text[start..end].trim_end().to_string();
-        let id = raw.lines().next().unwrap_or("").trim_start_matches('#').trim().split_whitespace().next().unwrap_or("").to_string();
+        let id = raw.lines().next().unwrap_or("").trim_start_matches('#').split_whitespace().next().unwrap_or("").to_string();
         let f = fields(&raw);
         let get = |k: &str| f.get(k).cloned().unwrap_or_default();
         out.push(Evidence {

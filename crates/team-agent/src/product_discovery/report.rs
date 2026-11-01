@@ -37,8 +37,7 @@ pub struct Scoreboard {
 }
 
 pub fn scoreboard(repo: &Path, drs: &[Dr]) -> Scoreboard {
-    let mut s = Scoreboard::default();
-    s.interviews = std::fs::read_dir(repo.join(ROOT).join("interviews")).into_iter().flatten().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("I-")).count();
+    let mut s = Scoreboard { interviews: std::fs::read_dir(repo.join(ROOT).join("interviews")).into_iter().flatten().flatten().filter(|e| e.file_name().to_string_lossy().starts_with("I-")).count(), ..Default::default() };
     for f in std::fs::read_dir(repo.join(ROOT).join("evidence")).into_iter().flatten().flatten() {
         for e in parse_evidence(&std::fs::read_to_string(f.path()).unwrap_or_default()) {
             match e.level {
