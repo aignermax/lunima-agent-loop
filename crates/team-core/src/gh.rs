@@ -36,6 +36,10 @@ pub struct Issue {
     pub pull_request: Option<Value>,
     #[serde(default)]
     pub html_url: String,
+    #[serde(default)]
+    pub created_at: String,
+    #[serde(default)]
+    pub closed_at: Option<String>,
 }
 
 impl Issue {
@@ -78,6 +82,13 @@ pub struct PullRequest {
     pub user: Option<User>,
     #[serde(default)]
     pub updated_at: String,
+    #[serde(default)]
+    pub draft: bool,
+    /// set once merged (closed PRs keep it)
+    #[serde(default)]
+    pub merged_at: Option<String>,
+    #[serde(default)]
+    pub state: String,
 }
 
 impl PullRequest {
@@ -171,6 +182,12 @@ impl Repo {
         get_json(&self.p(&format!("issues/{number}")))
     }
 
+    /// Issues with `label` in `state` (`open` | `closed` | `all`), newest first, PRs excluded.
+    pub fn issues(&self, label: &str, state: &str) -> Result<Vec<Issue>, String> {
+        let path = self.p(&format!("issues?state={}&labels={}&sort=created&direction=desc&per_page=100", encode(state), encode(label)));
+        Ok(list::<Issue>(&path, ".[]")?.into_iter().filter(|i| i.pull_request.is_none()).collect())
+    }
+
     pub fn add_labels(&self, number: u64, labels: &[&str]) -> Result<(), String> {
         api("POST", &self.p(&format!("issues/{number}/labels")), Some(&json!({ "labels": labels }))).map(|_| ())
     }
@@ -232,6 +249,12 @@ impl Repo {
 
     pub fn create_pr(&self, title: &str, body: &str, head: &str, base: &str) -> Result<PullRequest, String> {
         let text = api("POST", &self.p("pulls"), Some(&json!({ "title": title, "body": body, "head": head, "base": base })))?;
+        serde_json::from_str(&text).map_err(|e| e.to_string())
+    }
+
+    /// A draft PR: GitHub refuses to merge drafts, even with admin rights.
+    pub fn create_draft_pr(&self, title: &str, body: &str, head: &str, base: &str) -> Result<PullRequest, String> {
+        let text = api("POST", &self.p("pulls"), Some(&json!({ "title": title, "body": body, "head": head, "base": base, "draft": true })))?;
         serde_json::from_str(&text).map_err(|e| e.to_string())
     }
 

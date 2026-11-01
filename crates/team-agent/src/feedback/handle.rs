@@ -132,6 +132,7 @@ fn work(ctx: &Ctx, setup: &RepoSetup, forge: &dyn Forge, pr: &PullRequest, trigg
         env: choice.env.clone(),
         label: format!("fb_{}_pr-{}", setup.repo.replace('/', "_"), pr.number),
         max_duration: None,
+        tools: None,
     };
     let out = ctx.llm.run(&job)?;
     if out.reached_max_turns {

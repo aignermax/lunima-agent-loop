@@ -171,6 +171,7 @@ pub fn run(ctx: &Ctx, prs: &[PullRequest], issues: &[Issue]) -> RoleResult<Ended
         env,
         label: format!("po_{}", po.repo.replace('/', "_")),
         max_duration: Some(Duration::from_secs(po.timeout_minutes.max(1) * 60)),
+        tools: None,
     };
     match ctx.llm.run(&job) {
         Ok(out) if out.is_error => Ok(Ended::Error(format!("Claude meldet Fehler ({}): {}", out.subtype, out.text.chars().take(300).collect::<String>()))),

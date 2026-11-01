@@ -43,11 +43,13 @@ pub struct Roles {
     pub product_owner: bool,
     /// nightly simulated-user walk through the desktop app (needs an unlocked desktop)
     pub ux_review: bool,
+    /// weekly evidence-driven product discovery (scout → strategist → critic)
+    pub product_discovery: bool,
 }
 
 impl Default for Roles {
     fn default() -> Self {
-        Self { coder: true, qa: true, pr_feedback: true, product_owner: false, ux_review: false }
+        Self { coder: true, qa: true, pr_feedback: true, product_owner: false, ux_review: false, product_discovery: false }
     }
 }
 
@@ -309,6 +311,66 @@ impl Default for UxReview {
     }
 }
 
+/// `[product_discovery]`: the weekly discovery run (see docs/DISCOVERY.md). Not to be
+/// confused with `[discovery]`, which finds org repos with open agent tasks.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProductDiscovery {
+    /// "" = the Product Owner's repo
+    pub repo: String,
+    /// window start: weekday (mon … sun) and local hour; a missed window runs later that week
+    pub weekday: String,
+    pub hour: u32,
+    /// "" = `models.product_owner`
+    pub model: String,
+    /// per stage (scout, strategist, critic)
+    pub max_turns: u32,
+    pub timeout_minutes: u64,
+    /// runs per week that may end in an error before the week is given up
+    pub max_attempts: u32,
+    /// planning limit for the notional/real model cost of one week (not a permission to spend)
+    pub weekly_budget_usd: f64,
+    /// cost assumed for a stage until the ledger has history
+    pub stage_estimate_usd: f64,
+    pub max_open_opportunities: usize,
+    pub max_new_experiments: usize,
+    /// GitHub issues one run may create in total (opportunities, experiments, requests)
+    pub max_new_issues: usize,
+    pub max_spikes: usize,
+    /// person-level outreach material (never committed); "" = `<state>/discovery/private`
+    pub private_dir: String,
+    /// "none" | "goatcounter" | "file"
+    pub analytics: String,
+    /// goatcounter: site code (`<code>.goatcounter.com`); file: path of a metrics JSON file
+    pub analytics_site: String,
+    /// goatcounter: file holding the API token (never logged)
+    pub analytics_token_file: String,
+}
+
+impl Default for ProductDiscovery {
+    fn default() -> Self {
+        Self {
+            repo: String::new(),
+            weekday: "mon".into(),
+            hour: 6,
+            model: String::new(),
+            max_turns: 120,
+            timeout_minutes: 45,
+            max_attempts: 3,
+            weekly_budget_usd: 25.0,
+            stage_estimate_usd: 4.0,
+            max_open_opportunities: 3,
+            max_new_experiments: 2,
+            max_new_issues: 6,
+            max_spikes: 1,
+            private_dir: String::new(),
+            analytics: "none".into(),
+            analytics_site: String::new(),
+            analytics_token_file: String::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TeamConfig {
@@ -324,6 +386,7 @@ pub struct TeamConfig {
     pub budgets: Budgets,
     pub product_owner: ProductOwner,
     pub ux_review: UxReview,
+    pub product_discovery: ProductDiscovery,
     /// `@agent` comments on PRs trigger the PR-feedback role
     pub pr_feedback_marker: String,
 }
@@ -342,6 +405,7 @@ impl Default for TeamConfig {
             budgets: Budgets::default(),
             product_owner: ProductOwner::default(),
             ux_review: UxReview::default(),
+            product_discovery: ProductDiscovery::default(),
             pr_feedback_marker: "@agent".into(),
         }
     }
@@ -413,6 +477,19 @@ impl TeamConfig {
             if r.name.split('/').filter(|p| !p.is_empty()).count() != 2 {
                 return Err(format!("Repo „{}“ muss die Form owner/name haben.", r.name));
             }
+        }
+        let pd = &self.product_discovery;
+        if !["mon", "tue", "wed", "thu", "fri", "sat", "sun"].contains(&pd.weekday.to_lowercase().as_str()) {
+            return Err(format!("product_discovery.weekday „{}“: mon … sun erwartet.", pd.weekday));
+        }
+        if pd.hour > 23 {
+            return Err("product_discovery.hour muss 0–23 sein.".into());
+        }
+        if !(pd.weekly_budget_usd >= 0.0) {
+            return Err("product_discovery.weekly_budget_usd darf nicht negativ sein.".into());
+        }
+        if !["none", "goatcounter", "file"].contains(&pd.analytics.as_str()) {
+            return Err(format!("product_discovery.analytics „{}“: none | goatcounter | file erwartet.", pd.analytics));
         }
         if self.poll_seconds == 0 {
             return Err("poll_seconds muss größer als 0 sein.".into());

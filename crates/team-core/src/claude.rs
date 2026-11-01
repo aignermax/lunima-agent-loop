@@ -34,6 +34,8 @@ pub struct Session<'a> {
     pub deadline: Option<Duration>,
     /// called about once a minute while the session runs (heartbeat)
     pub on_tick: Option<&'a (dyn Fn() + Sync)>,
+    /// `Some` = only these built-in tools exist and no permission bypass (see `args`)
+    pub tools: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -66,7 +68,17 @@ pub fn find_cli() -> Option<PathBuf> {
 }
 
 pub fn args(s: &Session) -> Vec<String> {
-    let mut a: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--max-turns"].iter().map(|x| x.to_string()).collect();
+    let mut a: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose"].iter().map(|x| x.to_string()).collect();
+    match &s.tools {
+        // a sandboxed session gets no shell (so no gh, git push or curl) and may edit only
+        // inside its working directory — the code around it does every external write
+        Some(tools) => {
+            let list = tools.join(",");
+            a.extend(["--tools".to_string(), list.clone(), "--allowedTools".to_string(), list, "--permission-mode".to_string(), "acceptEdits".to_string()]);
+        }
+        None => a.push("--dangerously-skip-permissions".into()),
+    }
+    a.push("--max-turns".into());
     a.push(s.max_turns.to_string());
     if !s.model.is_empty() {
         a.extend(["--model".to_string(), s.model.clone()]);
@@ -220,6 +232,7 @@ mod tests {
             inactivity: Duration::from_secs(1800),
             deadline: None,
             on_tick: None,
+            tools: None,
         };
         let a = args(&s);
         assert_eq!(&a[..4], ["-p", "--output-format", "stream-json", "--verbose"]);
@@ -227,6 +240,29 @@ mod tests {
         assert!(a.windows(2).any(|w| w == ["--model", "claude-opus-5-5"]));
         assert!(a.windows(2).any(|w| w == ["--settings", "hooks.json"]));
         assert!(!a.iter().any(|x| x == "x"), "prompt goes to stdin, not argv");
+        assert!(a.iter().any(|x| x == "--dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn sandboxed_session_has_no_shell_and_no_permission_bypass() {
+        let s = Session {
+            prompt: "x".into(),
+            cwd: ".".into(),
+            model: String::new(),
+            max_turns: 10,
+            env: ChildEnv::subscription(),
+            settings_file: None,
+            log_file: None,
+            inactivity: Duration::from_secs(60),
+            deadline: None,
+            on_tick: None,
+            tools: Some(vec!["Read".into(), "Write".into(), "WebSearch".into()]),
+        };
+        let a = args(&s);
+        assert!(!a.iter().any(|x| x == "--dangerously-skip-permissions"));
+        assert!(a.windows(2).any(|w| w == ["--tools", "Read,Write,WebSearch"]));
+        assert!(a.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
+        assert!(!a.iter().any(|x| x.contains("Bash")));
     }
 
     #[test]
@@ -257,6 +293,7 @@ mod live {
             inactivity: Duration::from_secs(120),
             deadline: None,
             on_tick: None,
+            tools: None,
         };
         let o = run(&s).expect("session");
         println!("text={:?} turns={} tokens={} cost={} subtype={}", o.text, o.num_turns, o.usage.total(), o.cost_usd, o.subtype);
