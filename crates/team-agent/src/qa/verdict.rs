@@ -34,6 +34,7 @@ pub fn review(ctx: &Ctx, repo: &str, pr: &PullRequest, dir: &Path) -> Result<(Ve
         env: ChildEnv::subscription(),
         label: format!("qa_{}_pr-{}", repo.replace('/', "_"), pr.number),
         max_duration: None,
+        tools: None,
     };
     match ctx.llm.run(&job) {
         Ok(out) => {

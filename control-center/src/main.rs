@@ -4,7 +4,7 @@
 //! Usage: `lunima-po [--home <data folder>] [--tray] [--page <name>]`
 //! (`--tray` starts hidden in the tray; `--home` defaults to the agent's data folder,
 //! `LUNIMA_TEAM_HOME` or `%LOCALAPPDATA%\lunima-team`; pages: overview, team, projects,
-//! activity, github, settings, rules, logs, setup)
+//! activity, github, discovery, settings, rules, logs, setup)
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 

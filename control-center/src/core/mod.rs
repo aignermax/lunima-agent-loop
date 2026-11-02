@@ -3,6 +3,7 @@
 
 pub mod activity;
 pub mod agent_files;
+pub mod discovery;
 pub mod health;
 pub mod logs;
 pub mod projects;

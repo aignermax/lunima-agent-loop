@@ -34,6 +34,8 @@ pub struct Session<'a> {
     pub deadline: Option<Duration>,
     /// called about once a minute while the session runs (heartbeat)
     pub on_tick: Option<&'a (dyn Fn() + Sync)>,
+    /// `Some` = only these built-in tools exist and no permission bypass (see `args`)
+    pub tools: Option<Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -46,6 +48,8 @@ pub enum Error {
     Crashed { code: Option<i32>, stderr_tail: String },
     /// ran longer than the session's deadline (seconds) — killed
     TimedOut(u64),
+    /// free memory fell below the guard's floor (`crate::mem`) — killed with its children
+    Memory(String),
 }
 
 impl std::fmt::Display for Error {
@@ -56,6 +60,7 @@ impl std::fmt::Display for Error {
             Error::Stuck(s) => write!(f, "Claude hing ({s} s ohne Ausgabe) und wurde beendet"),
             Error::Crashed { code, stderr_tail } => write!(f, "Claude beendet ohne Ergebnis (Exit {code:?}): {stderr_tail}"),
             Error::TimedOut(s) => write!(f, "{TIMED_OUT_TEXT} ({s} s) — Claude wurde beendet"),
+            Error::Memory(m) => write!(f, "{m} — Claude-Sitzung samt Builds/Tests beendet, damit das System nicht einfriert"),
         }
     }
 }
@@ -66,7 +71,19 @@ pub fn find_cli() -> Option<PathBuf> {
 }
 
 pub fn args(s: &Session) -> Vec<String> {
-    let mut a: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", "--max-turns"].iter().map(|x| x.to_string()).collect();
+    let mut a: Vec<String> = ["-p", "--output-format", "stream-json", "--verbose"].iter().map(|x| x.to_string()).collect();
+    match &s.tools {
+        // a sandboxed session gets no shell (so no gh, git push or curl) and may edit only
+        // inside its working directory — the code around it does every external write.
+        // Edit tools stay out of --allowedTools: listed there they may write anywhere, while
+        // acceptEdits alone confines them to the working directory (verified with CLI 2.1).
+        Some(tools) => {
+            let pre_approved: Vec<&str> = tools.iter().map(String::as_str).filter(|t| !matches!(*t, "Write" | "Edit" | "MultiEdit" | "NotebookEdit")).collect();
+            a.extend(["--tools".to_string(), tools.join(","), "--allowedTools".to_string(), pre_approved.join(","), "--permission-mode".to_string(), "acceptEdits".to_string()]);
+        }
+        None => a.push("--dangerously-skip-permissions".into()),
+    }
+    a.push("--max-turns".into());
     a.push(s.max_turns.to_string());
     if !s.model.is_empty() {
         a.extend(["--model".to_string(), s.model.clone()]);
@@ -143,8 +160,10 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
     let mut result_at: Option<Instant> = None;
     let mut last_activity = Instant::now();
     let mut last_tick = Instant::now();
+    let mut mem_checked = Instant::now();
     loop {
-        match rx.recv_timeout(Duration::from_secs(5)) {
+        // short wait: the memory guard below has to react within about a second
+        match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(Line::Out(l)) => {
                 if let Some(f) = log.as_mut() {
                     let _ = writeln!(f, "{l}");
@@ -168,6 +187,14 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
         if result_at.is_some_and(|t| t.elapsed() >= RESULT_GRACE) {
             kill_tree(&mut child);
             break;
+        }
+        if mem_checked.elapsed() >= Duration::from_millis(500) {
+            mem_checked = Instant::now();
+            if let Some(m) = crate::mem::must_kill() {
+                kill_tree(&mut child);
+                let _ = child.wait();
+                return Err(Error::Memory(m));
+            }
         }
         if last_activity.elapsed() >= s.inactivity {
             kill_tree(&mut child);
@@ -220,6 +247,7 @@ mod tests {
             inactivity: Duration::from_secs(1800),
             deadline: None,
             on_tick: None,
+            tools: None,
         };
         let a = args(&s);
         assert_eq!(&a[..4], ["-p", "--output-format", "stream-json", "--verbose"]);
@@ -227,6 +255,30 @@ mod tests {
         assert!(a.windows(2).any(|w| w == ["--model", "claude-opus-5-5"]));
         assert!(a.windows(2).any(|w| w == ["--settings", "hooks.json"]));
         assert!(!a.iter().any(|x| x == "x"), "prompt goes to stdin, not argv");
+        assert!(a.iter().any(|x| x == "--dangerously-skip-permissions"));
+    }
+
+    #[test]
+    fn sandboxed_session_has_no_shell_and_no_permission_bypass() {
+        let s = Session {
+            prompt: "x".into(),
+            cwd: ".".into(),
+            model: String::new(),
+            max_turns: 10,
+            env: ChildEnv::subscription(),
+            settings_file: None,
+            log_file: None,
+            inactivity: Duration::from_secs(60),
+            deadline: None,
+            on_tick: None,
+            tools: Some(vec!["Read".into(), "Write".into(), "WebSearch".into()]),
+        };
+        let a = args(&s);
+        assert!(!a.iter().any(|x| x == "--dangerously-skip-permissions"));
+        assert!(a.windows(2).any(|w| w == ["--tools", "Read,Write,WebSearch"]));
+        assert!(a.windows(2).any(|w| w == ["--allowedTools", "Read,WebSearch"]), "pre-approved Write would escape the working directory");
+        assert!(a.windows(2).any(|w| w == ["--permission-mode", "acceptEdits"]));
+        assert!(!a.iter().any(|x| x.contains("Bash")));
     }
 
     #[test]
@@ -257,6 +309,7 @@ mod live {
             inactivity: Duration::from_secs(120),
             deadline: None,
             on_tick: None,
+            tools: None,
         };
         let o = run(&s).expect("session");
         println!("text={:?} turns={} tokens={} cost={} subtype={}", o.text, o.num_turns, o.usage.total(), o.cost_usd, o.subtype);

@@ -81,3 +81,18 @@ fn po_state_round_trip_and_contract_names() {
     std::fs::write(t.path().join(PO_STATE_FILE), raw).unwrap();
     assert_eq!(PoState::load(t.path()).unwrap().last_result, "timeout");
 }
+
+#[test]
+fn discovery_state_and_ledger_round_trip() {
+    let t = tempfile::tempdir().unwrap();
+    assert!(DiscoveryState::load(t.path()).is_none());
+    let st = DiscoveryState { week: "2027-w03".into(), stages_done: vec!["scout".into()], ..Default::default() };
+    st.save(t.path()).unwrap();
+    assert_eq!(DiscoveryState::load(t.path()), Some(st));
+    assert!(read_ledger(t.path()).is_empty());
+    let r = LedgerRecord { week: "2027-w03".into(), stage: "scout".into(), cost_usd: 1.5, ..Default::default() };
+    append_ledger(t.path(), &r).unwrap();
+    append_ledger(t.path(), &r).unwrap();
+    std::fs::OpenOptions::new().append(true).open(t.path().join("discovery/ledger.jsonl")).map(|mut f| std::io::Write::write_all(&mut f, b"garbage\n")).unwrap().unwrap();
+    assert_eq!(read_ledger(t.path()).len(), 2, "unreadable lines are skipped");
+}

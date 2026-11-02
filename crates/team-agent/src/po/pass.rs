@@ -133,7 +133,7 @@ pub fn prompt(ctx: &Ctx, clone: &Path, prs: &[PullRequest], issues: &[Issue]) ->
     v.insert("ROADMAP", roadmap);
     v.insert("OPEN_PRS", pr_list);
     v.insert("OPEN_TASK_ISSUES", issue_list);
-    Ok(format!("{}{}{}", ctx.render("po-owner", &v)?, customer_context(ctx), crate::ux::po_section(ctx)))
+    Ok(format!("{}{}{}{}", ctx.render("po-owner", &v)?, customer_context(ctx), crate::ux::po_section(ctx), crate::product_discovery::report::po_section(ctx, clone, &po.repo)))
 }
 
 /// Clone on the integration branch; the branch is created from the base if missing.
@@ -158,6 +158,8 @@ pub fn run(ctx: &Ctx, prs: &[PullRequest], issues: &[Issue]) -> RoleResult<Ended
     };
     customer_review(ctx);
     let text = prompt(ctx, &setup.clone.dir, prs, issues)?;
+    let forge = (ctx.forge)(&po.repo);
+    let discovery_prs = crate::product_discovery::report::guard_snapshot(forge.as_ref());
     let mut env = ChildEnv::subscription();
     // a headless session ends with the model's turn: no background tasks, long foreground Bash
     for (k, v) in [("CLAUDE_CODE_DISABLE_BACKGROUND_TASKS", "1"), ("BASH_DEFAULT_TIMEOUT_MS", "1800000"), ("BASH_MAX_TIMEOUT_MS", "1800000")] {
@@ -171,8 +173,14 @@ pub fn run(ctx: &Ctx, prs: &[PullRequest], issues: &[Issue]) -> RoleResult<Ended
         env,
         label: format!("po_{}", po.repo.replace('/', "_")),
         max_duration: Some(Duration::from_secs(po.timeout_minutes.max(1) * 60)),
+        tools: None,
     };
-    match ctx.llm.run(&job) {
+    let result = ctx.llm.run(&job);
+    let touched = crate::product_discovery::report::guard_check(forge.as_ref(), &discovery_prs, &ctx.cfg.labels.needs_human);
+    if !touched.is_empty() {
+        crate::log::error(&format!("PO-Durchlauf hat Discovery-PR(s) {touched:?} verändert — Maintainer informiert"));
+    }
+    match result {
         Ok(out) if out.is_error => Ok(Ended::Error(format!("Claude meldet Fehler ({}): {}", out.subtype, out.text.chars().take(300).collect::<String>()))),
         Ok(out) => Ok(Ended::Ok(out.text.chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect())),
         Err(LlmError::UsageLimit(t)) => Err(RoleError::UsageLimit(t)),

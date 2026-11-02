@@ -76,3 +76,22 @@ fn save_keeps_unknown_keys() {
     assert!(text.contains("future_key = 1") && text.contains("future_budget = 7"), "{text}");
     assert_eq!(TeamConfig::load(&path).unwrap().poll_seconds, 30);
 }
+
+#[test]
+fn product_discovery_defaults_and_validation() {
+    let cfg = TeamConfig::default();
+    assert!(!cfg.roles.product_discovery, "off unless switched on");
+    assert_eq!((cfg.product_discovery.weekday.as_str(), cfg.product_discovery.weekly_budget_usd, cfg.product_discovery.analytics.as_str()), ("mon", 25.0, "none"));
+    assert!(cfg.validate().is_ok());
+    let bad = |f: &dyn Fn(&mut TeamConfig)| {
+        let mut c = TeamConfig::default();
+        f(&mut c);
+        c.validate().unwrap_err()
+    };
+    assert!(bad(&|c| c.product_discovery.weekday = "monday".into()).contains("weekday"));
+    assert!(bad(&|c| c.product_discovery.hour = 24).contains("hour"));
+    assert!(bad(&|c| c.product_discovery.weekly_budget_usd = f64::NAN).contains("budget"));
+    assert!(bad(&|c| c.product_discovery.analytics = "google".into()).contains("analytics"));
+    let parsed: TeamConfig = toml::from_str("[roles]\nproduct_discovery = true\n[product_discovery]\nweekday = \"fri\"\n").unwrap();
+    assert!(parsed.roles.product_discovery && parsed.product_discovery.weekday == "fri" && parsed.product_discovery.max_open_opportunities == 3);
+}
