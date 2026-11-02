@@ -36,7 +36,11 @@ pub fn find_sample_gds(clone: &Path) -> Option<PathBuf> {
 pub fn stage_sample(sample: &Path) -> Option<String> {
     let dir = std::env::temp_dir().join("lunima-ux");
     std::fs::create_dir_all(&dir).ok()?;
-    std::fs::copy(sample, dir.join("sample.gds")).ok()?;
+    let dest = dir.join("sample.gds");
+    // Windows locks a file being copied: a concurrent copy (parallel runs, tests) fails while an identical sample is already there
+    if std::fs::copy(sample, &dest).is_err() && std::fs::metadata(&dest).map(|m| m.len()).ok() != std::fs::metadata(sample).map(|m| m.len()).ok() {
+        return None;
+    }
     Some(if cfg!(windows) { r"%TEMP%\lunima-ux\sample.gds".into() } else { dir.join("sample.gds").display().to_string() })
 }
 
