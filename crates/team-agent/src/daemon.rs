@@ -176,6 +176,10 @@ fn blocked(cfg: &TeamConfig, name: &str, paths: &Paths, limit: &UsageLimit) -> O
     if let Some(reason) = pause_reason(&paths.state(), name, Local::now()) {
         return Some(reason);
     }
+    team_core::mem::configure(cfg.resources.min_free_mb, cfg.resources.start_free_mb);
+    if let Some(reason) = team_core::mem::start_blocked() {
+        return Some(format!("{reason} — wartet, bis wieder Platz ist"));
+    }
     let mut until = limit.lock().unwrap_or_else(|p| p.into_inner());
     match *until {
         Some(t) if t > Local::now() => Some(format!("Claude-Nutzungslimit bis {}", t.format("%H:%M"))),

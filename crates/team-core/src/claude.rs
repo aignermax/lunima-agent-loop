@@ -48,6 +48,8 @@ pub enum Error {
     Crashed { code: Option<i32>, stderr_tail: String },
     /// ran longer than the session's deadline (seconds) — killed
     TimedOut(u64),
+    /// free memory fell below the guard's floor (`crate::mem`) — killed with its children
+    Memory(String),
 }
 
 impl std::fmt::Display for Error {
@@ -58,6 +60,7 @@ impl std::fmt::Display for Error {
             Error::Stuck(s) => write!(f, "Claude hing ({s} s ohne Ausgabe) und wurde beendet"),
             Error::Crashed { code, stderr_tail } => write!(f, "Claude beendet ohne Ergebnis (Exit {code:?}): {stderr_tail}"),
             Error::TimedOut(s) => write!(f, "{TIMED_OUT_TEXT} ({s} s) — Claude wurde beendet"),
+            Error::Memory(m) => write!(f, "{m} — Claude-Sitzung samt Builds/Tests beendet, damit das System nicht einfriert"),
         }
     }
 }
@@ -157,8 +160,10 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
     let mut result_at: Option<Instant> = None;
     let mut last_activity = Instant::now();
     let mut last_tick = Instant::now();
+    let mut mem_checked = Instant::now();
     loop {
-        match rx.recv_timeout(Duration::from_secs(5)) {
+        // short wait: the memory guard below has to react within about a second
+        match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(Line::Out(l)) => {
                 if let Some(f) = log.as_mut() {
                     let _ = writeln!(f, "{l}");
@@ -182,6 +187,14 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
         if result_at.is_some_and(|t| t.elapsed() >= RESULT_GRACE) {
             kill_tree(&mut child);
             break;
+        }
+        if mem_checked.elapsed() >= Duration::from_millis(500) {
+            mem_checked = Instant::now();
+            if let Some(m) = crate::mem::must_kill() {
+                kill_tree(&mut child);
+                let _ = child.wait();
+                return Err(Error::Memory(m));
+            }
         }
         if last_activity.elapsed() >= s.inactivity {
             kill_tree(&mut child);

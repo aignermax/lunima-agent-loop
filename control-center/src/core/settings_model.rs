@@ -95,6 +95,8 @@ pub const FIELDS: &[Field] = &[
     f("Budgets", "budgets.pr_feedback_max_rounds", "PR-Feedback-Runden", N, ""),
     f("Budgets", "budgets.pr_feedback_max_turns", "Max. Schritte PR-Feedback", N, ""),
     f("Budgets", "budgets.inactivity_minutes", "Hänger-Erkennung (Min.)", N, "Claude ohne Ausgabe wird danach beendet"),
+    f("Budgets", "resources.min_free_mb", "RAM-Notbremse (MB frei)", N, "Darunter werden laufende Sitzungen samt Builds/Tests beendet; 0 = automatisch (10 % des RAM, 1–4 GB)"),
+    f("Budgets", "resources.start_free_mb", "RAM für neue Arbeit (MB frei)", N, "Darunter wartet jede Rolle; 0 = doppelte Notbremse"),
     f("Budgets", "budgets.test_gate", "Test-Gate vor dem Review", B, "test_cmd aus .agent.toml"),
     f("Labels", "labels.task", "Task-Label", T, ""),
     f("Labels", "labels.pr", "Label für Coder-PRs", T, "Leer = keines"),

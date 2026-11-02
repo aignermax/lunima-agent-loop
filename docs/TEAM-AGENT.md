@@ -56,6 +56,30 @@ work/wt/<repo>_<branch>_<hash>/  worktree per branch (short: Windows path limits
 - `lunima-team-agent once <coder|qa|pr-feedback>` — one cycle, for testing.
 - `lunima-team-agent status` — health summary on the console.
 
+## Memory guard
+
+A full RAM can freeze a Linux desktop (swap thrashing long before the OOM killer acts);
+the agent's builds and test runs are the usual cause. `team_core::mem` therefore:
+
+- pauses every role while free RAM is below `resources.start_free_mb` (heartbeat shows
+  "Arbeitsspeicher knapp …" in the Control Center),
+- kills a running Claude session or command **with all its descendants** (also processes
+  that left the process group, e.g. `dotnet test` started by a shell tool) once free RAM
+  falls below `resources.min_free_mb`, checked every 0.5 s; the job fails with that
+  reason instead of a test failure,
+- gives every child `DOTNET_gcServer=0` and `MSBUILDDISABLENODEREUSE=1` (workstation GC,
+  no MSBuild nodes lingering after a build) unless the user set them.
+
+```toml
+[resources]
+min_free_mb = 0     # 0 = automatic: 10 % of RAM, 1–4 GB
+start_free_mb = 0   # 0 = twice min_free_mb
+```
+
+Free RAM is `MemAvailable` (Linux) or `GlobalMemoryStatusEx` (Windows); on other systems
+the guard is off. It reacts to the whole machine, so memory used by other programs also
+stops agent work; that is intended.
+
 ## Phases
 
 1. Foundation: workspace, `team-core` (config + import, gh, git, claude runner incl.

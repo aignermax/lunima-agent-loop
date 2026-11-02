@@ -217,6 +217,17 @@ impl Default for Budgets {
     }
 }
 
+/// Memory guard (`crate::mem`): 0 = automatic (kill floor 10 % of RAM within 1–4 GB,
+/// start floor twice that).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Resources {
+    /// a running session/build/test is killed with all its processes below this much free RAM
+    pub min_free_mb: u64,
+    /// no role starts new work below this much free RAM
+    pub start_free_mb: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProductOwner {
@@ -391,6 +402,7 @@ pub struct TeamConfig {
     pub product_owner: ProductOwner,
     pub ux_review: UxReview,
     pub product_discovery: ProductDiscovery,
+    pub resources: Resources,
     /// `@agent` comments on PRs trigger the PR-feedback role
     pub pr_feedback_marker: String,
 }
@@ -410,6 +422,7 @@ impl Default for TeamConfig {
             product_owner: ProductOwner::default(),
             ux_review: UxReview::default(),
             product_discovery: ProductDiscovery::default(),
+            resources: Resources::default(),
             pr_feedback_marker: "@agent".into(),
         }
     }
@@ -481,6 +494,10 @@ impl TeamConfig {
             if r.name.split('/').filter(|p| !p.is_empty()).count() != 2 {
                 return Err(format!("Repo „{}“ muss die Form owner/name haben.", r.name));
             }
+        }
+        let r = &self.resources;
+        if r.start_free_mb != 0 && r.start_free_mb < r.min_free_mb {
+            return Err("resources.start_free_mb muss mindestens resources.min_free_mb sein (sonst startet Arbeit, die sofort wieder beendet würde).".into());
         }
         let pd = &self.product_discovery;
         if !["mon", "tue", "wed", "thu", "fri", "sat", "sun"].contains(&pd.weekday.to_lowercase().as_str()) {
