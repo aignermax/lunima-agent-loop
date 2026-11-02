@@ -59,7 +59,11 @@ pub fn render(spec: &PageSpec, mode: &Mode) -> Result<String, String> {
     let mut figures = String::new();
     for f in &spec.figures {
         let src = match mode {
-            Mode::Preview { repo } => format!("file://{}", repo.join(&f.src).display()),
+            Mode::Preview { repo } => {
+                // file URLs need forward slashes and a leading `/` before a Windows drive letter
+                let p = repo.join(&f.src).display().to_string().replace('\\', "/");
+                format!("file://{}{p}", if p.starts_with('/') { "" } else { "/" })
+            }
             Mode::Publish { .. } => {
                 let rel = f.src.strip_prefix("docs/").ok_or_else(|| format!("Bild {} liegt nicht unter docs/ und wäre öffentlich nicht erreichbar", f.src))?;
                 format!("../../{rel}")

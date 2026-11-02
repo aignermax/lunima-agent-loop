@@ -1,3 +1,7 @@
 # Linux packaging files must keep LF endings (shell scripts, systemd unit, desktop entry)
 packaging/** text eol=lf
 packaging/**/*.png binary
+# embedded via include_str!: a Windows checkout must not turn them into CRLF (parsers and
+# the files bootstrapped into the product repo expect LF)
+crates/*/assets/** text eol=lf
+crates/*/prompts/** text eol=lf
