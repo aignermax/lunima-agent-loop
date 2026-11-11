@@ -106,6 +106,11 @@ Center. Packages: `dotnet build installer/lunima-team.wixproj -c Release -p:Inst
 lets you fix it without a terminal. It reads the same folder as the CLI (`agent-loop.json`,
 `state/`, `logs/`, `prompts/`) and drives the loop through the CLI itself.
 
+![Control Center: setup assistant on a new machine](docs/screenshots/control-center-setup.png)
+
+*A new machine opens in the setup assistant: it checks git, gh, Claude Code and their logins and
+creates `team.toml` with one click.*
+
 | Page | What you see / do |
 |---|---|
 | **Übersicht** | Traffic light + headline, today's counters, next scheduled run, **health checks** with one-click fixes, recent runs |
@@ -124,10 +129,11 @@ The tray icon has the same colour as the traffic light; its menu offers open / p
 run PO now / quit. Closing the window keeps the app in the tray.
 
 ```powershell
-lunima-po.exe                          # root: cwd → exe folder → %LOCALAPPDATA%\lunima-agent-loop
-lunima-po.exe --root C:\path\to\loop    # explicit loop folder
+lunima-po.exe                          # data folder: LUNIMA_TEAM_HOME, else %LOCALAPPDATA%\lunima-team
+lunima-po.exe --home C:\path\to\data    # explicit data folder
 lunima-po.exe --tray                   # start hidden (what "start with Windows" uses)
-lunima-po.exe --page activity          # open a page: overview|activity|github|settings|rules|logs
+lunima-po.exe --page activity          # open a page: overview|team|projects|activity|github|discovery|settings|rules|logs|setup
+lunima-po.exe --page team --screenshot team.png   # render the page, save the window as PNG, quit
 ```
 
 Build: `cargo build --release --manifest-path control-center/Cargo.toml` (tests: `cargo test`).

@@ -1781,6 +1781,7 @@ dependencies = [
  "eframe",
  "egui_extras",
  "gtk",
+ "png 0.17.16",
  "raw-window-handle",
  "regex",
  "serde",

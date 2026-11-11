@@ -20,6 +20,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 regex = { version = "1", default-features = false, features = ["std", "unicode-perl", "unicode-case"] }
 raw-window-handle = "0.6"
 toml = "0.8"
+png = "0.17"
 team-core = { path = "../crates/team-core" }
 
 [target.'cfg(windows)'.dependencies]
