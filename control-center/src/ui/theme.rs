@@ -35,6 +35,10 @@ pub fn tint(c: Color32, alpha: u8) -> Color32 {
 }
 
 pub fn apply(ctx: &egui::Context) {
+    // egui keeps one style per theme and follows the OS theme by default; on a light Windows
+    // desktop it would switch to its light style, whose black strong text is invisible on the
+    // dark panels painted here.
+    ctx.set_theme(egui::ThemePreference::Dark);
     let mut style = (*ctx.style()).clone();
     style.text_styles = [
         (TextStyle::Heading, FontId::new(22.0, FontFamily::Proportional)),
