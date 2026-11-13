@@ -175,7 +175,7 @@ scheduled run / own
   → independent customer: new PR head(s) + integration baseline
   → evidence and scenario verdicts in state/customer/feedback.md + .json
   → PO reads customer evidence before merge / prioritization
-  → deduplicated, outcome-based issues for the existing Autonomous Issue Agent
+  → deduplicated, outcome-based issues for the coder role
   → worker PR / updated commit → new customer review
 ```
 

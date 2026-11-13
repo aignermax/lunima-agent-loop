@@ -16,7 +16,7 @@ is its user interface.
 | Configuration | one `team.toml` in the data folder, edited by the Control Center; existing `.env` + `agent-loop.json` are imported on first start |
 | Two machines | every machine works on all repos; a claim on GitHub (assignee + `agent-running` + machine name in the claim comment) prevents double work; stale claims are released |
 | PO | becomes a role of the same program, ported last; the C# loop runs until then |
-| Migration | role by role: a role runs in Rust *or* Python, never both |
+| Migration | done 2026-11-13: every role runs in Rust; the Python agent is retired |
 
 ## Layout
 
@@ -86,7 +86,7 @@ stops agent work; that is intended.
    usage-limit detection, prompts, state files), CI on Windows + Linux.
 2. Roles: coder (claim, worktree, session, test gate, reviewer loop, PR, walkthrough,
    QA-fix), QA, PR feedback, discovery.
-3. Cut-over per role from Python; remove WSL units, Python agent, old dashboard.
+3. Cut-over per role from Python; remove WSL units, Python agent, old dashboard (done).
 4. PO role (port of the C# loop); remove the C# loop.
 5. Installers: Windows MSI (Control Center + agent + autostart), Linux `.deb` + tar.gz
    (systemd user unit, desktop entry, tray); setup assistant in the Control Center.
@@ -125,6 +125,20 @@ branch (`agent/issue-N-*` on origin is reused; continuation sessions push their 
 - PR feedback: new commits drop the stale `qa-passed`/`qa-failed` so QA checks the new head.
 - Session files per repo; worktrees with short paths; no tokens in remote URLs (git uses
   `gh auth git-credential`).
+- An issue assigned only to the agent's own gh login counts as free (colleagues assign the
+  maintainer when they label it); another assignee keeps the agent away.
+- Outside the PO repo, a `dev` that work bypasses (no commits of its own, and the default
+  branch took merges that did not come through it) is ignored: work starts from and targets
+  the default branch. Git flow (`dev` merged into the default branch) keeps `dev`.
+- python-dev-tools are installed into `~/.cap-tools` at daemon start with the upstream
+  `install.sh` (Linux, macOS; on Windows a warning names the manual step).
+- The coder keeps `~/akhetonics-workspace` (akhetonics-desktop's dependency repos, see
+  `dep_workspace.rs`) at the tip of `dev`/default once an hour while it works on
+  akhetonics-desktop; this replaces the WSL scripts `clone-deps.sh`/`sync-deps.sh`.
+- No test-gate fallback to `smart_test.py`: it only runs `dotnet test` (unfiltered, which is
+  heavy, or wrong in non-.NET repos). Without `test_cmd` in `.agent.toml` the gate is skipped.
+- Not ported: stacked PRs, codegraph sync, extra `AGENT_SKIP_LABELS` / several
+  `AGENT_PR_LABELS`, `--once <issue>`, the dashboard's "restart issue" / "update base branch".
 
 ## Product Owner (role `product-owner`, port of the C# loop)
 

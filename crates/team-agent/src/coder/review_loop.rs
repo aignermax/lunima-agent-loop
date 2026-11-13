@@ -74,6 +74,7 @@ fn retry(ctx: &Ctx, setup: &RepoSetup, issue: &Issue, state: &mut SessionState, 
     crate::log::info(&format!("#{}: Nachbesserung nach Review (Runde {round})", issue.number));
     let out = ctx.llm.run(&job)?;
     state.add_session(out.num_turns, out.usage.total(), out.estimated_cost());
+    state.count_tools(&out.bash_commands);
     commit_and_push(wt, &state.branch_name, &format!("Address review feedback (round {})", round + 1))?;
     for label in [&ctx.cfg.labels.qa_passed, &ctx.cfg.labels.qa_failed] {
         let _ = setup.forge.remove_label(pr.number, label);

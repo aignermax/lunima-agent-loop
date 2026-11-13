@@ -89,7 +89,7 @@ fn find_or_create_pr(ctx: &Ctx, setup: &RepoSetup, issue: &Issue, state: &Sessio
         attach(forge, &pr, &wt_md);
         return Ok(pr);
     }
-    let stats = Stats { sessions: state.session_count, turns: state.total_turns_used, tokens: state.total_tokens, cost: state.total_cost_usd, tools: vec![] };
+    let stats = Stats { sessions: state.session_count, turns: state.total_turns_used, tokens: state.total_tokens, cost: state.total_cost_usd, tools: state.tool_runs.iter().map(|(t, n)| (t.clone(), *n)).collect() };
     let body = pr_text::pr_body(issue.number, &pr_text::pr_summary(&state.last_output), &pr_text::stats_block(&stats), &wt_md);
     let title = format!("{PR_TITLE_PREFIX} {}", issue.title);
     let pr = match forge.create_pr(&title, &body, branch, base) {
