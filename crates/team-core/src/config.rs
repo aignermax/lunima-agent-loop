@@ -473,6 +473,11 @@ impl TeamConfig {
         self.repos.iter().find(|r| r.name.eq_ignore_ascii_case(name))
     }
 
+    /// `repo` is the one the Product Owner plans and merges for.
+    pub fn is_po_repo(&self, repo: &str) -> bool {
+        !self.product_owner.repo.is_empty() && self.product_owner.repo.eq_ignore_ascii_case(repo)
+    }
+
     /// Repos the coder works on (configured), discovered ones are added by the agent.
     pub fn coder_repos(&self) -> Vec<String> {
         self.repos.iter().filter(|r| r.coder).map(|r| r.name.clone()).collect()
@@ -482,7 +487,7 @@ impl TeamConfig {
     /// Branch agent work targets in `repo` (if it exists there): the PO's integration branch
     /// for the PO repo, `dev` elsewhere.
     pub fn integration_branch(&self, repo: &str) -> String {
-        if !self.product_owner.repo.is_empty() && self.product_owner.repo.eq_ignore_ascii_case(repo) && !self.product_owner.integration_branch.is_empty() {
+        if self.is_po_repo(repo) && !self.product_owner.integration_branch.is_empty() {
             self.product_owner.integration_branch.clone()
         } else {
             "dev".into()

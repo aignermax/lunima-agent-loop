@@ -21,6 +21,11 @@ pub fn setup(ctx: &Ctx, role: &str, repo: &str) -> Result<RepoSetup, String> {
     let forge = (ctx.forge)(repo);
     let default_branch = forge.default_branch()?;
     let clone = RepoClone::ensure_from(&ctx.paths.clone_dir(role, repo), repo, &(ctx.remote)(repo))?;
-    let working_branch = clone.working_branch(&default_branch, &ctx.cfg.integration_branch(repo));
+    let mut working_branch = clone.working_branch(&default_branch, &ctx.cfg.integration_branch(repo));
+    // Outside the PO repo `dev` is only a convention. Work based on an abandoned dev would
+    // miss everything merged since, and its PR would target a branch nobody merges.
+    if !ctx.cfg.is_po_repo(repo) && clone.is_bypassed(&working_branch, &default_branch) {
+        working_branch = default_branch.clone();
+    }
     Ok(RepoSetup { repo: repo.to_string(), forge, clone, default_branch, working_branch })
 }

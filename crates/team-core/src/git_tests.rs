@@ -33,6 +33,58 @@ fn working_branch_prefers_dev() {
 }
 
 #[test]
+fn strictly_behind_means_an_outgrown_snapshot() {
+    let (tmp, c) = setup();
+    assert!(!c.is_strictly_behind("dev", "main"), "equal branches");
+    assert!(!c.is_strictly_behind("main", "main"));
+    commit_on_origin(tmp.path(), &c, "main", "main", "m.txt");
+    assert!(c.is_strictly_behind("dev", "main"));
+    assert!(!c.is_strictly_behind("main", "dev"));
+    commit_on_origin(tmp.path(), &c, "dev", "dev", "d.txt");
+    assert!(!c.is_strictly_behind("dev", "main"), "a dev with commits of its own is live");
+}
+
+/// Merges `from` (an origin branch) into origin's `into` with a merge commit.
+fn merge_on_origin(tmp: &Path, c: &RepoClone, from: &str, into: &str) {
+    let seed = tmp.join("seed");
+    sh(&seed, &["fetch", "-q", "origin"]);
+    sh(&seed, &["checkout", "-q", "-B", into, &format!("origin/{into}")]);
+    sh(&seed, &["-c", "user.name=t", "-c", "user.email=t@t", "merge", "-q", "--no-ff", "-m", &format!("merge {from}"), &format!("origin/{from}")]);
+    sh(&seed, &["push", "-q", "origin", into]);
+    c.git(&["fetch", "-q", "origin"]).unwrap();
+}
+
+fn commit_on_origin(tmp: &Path, c: &RepoClone, branch: &str, base: &str, file: &str) {
+    let seed = tmp.join("seed");
+    sh(&seed, &["fetch", "-q", "origin"]);
+    sh(&seed, &["checkout", "-q", "-B", branch, &format!("origin/{base}")]);
+    std::fs::write(seed.join(file), file).unwrap();
+    sh(&seed, &["add", "-A"]);
+    sh(&seed, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", file]);
+    sh(&seed, &["push", "-q", "origin", branch]);
+    c.git(&["fetch", "-q", "origin"]).unwrap();
+}
+
+#[test]
+fn git_flow_dev_outgrown_by_its_release_merges_is_live() {
+    let (tmp, c) = setup();
+    commit_on_origin(tmp.path(), &c, "dev", "dev", "feature.txt");
+    merge_on_origin(tmp.path(), &c, "dev", "main");
+    commit_on_origin(tmp.path(), &c, "main", "main", "version-bump.txt");
+    assert!(c.is_strictly_behind("dev", "main"));
+    assert!(!c.is_bypassed("dev", "main"), "release merges and CI commits keep dev the way in");
+}
+
+#[test]
+fn dev_is_bypassed_once_features_merge_straight_into_main() {
+    let (tmp, c) = setup();
+    commit_on_origin(tmp.path(), &c, "feat/x", "main", "x.txt");
+    merge_on_origin(tmp.path(), &c, "feat/x", "main");
+    assert!(c.is_bypassed("dev", "main"));
+    assert!(!c.is_bypassed("main", "main"));
+}
+
+#[test]
 fn worktree_commit_push_and_reuse() {
     let (tmp, c) = setup();
     let wt = tmp.path().join("wt").join("agent_issue-7");
