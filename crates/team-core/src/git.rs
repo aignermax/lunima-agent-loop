@@ -84,6 +84,28 @@ impl RepoClone {
         if !integration.is_empty() && self.remote_branch_exists(integration) { integration.into() } else { default_branch.into() }
     }
 
+    /// `branch` on origin is an old snapshot of `base`: everything on it is already in
+    /// `base`, and `base` has moved on.
+    pub fn is_strictly_behind(&self, branch: &str, base: &str) -> bool {
+        let (b, d) = (format!("origin/{branch}"), format!("origin/{base}"));
+        self.is_ancestor(&b, &d) && !self.is_ancestor(&d, &b)
+    }
+
+    /// `branch` on origin is abandoned: it has nothing of its own, and `base` took merges that
+    /// did not come through it. Release merges of `branch` and CI commits on `base` alone keep
+    /// it alive (git flow). Squash merges leave no trace, so such a repo is never judged.
+    pub fn is_bypassed(&self, branch: &str, base: &str) -> bool {
+        if !self.is_strictly_behind(branch, base) {
+            return false;
+        }
+        let (b, d) = (format!("origin/{branch}"), format!("origin/{base}"));
+        let (Ok(merges), Ok(on_branch)) = (self.git(&["rev-list", "--merges", "--parents", &format!("{b}..{d}")]), self.git(&["rev-list", &b])) else {
+            return false;
+        };
+        let on_branch: std::collections::HashSet<&str> = on_branch.lines().collect();
+        merges.lines().any(|l| l.split_whitespace().skip(2).any(|p| !on_branch.contains(p)))
+    }
+
     fn is_ancestor(&self, a: &str, b: &str) -> bool {
         self.git(&["merge-base", "--is-ancestor", a, b]).is_ok()
     }

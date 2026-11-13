@@ -26,7 +26,7 @@ use team_core::state::{pause_reason, Heartbeat};
 /// Shared "subscription exhausted until" across the role threads.
 pub type UsageLimit = Arc<Mutex<Option<DateTime<Local>>>>;
 
-fn home() -> Option<PathBuf> {
+pub fn home() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from)
 }
 
@@ -84,6 +84,10 @@ pub fn run(paths: Paths) -> ! {
     crate::log::info(&format!("lunima-team-agent {} startet (Daten: {})", env!("CARGO_PKG_VERSION"), paths.root.display()));
     let login = gh_login();
     crate::log::info(&format!("GitHub-Login: {login}"));
+    match Tools::ensure_installed(home()) {
+        Ok(t) => crate::log::info(&format!("python-dev-tools: {}", t.dir)),
+        Err(e) => crate::log::warn(&format!("python-dev-tools nicht verfügbar ({e}) — die Prompts verweisen trotzdem darauf")),
+    }
     let limit: UsageLimit = Arc::new(Mutex::new(None));
     let threads: Vec<_> = all_roles()
         .into_iter()
