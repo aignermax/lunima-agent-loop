@@ -8,7 +8,7 @@ use chrono::{DateTime, Duration, Local};
 use team_core::config::TeamConfig;
 
 /// (role key, German name) in pipeline order.
-pub const ROLES: [(&str, &str); 5] = [("product-owner", "Product Owner"), ("coder", "Coder"), ("qa", "QA-Tester"), ("pr-feedback", "PR-Feedback"), ("ux-review", "UX-Review")];
+pub const ROLES: [(&str, &str); 6] = [("product-owner", "Product Owner"), ("coder", "Coder"), ("qa", "QA-Tester"), ("pr-feedback", "PR-Feedback"), ("ux-review", "UX-Review"), ("product-discovery", "Product Discovery")];
 
 /// Longer than the daemon's maximum backoff (900 s): a role backing off during an outage
 /// is not mistaken for a dead one.
@@ -27,6 +27,7 @@ pub fn role_enabled(cfg: &TeamConfig, role: &str) -> bool {
         "pr-feedback" => cfg.roles.pr_feedback,
         "product-owner" => cfg.roles.product_owner,
         "ux-review" => cfg.roles.ux_review,
+        "product-discovery" => cfg.roles.product_discovery,
         _ => false,
     }
 }
@@ -97,6 +98,7 @@ mod tests {
         let now = Local::now();
         let mut s = snap();
         assert_eq!(role_status(&s, "product-owner", now).0, Level::Info, "PO is off by default");
+        assert_eq!(role_status(&s, "product-discovery", now).0, Level::Info, "discovery is off by default");
         assert_eq!(role_status(&s, "coder", now).0, Level::Pending);
         s.heartbeats.insert("coder".into(), hb("working", 1));
         let (level, text) = role_status(&s, "coder", now);

@@ -36,6 +36,8 @@ pub fn issue(number: u64, title: &str, body: &str, labels: &[&str]) -> Issue {
         assignees: vec![],
         pull_request: None,
         html_url: format!("https://github.com/o/r/issues/{number}"),
+        created_at: "2026-10-14T10:00:00Z".into(),
+        closed_at: None,
     }
 }
 
@@ -50,6 +52,9 @@ pub fn pr(number: u64, title: &str, branch: &str, labels: &[&str]) -> PullReques
         labels: labels.iter().map(|l| Label { name: l.to_string() }).collect(),
         user: None,
         updated_at: "2026-10-14T10:00:00Z".into(),
+        draft: false,
+        merged_at: None,
+        state: "open".into(),
     }
 }
 
@@ -86,6 +91,24 @@ impl FakeForge {
             l.1 -= chrono::Duration::from_std(by).unwrap();
         }
     }
+    /// What `gh pr merge` would do; GitHub refuses drafts.
+    pub fn merge_pr(&self, number: u64) -> Result<(), String> {
+        let mut s = self.s.lock().unwrap();
+        let p = s.prs.get_mut(&number).ok_or("404")?;
+        if p.draft {
+            return Err("405 Pull Request is still a draft".into());
+        }
+        p.state = "closed".into();
+        p.merged_at = Some(chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+        s.log.push(format!("merge {number}"));
+        Ok(())
+    }
+    /// The maintainer clicks "Ready for review".
+    pub fn mark_ready(&self, number: u64) {
+        if let Some(p) = self.s.lock().unwrap().prs.get_mut(&number) {
+            p.draft = false;
+        }
+    }
     pub fn log(&self) -> Vec<String> {
         self.s.lock().unwrap().log.clone()
     }
@@ -118,6 +141,10 @@ impl Forge for FakeForge {
     }
     fn issue(&self, number: u64) -> Result<Issue, String> {
         self.s.lock().unwrap().issues.get(&number).cloned().ok_or_else(|| format!("404 issue {number}"))
+    }
+    fn issues(&self, label: &str, state: &str) -> Result<Vec<Issue>, String> {
+        let s = self.s.lock().unwrap();
+        Ok(s.issues.values().rev().filter(|i| (state == "all" || i.state == state) && i.has_label(label)).cloned().collect())
     }
     fn add_labels(&self, number: u64, labels: &[&str]) -> Result<(), String> {
         let mut s = self.s.lock().unwrap();
@@ -188,13 +215,13 @@ impl Forge for FakeForge {
         Ok(())
     }
     fn open_prs(&self) -> Result<Vec<PullRequest>, String> {
-        Ok(self.s.lock().unwrap().prs.values().cloned().collect())
+        Ok(self.s.lock().unwrap().prs.values().filter(|p| p.state == "open").cloned().collect())
     }
     fn pr(&self, number: u64) -> Result<PullRequest, String> {
         self.s.lock().unwrap().prs.get(&number).cloned().ok_or_else(|| format!("404 pr {number}"))
     }
     fn pr_by_branch(&self, branch: &str) -> Result<Option<PullRequest>, String> {
-        Ok(self.s.lock().unwrap().prs.values().find(|p| p.head.name == branch).cloned())
+        Ok(self.s.lock().unwrap().prs.values().find(|p| p.head.name == branch && p.state == "open").cloned())
     }
     fn create_pr(&self, title: &str, body: &str, head: &str, base: &str) -> Result<PullRequest, String> {
         let mut s = self.s.lock().unwrap();
@@ -205,6 +232,14 @@ impl Forge for FakeForge {
         s.log.push(format!("pr {number} {head}->{base}"));
         s.prs.insert(number, p.clone());
         Ok(p)
+    }
+    fn create_draft_pr(&self, title: &str, body: &str, head: &str, base: &str) -> Result<PullRequest, String> {
+        let p = self.create_pr(title, body, head, base)?;
+        let mut s = self.s.lock().unwrap();
+        s.log.push(format!("draft {}", p.number));
+        let stored = s.prs.get_mut(&p.number).expect("just created");
+        stored.draft = true;
+        Ok(stored.clone())
     }
     fn edit_pr_body(&self, number: u64, body: &str) -> Result<(), String> {
         let mut s = self.s.lock().unwrap();

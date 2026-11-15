@@ -84,6 +84,28 @@ impl RepoClone {
         if !integration.is_empty() && self.remote_branch_exists(integration) { integration.into() } else { default_branch.into() }
     }
 
+    /// `branch` on origin is an old snapshot of `base`: everything on it is already in
+    /// `base`, and `base` has moved on.
+    pub fn is_strictly_behind(&self, branch: &str, base: &str) -> bool {
+        let (b, d) = (format!("origin/{branch}"), format!("origin/{base}"));
+        self.is_ancestor(&b, &d) && !self.is_ancestor(&d, &b)
+    }
+
+    /// `branch` on origin is abandoned: it has nothing of its own, and `base` took merges that
+    /// did not come through it. Release merges of `branch` and CI commits on `base` alone keep
+    /// it alive (git flow). Squash merges leave no trace, so such a repo is never judged.
+    pub fn is_bypassed(&self, branch: &str, base: &str) -> bool {
+        if !self.is_strictly_behind(branch, base) {
+            return false;
+        }
+        let (b, d) = (format!("origin/{branch}"), format!("origin/{base}"));
+        let (Ok(merges), Ok(on_branch)) = (self.git(&["rev-list", "--merges", "--parents", &format!("{b}..{d}")]), self.git(&["rev-list", &b])) else {
+            return false;
+        };
+        let on_branch: std::collections::HashSet<&str> = on_branch.lines().collect();
+        merges.lines().any(|l| l.split_whitespace().skip(2).any(|p| !on_branch.contains(p)))
+    }
+
     fn is_ancestor(&self, a: &str, b: &str) -> bool {
         self.git(&["merge-base", "--is-ancestor", a, b]).is_ok()
     }
@@ -193,7 +215,10 @@ pub fn commit_and_push(dir: &Path, branch: &str, message: &str) -> Result<Pushed
     }
     match gn(&["push", "--set-upstream", "origin", branch]) {
         Ok(_) => Ok(Pushed::Yes),
-        Err(e) if e.contains("rejected") || e.contains("fetch first") || e.contains("non-fast-forward") => {
+        // `[remote rejected]` is the server refusing the push (permissions, hooks, missing
+        // token scope); only a plain `[rejected]` means origin moved on.
+        Err(e) if e.contains("[remote rejected]") => Err(refused_push(e)),
+        Err(e) if e.contains("[rejected]") || e.contains("fetch first") || e.contains("non-fast-forward") => {
             gn(&["fetch", "origin", &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}")])?;
             let behind = g(&["rev-list", "--count", &format!("{branch}..{remote}")])?.trim().parse::<u32>().unwrap_or(1);
             if behind == 0 {
@@ -203,6 +228,16 @@ pub fn commit_and_push(dir: &Path, branch: &str, message: &str) -> Result<Pushed
             }
         }
         Err(e) => Err(e),
+    }
+}
+
+/// GitHub refuses workflow files from an OAuth token without the `workflow` scope; the
+/// error then says what the maintainer has to run.
+fn refused_push(e: String) -> String {
+    if e.contains("workflow") && e.contains("scope") {
+        format!("{e}\nThe gh login lacks the `workflow` scope needed to push workflow files: run `gh auth refresh -h github.com -s workflow`.")
+    } else {
+        e
     }
 }
 

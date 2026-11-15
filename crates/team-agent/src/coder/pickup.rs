@@ -13,10 +13,12 @@ use regex::Regex;
 use team_core::gh::Issue;
 use team_core::git::RepoClone;
 
-/// Free = open, activation label, not running / needs-human, nobody assigned.
+/// Free = open, activation label, not running / needs-human, assigned to nobody but the
+/// agent's own login. Colleagues who label an issue for the agent often assign it to the
+/// maintainer whose login the agent uses; another assignee means a human has taken it.
 pub fn is_free(ctx: &Ctx, i: &Issue) -> bool {
     let l = &ctx.cfg.labels;
-    i.state == "open" && i.pull_request.is_none() && i.has_label(&l.task) && !i.has_label(&l.running) && !i.has_label(&l.needs_human) && i.assignees.is_empty()
+    i.state == "open" && i.pull_request.is_none() && i.has_label(&l.task) && !i.has_label(&l.running) && !i.has_label(&l.needs_human) && i.assignees.iter().all(|a| a.login.eq_ignore_ascii_case(&ctx.login))
 }
 
 /// Claims the oldest free issue (skipping ones another machine is claiming right now).

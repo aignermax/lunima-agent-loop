@@ -29,8 +29,14 @@ fn world() -> World {
     World { tmp, origin, forge: Arc::new(FakeForge::new("o/r")), lines: Arc::new(Mutex::new(vec![])) }
 }
 
+/// Last night, 02:30: relative to today because the PO only shows reports younger than 3 days.
 fn night() -> DateTime<Local> {
-    Local.with_ymd_and_hms(2026, 10, 15, 2, 30, 0).unwrap()
+    let day = Local::now().date_naive() - Duration::days(1);
+    Local.from_local_datetime(&day.and_hms_opt(2, 30, 0).unwrap()).unwrap()
+}
+
+fn night_lock() -> String {
+    format!("ux-{}", night().format("%Y%m%d"))
 }
 
 fn res(code: i32, stdout: &str, stderr: &str) -> CmdResult {
@@ -141,7 +147,7 @@ fn interrupted_session_is_an_error_without_publishing_and_releases_the_night() {
     assert!(st.last_note.contains("unterbrochen"), "{}", st.last_note);
     assert!(!w.lines().iter().any(|l| l.contains("--publish-report")));
     assert!(w.report_issue().is_none());
-    assert!(w.forge.lock_info("ux-20261015").unwrap().is_none(), "another machine may try tonight");
+    assert!(w.forge.lock_info(&night_lock()).unwrap().is_none(), "another machine may try tonight");
     assert!(plan::due(&st, night() + Duration::minutes(31), a.cfg.ux_review.hour), "retried once");
 }
 
@@ -155,7 +161,7 @@ fn locked_desktop_skips_the_build_and_frees_the_night() {
     if cfg!(windows) {
         assert!(!w.lines().iter().any(|l| l.starts_with("dotnet build")), "probe before the build");
     }
-    assert!(w.forge.lock_info("ux-20261015").unwrap().is_none());
+    assert!(w.forge.lock_info(&night_lock()).unwrap().is_none());
     assert_eq!(w.reviewer(Tester::Complete, night()).cycle(&w.ctx("B")), Ok(true), "the other machine takes over");
 }
 
@@ -187,7 +193,7 @@ fn only_one_machine_reviews_per_night() {
     let b = w.ctx("B");
     assert_eq!(w.reviewer(Tester::Complete, night()).cycle(&b), Ok(false));
     assert_eq!(UxState::load(&b.paths.state()).unwrap().last_result, "skipped");
-    assert!(w.forge.lock_info("ux-20261015").unwrap().is_some(), "a successful night keeps its lock as proof");
+    assert!(w.forge.lock_info(&night_lock()).unwrap().is_some(), "a successful night keeps its lock as proof");
 }
 
 #[test]

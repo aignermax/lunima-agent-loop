@@ -4,7 +4,10 @@
 //!   lunima-team-agent init [--from-env <.env>] [--from-loop <agent-loop.json>]
 //!   lunima-team-agent status
 //!   lunima-team-agent run                 all roles, forever (one instance per machine)
-//!   lunima-team-agent once <role>         one cycle of coder | qa | pr-feedback | product-owner
+//!   lunima-team-agent once <role>         one cycle of coder | qa | pr-feedback | product-owner | ux-review | product-discovery
+//!   lunima-team-agent experiment publish <repo clone> <slug> --approved-by <name> --contact <address> [--goatcounter <code>]
+//!                                         the maintainer's step that makes an experiment page public (writes files only)
+//!   lunima-team-agent experiment preview <repo clone> <out dir>
 
 use std::path::PathBuf;
 use team_core::config::TeamConfig;
@@ -24,12 +27,13 @@ fn main() {
         Some("status") => status(),
         Some("run") => run(),
         Some("once") => once(args.get(1).map(String::as_str).unwrap_or("")),
+        Some("experiment") => experiment(&args[1..]),
         Some("version" | "--version" | "-V") => {
             println!("lunima-team-agent {}", env!("CARGO_PKG_VERSION"));
             0
         }
         _ => {
-            eprintln!("Verwendung: lunima-team-agent <init|status|run|once <rolle>|version>");
+            eprintln!("Verwendung: lunima-team-agent <init|status|run|once <rolle>|experiment publish|preview …|version>");
             2
         }
     };
@@ -153,7 +157,7 @@ fn once(role: &str) -> i32 {
         return 3;
     };
     let Some(mut r) = team_agent::daemon::all_roles().into_iter().find(|r| r.name() == role) else {
-        eprintln!("Unbekannte Rolle „{role}“ (coder | qa | pr-feedback | product-owner)");
+        eprintln!("Unbekannte Rolle „{role}“ (coder | qa | pr-feedback | product-owner | ux-review | product-discovery)");
         return 2;
     };
     team_agent::log::init(&p.logs());
@@ -180,4 +184,34 @@ fn once(role: &str) -> i32 {
         }
     }
     0
+}
+
+/// `experiment publish|preview`: runs on the maintainer's machine, never inside the daemon.
+fn experiment(args: &[String]) -> i32 {
+    use team_agent::product_discovery::page;
+    let flag = |name: &str| args.windows(2).find(|w| w[0] == name).map(|w| w[1].clone());
+    match (args.first().map(String::as_str), args.get(1), args.get(2)) {
+        (Some("publish"), Some(repo), Some(slug)) => {
+            let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+            match page::publish(std::path::Path::new(repo), slug, &flag("--approved-by").unwrap_or_default(), &flag("--contact").unwrap_or_default(), flag("--goatcounter"), &today) {
+                Ok(out) => {
+                    println!("Geschrieben: {}\nPrüfen, committen und selbst nach main mergen — erst dann ist die Seite öffentlich.", out.display());
+                    0
+                }
+                Err(e) => {
+                    eprintln!("{e}");
+                    1
+                }
+            }
+        }
+        (Some("preview"), Some(repo), Some(out)) => {
+            let done = page::render_previews(std::path::Path::new(repo), std::path::Path::new(out));
+            println!("{} Vorschau(en): {}", done.len(), done.join(", "));
+            0
+        }
+        _ => {
+            eprintln!("Verwendung: lunima-team-agent experiment publish <klon> <slug> --approved-by <name> --contact <adresse> [--goatcounter <code>]\n            lunima-team-agent experiment preview <klon> <ausgabeordner>");
+            2
+        }
+    }
 }

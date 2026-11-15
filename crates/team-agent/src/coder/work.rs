@@ -44,6 +44,11 @@ impl IssueRun<'_> {
         self.store.save(&state);
         ctx.heartbeat.report("working", detail!["repo" => setup.repo, "issue" => n, "title" => issue.title]);
         crate::log::info(&format!("{}#{n} „{}“ auf {branch}", setup.repo, issue.title));
+        if setup.repo.eq_ignore_ascii_case(crate::dep_workspace::CONSUMER) {
+            if let Some(home) = crate::daemon::home() {
+                crate::dep_workspace::refresh_if_due(&home);
+            }
+        }
         let (worktree, base) = match self.prepare(&issue, &branch) {
             Ok(Some(x)) => x,
             Ok(None) => return Ok(()),
@@ -134,7 +139,7 @@ impl IssueRun<'_> {
                 Err(e) => return Ok(Flow::Fail(e)),
             };
             let text = prompt::session(ctx, &setup.repo, &current, state)?;
-            let job = Job { prompt: text, cwd: worktree.to_path_buf(), model: choice.model, max_turns, env: choice.env, label: label(&setup.repo, "issue", n), max_duration: None };
+            let job = Job { prompt: text, cwd: worktree.to_path_buf(), model: choice.model, max_turns, env: choice.env, label: label(&setup.repo, "issue", n), max_duration: None, tools: None };
             crate::log::info(&format!("#{n}: Sitzung {} ({})", state.session_count + 1, choice.why));
             let out = match ctx.llm.run(&job) {
                 Ok(o) => o,
@@ -145,6 +150,7 @@ impl IssueRun<'_> {
                 Err(LlmError::Failed(e)) => return Ok(Flow::Fail(e)),
             };
             state.add_session(out.num_turns, out.usage.total(), out.estimated_cost());
+            state.count_tools(&out.bash_commands);
             state.last_output = out.text.chars().take(5000).collect();
             if state.total_tokens > max_tokens {
                 self.budget_stop(n, state, max_tokens);

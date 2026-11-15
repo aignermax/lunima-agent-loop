@@ -46,6 +46,24 @@ pub const FIELDS: &[Field] = &[
     f("UX-Review", "ux_review.api_key_file", "Schlüsseldatei (API)", T, "Pfad zur Datei — der Schlüssel selbst wird nie angezeigt"),
     f("UX-Review", "ux_review.goals_file", "Eigene Abläufe (JSON)", T, "Leer = eingebaute Persona-Abläufe"),
     f("UX-Review", "ux_review.timeout_minutes", "Zeitlimit (Min.)", N, ""),
+    f("Rollen", "roles.product_discovery", "Product Discovery", B, "Wöchentliche, evidenzbasierte Produkt-Discovery; legt nur vom Kritiker freigegebene Punkte an, veröffentlicht nie etwas und kontaktiert niemanden."),
+    f("Discovery", "product_discovery.repo", "Repository", T, "Leer = Repo des Product Owners"),
+    f("Discovery", "product_discovery.weekday", "Wochentag", T, "mon | tue | wed | thu | fri | sat | sun"),
+    f("Discovery", "product_discovery.hour", "Startzeit (Stunde)", N, "Lokale Stunde; ein verpasstes Fenster läuft später in der Woche nach"),
+    f("Discovery", "product_discovery.model", "Modell", T, "Leer = Modell des Product Owners"),
+    f("Discovery", "product_discovery.max_turns", "Max. Schritte pro Stufe", N, "Scout, Stratege, Kritiker"),
+    f("Discovery", "product_discovery.timeout_minutes", "Zeitlimit je Stufe (Min.)", N, ""),
+    f("Discovery", "product_discovery.max_attempts", "Versuche pro Woche", N, "Danach ruht die Discovery bis zur nächsten Woche"),
+    f("Discovery", "product_discovery.weekly_budget_usd", "Wochenbudget (USD, nominell)", N, "Planungsgrenze — mit dem Abo wird kein Geld abgebucht"),
+    f("Discovery", "product_discovery.stage_estimate_usd", "Kostenschätzung je Stufe (USD)", N, "Gilt, bis das Kostenbuch Erfahrungswerte hat"),
+    f("Discovery", "product_discovery.max_open_opportunities", "Max. offene Chancen", N, ""),
+    f("Discovery", "product_discovery.max_new_experiments", "Max. neue Experimente", N, ""),
+    f("Discovery", "product_discovery.max_new_issues", "Max. neue Issues pro Lauf", N, ""),
+    f("Discovery", "product_discovery.max_spikes", "Max. Spikes", N, ""),
+    f("Discovery", "product_discovery.private_dir", "Privater Ordner", T, "Ansprache-Entwürfe, nie im Repository; leer = <Daten>/state/discovery/private"),
+    f("Discovery", "product_discovery.analytics", "Besucherzählung", T, "none | goatcounter | file"),
+    f("Discovery", "product_discovery.analytics_site", "Analytics-Site", T, "goatcounter: Site-Code; file: Pfad zur Kennzahlen-JSON"),
+    f("Discovery", "product_discovery.analytics_token_file", "Token-Datei (GoatCounter)", T, "Pfad zur Datei — das Token selbst wird nie angezeigt"),
     f("Product Owner", "product_owner.repo", "Repository", T, "owner/name"),
     f("Product Owner", "product_owner.integration_branch", "Integrations-Branch", T, "Ziel der Agent-PRs, z. B. dev"),
     f("Product Owner", "product_owner.base_branch", "Release-Branch", T, "z. B. main"),
@@ -77,6 +95,8 @@ pub const FIELDS: &[Field] = &[
     f("Budgets", "budgets.pr_feedback_max_rounds", "PR-Feedback-Runden", N, ""),
     f("Budgets", "budgets.pr_feedback_max_turns", "Max. Schritte PR-Feedback", N, ""),
     f("Budgets", "budgets.inactivity_minutes", "Hänger-Erkennung (Min.)", N, "Claude ohne Ausgabe wird danach beendet"),
+    f("Budgets", "resources.min_free_mb", "RAM-Notbremse (MB frei)", N, "Darunter werden laufende Sitzungen samt Builds/Tests beendet; 0 = automatisch (10 % des RAM, 1–4 GB)"),
+    f("Budgets", "resources.start_free_mb", "RAM für neue Arbeit (MB frei)", N, "Darunter wartet jede Rolle; 0 = doppelte Notbremse"),
     f("Budgets", "budgets.test_gate", "Test-Gate vor dem Review", B, "test_cmd aus .agent.toml"),
     f("Labels", "labels.task", "Task-Label", T, ""),
     f("Labels", "labels.pr", "Label für Coder-PRs", T, "Leer = keines"),
@@ -128,6 +148,7 @@ pub fn get(cfg: &TeamConfig, path: &str) -> String {
     match lookup(&root, path) {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Integer(i)) => i.to_string(),
+        Some(Value::Float(x)) => x.to_string(),
         Some(Value::Boolean(b)) => b.to_string(),
         Some(other) => other.to_string(),
         None => String::new(),
@@ -149,6 +170,7 @@ pub fn apply(cfg: &TeamConfig, edits: &BTreeMap<&'static str, String>) -> Result
         let old = table.get(key).ok_or_else(|| format!("{label}: unbekannte Einstellung"))?;
         let new = match old {
             Value::Integer(_) => Value::Integer(text.trim().parse::<i64>().ok().filter(|n| *n >= 0).ok_or_else(|| format!("{label}: „{text}“ ist keine Zahl"))?),
+            Value::Float(_) => Value::Float(text.trim().replace(',', ".").parse::<f64>().ok().filter(|x| x.is_finite() && *x >= 0.0).ok_or_else(|| format!("{label}: „{text}“ ist keine Zahl"))?),
             Value::Boolean(_) => Value::Boolean(text.trim() == "true"),
             _ => Value::String(text.trim().to_string()),
         };
@@ -176,7 +198,7 @@ mod tests {
                 continue;
             };
             let ok = match f.kind {
-                Kind::Number => v.is_integer(),
+                Kind::Number => v.is_integer() || v.is_float(),
                 Kind::Toggle => v.is_bool(),
                 Kind::Text => v.is_str(),
             };
@@ -210,6 +232,20 @@ mod tests {
         let mut edits = BTreeMap::new();
         edits.insert("poll_seconds", "0".to_string());
         assert!(apply(&cfg, &edits).is_err(), "validate() rejects poll_seconds = 0");
+    }
+
+    #[test]
+    fn decimal_fields_accept_comma_and_reject_negatives() {
+        let cfg = TeamConfig::default();
+        assert_eq!(get(&cfg, "product_discovery.weekly_budget_usd"), "25");
+        let mut edits = BTreeMap::new();
+        edits.insert("product_discovery.weekly_budget_usd", "12,5".to_string());
+        edits.insert("roles.product_discovery", "true".to_string());
+        let updated = apply(&cfg, &edits).unwrap();
+        assert_eq!(updated.product_discovery.weekly_budget_usd, 12.5);
+        assert!(updated.roles.product_discovery);
+        edits.insert("product_discovery.weekly_budget_usd", "-1".to_string());
+        assert!(apply(&cfg, &edits).unwrap_err().contains("keine Zahl"));
     }
 
     #[test]

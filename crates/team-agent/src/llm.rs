@@ -21,6 +21,8 @@ pub struct Job {
     pub label: String,
     /// hard limit for the whole session (`None` = inactivity watchdog only)
     pub max_duration: Option<Duration>,
+    /// `Some` = sandboxed: only these built-in tools, no permission bypass
+    pub tools: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -84,6 +86,7 @@ impl Llm for ClaudeCli {
             inactivity: job.max_duration.map_or(self.inactivity, |d| d.max(self.inactivity)),
             deadline: job.max_duration,
             on_tick: Some(&tick),
+            tools: job.tools.clone(),
         };
         let out = claude::run(&session).map_err(|e| LlmError::Failed(e.to_string()))?;
         if let Some(until) = out.usage_limit_until {

@@ -161,6 +161,14 @@ fn details(ui: &mut Ui, s: &Snapshot, role: &str, cfg: &TeamConfig) {
                 }
             }
         }
+        "product-discovery" => {
+            let pd = &cfg.product_discovery;
+            model_row(ui, "Modell:", if pd.model.is_empty() { &m.product_owner } else { &pd.model });
+            model_row(ui, "Zeitfenster:", &format!("wöchentlich {} ab {:02}:00, Budget {:.0} USD (nominell)", pd.weekday, pd.hour, pd.weekly_budget_usd));
+            let d = &s.discovery;
+            let last = d.state.as_ref().map(|st| format!("Woche {} · {}", st.week, crate::core::discovery::result_label(&st.last_result))).unwrap_or_else(|| "Noch kein Discovery-Lauf".into());
+            muted(ui, format!("{last} — Details auf der Seite Discovery"));
+        }
         "qa" => {
             model_row(ui, "Review-Modell:", &m.reviewer);
             muted(ui, "Baut und testet jeden Agent-PR; optional LLM-Review (.agent.toml).");

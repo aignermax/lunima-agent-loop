@@ -30,6 +30,8 @@ pub struct SessionState {
     pub in_review: bool,
     /// given up / handed to a human — a re-queue starts the counters afresh
     pub handed_to_human: bool,
+    /// python-dev-tools runs over all sessions (PR stats)
+    pub tool_runs: std::collections::BTreeMap<String, usize>,
 }
 
 impl Default for SessionState {
@@ -52,6 +54,7 @@ impl Default for SessionState {
             notes: vec![],
             in_review: false,
             handed_to_human: false,
+            tool_runs: Default::default(),
         }
     }
 }
@@ -75,12 +78,20 @@ impl SessionState {
         self.last_session_at = Local::now().to_rfc3339();
     }
 
+    /// Counts the python-dev-tools runs among a session's shell commands.
+    pub fn count_tools(&mut self, commands: &[String]) {
+        for (tool, n) in crate::pr_text::tool_usage(commands) {
+            *self.tool_runs.entry(tool).or_default() += n;
+        }
+    }
+
     /// A human put the issue back into the queue: new budget, new attempts, same branch.
     pub fn restart_after_human(&mut self) {
         self.session_count = 0;
         self.total_turns_used = 0;
         self.total_tokens = 0;
         self.total_cost_usd = 0.0;
+        self.tool_runs.clear();
         self.attempts = 0;
         self.in_review = false;
         self.handed_to_human = false;
@@ -170,5 +181,16 @@ mod tests {
         std::fs::write(t.path().join("o_a").join("issue-1.json"), "{").unwrap();
         assert!(store.load("o/a", 1).is_none());
         assert!(store.open_in("o/a").is_empty());
+    }
+
+    #[test]
+    fn tool_runs_add_up_over_sessions_and_reset_on_requeue() {
+        let mut s = SessionState::new("o/a", 7, "b");
+        s.count_tools(&["python3 ~/.cap-tools/smart_test.py".into(), "cargo test".into()]);
+        s.count_tools(&["python3 ~/.cap-tools/smart_test.py X".into(), "python3 ~/.cap-tools/semantic_search.py q".into()]);
+        assert_eq!(s.tool_runs.get("smart_test.py"), Some(&2));
+        assert_eq!(s.tool_runs.get("semantic_search.py"), Some(&1));
+        s.restart_after_human();
+        assert!(s.tool_runs.is_empty());
     }
 }

@@ -269,3 +269,68 @@ fn human_pr_mentioning_the_issue_is_not_adopted() {
     assert!(prs.values().any(|p| p.head.name.starts_with("agent/issue-35-")));
     assert!(fake::pushed_file(&w.origin, "feature/human", "f.txt").is_none());
 }
+
+fn assigned(mut i: team_core::gh::Issue, login: &str) -> team_core::gh::Issue {
+    i.assignees.push(team_core::gh::User { login: login.into() });
+    i
+}
+
+#[test]
+fn issue_assigned_to_the_agents_own_login_is_taken_a_colleagues_is_not() {
+    let forge = FakeForge::new("o/r").with_issue(assigned(task(41, "x", &[]), "colleague")).with_issue(assigned(task(42, "x", &[]), "BOT"));
+    let w = world(forge, FakeLlm::new().reply(SUMMARY, Some("f.txt")).reply(REVIEW_OK, None));
+    assert!(coder().cycle(&w.ctx).unwrap());
+    assert!(the_pr(&w).head.name.starts_with("agent/issue-42-"));
+    assert!(w.forge.labels(41).iter().any(|l| l == "agent-task") && w.forge.comment_bodies(41).is_empty(), "a colleague's issue stays untouched");
+}
+
+/// `branch` gets a commit on top of `base` on origin; with `merge_into`, it is then merged
+/// there with a merge commit.
+fn on_origin(w: &World, branch: &str, base: &str, file: &str, merge_into: Option<&str>) {
+    let seed = w._tmp.path().join("seed");
+    let g = |a: &[&str]| team_core::git::run_git(Some(&seed), a, false).unwrap();
+    let id = ["-c", "user.name=t", "-c", "user.email=t@t"];
+    g(&["fetch", "-q", "origin"]);
+    g(&["checkout", "-q", "-B", branch, &format!("origin/{base}")]);
+    std::fs::write(seed.join(file), file).unwrap();
+    g(&["add", "-A"]);
+    g(&[&id[..], &["commit", "-q", "-m", file]].concat());
+    g(&["push", "-q", "origin", branch]);
+    if let Some(into) = merge_into {
+        g(&["checkout", "-q", "-B", into, &format!("origin/{into}")]);
+        g(&[&id[..], &["merge", "-q", "--no-ff", "-m", "merge", branch]].concat());
+        g(&["push", "-q", "origin", into]);
+    }
+}
+
+/// A feature merged straight into main: dev is bypassed.
+fn advance_main(w: &World) {
+    on_origin(w, "feat/later", "main", "later.txt", Some("main"));
+}
+
+#[test]
+fn abandoned_dev_is_bypassed_outside_the_po_repo() {
+    let w = world(FakeForge::new("o/r").with_issue(task(43, "x", &[])), FakeLlm::new().reply(SUMMARY, Some("f.txt")).reply(REVIEW_OK, None));
+    advance_main(&w);
+    assert!(coder().cycle(&w.ctx).unwrap());
+    let pr = the_pr(&w);
+    assert_eq!(pr.base.name, "main");
+    assert!(fake::pushed_file(&w.origin, &pr.head.name, "later.txt").is_some(), "work starts from the current main");
+}
+
+#[test]
+fn po_repo_keeps_its_integration_branch_when_behind() {
+    let mut w = world(FakeForge::new("o/r").with_issue(task(44, "x", &[])), FakeLlm::new().reply(SUMMARY, Some("f.txt")).reply(REVIEW_OK, None));
+    w.ctx.cfg.product_owner.repo = "o/r".into();
+    advance_main(&w);
+    assert!(coder().cycle(&w.ctx).unwrap());
+    assert_eq!(the_pr(&w).base.name, "dev");
+}
+
+#[test]
+fn git_flow_dev_stays_the_target_after_a_release_merge() {
+    let w = world(FakeForge::new("o/r").with_issue(task(45, "x", &[])), FakeLlm::new().reply(SUMMARY, Some("f.txt")).reply(REVIEW_OK, None));
+    on_origin(&w, "dev", "dev", "released.txt", Some("main"));
+    assert!(coder().cycle(&w.ctx).unwrap());
+    assert_eq!(the_pr(&w).base.name, "dev");
+}

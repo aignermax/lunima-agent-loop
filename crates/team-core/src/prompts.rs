@@ -16,6 +16,9 @@ pub const BUILTIN: &[(&str, &str)] = &[
     ("qa-fix", include_str!("../prompts/qa-fix.md")),
     ("pr-feedback", include_str!("../prompts/pr-feedback.md")),
     ("po-owner", include_str!("../prompts/po-owner.md")),
+    ("discovery-scout", include_str!("../prompts/discovery-scout.md")),
+    ("discovery-strategist", include_str!("../prompts/discovery-strategist.md")),
+    ("discovery-critic", include_str!("../prompts/discovery-critic.md")),
 ];
 
 pub fn builtin(name: &str) -> Option<&'static str> {

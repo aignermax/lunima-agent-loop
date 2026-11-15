@@ -28,6 +28,13 @@ fn run_args() -> String {
     }
 }
 
+/// One cycle of `role` outside the daemon (the agent refuses while the daemon runs, so the
+/// terminal shows that instead of a silent failure).
+pub fn once_command(exe: &Path, role: &str) -> String {
+    let home = HOME.get().map(|h| format!(" --home \"{}\"", h.display())).unwrap_or_default();
+    format!("\"{}\" once {role}{home}", exe.display())
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ServiceInfo {
     /// starts with the user's session (task exists / unit enabled)
@@ -71,7 +78,7 @@ pub fn register_script(exe: &Path) -> String {
 /// The systemd user unit for `exe`.
 pub fn unit_file(exe: &Path) -> String {
     format!(
-        "[Unit]\nDescription=Lunima Team Agent (Coder, QA, PR-Feedback, Product Owner)\nAfter=network-online.target\n\n[Service]\nEnvironment=PATH=%h/.local/bin:%h/.npm-global/bin:%h/bin:/usr/local/bin:/usr/bin:/bin\nExecStart=\"{}\" {}\nRestart=on-failure\nRestartSec=60\n\n[Install]\nWantedBy=default.target\n",
+        "[Unit]\nDescription=Lunima Team Agent (Coder, QA, PR-Feedback, Product Owner)\nAfter=network-online.target\n\n[Service]\nEnvironment=PATH=%h/.dotnet:%h/.dotnet/tools:%h/.cargo/bin:%h/.local/bin:%h/.npm-global/bin:%h/bin:/usr/local/bin:/usr/bin:/bin\nExecStart=\"{}\" {}\nRestart=on-failure\nRestartSec=60\n\n[Install]\nWantedBy=default.target\n",
         exe.display(),
         run_args()
     )
@@ -200,5 +207,10 @@ mod tests {
         assert!(u.contains("ExecStart=\"/usr/bin/lunima-team-agent\" run"), "{u}");
         assert!(u.contains("Restart=on-failure") && u.contains("RestartSec=60") && u.contains("WantedBy=default.target"));
         assert_eq!(systemctl_args("is-active"), ["--user", "is-active", "lunima-team-agent"]);
+    }
+
+    #[test]
+    fn once_runs_one_cycle_of_a_role() {
+        assert_eq!(once_command(Path::new("/usr/bin/lunima-team-agent"), "product-discovery"), "\"/usr/bin/lunima-team-agent\" once product-discovery");
     }
 }

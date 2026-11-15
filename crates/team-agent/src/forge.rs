@@ -8,6 +8,8 @@ pub trait Forge: Send + Sync {
     fn default_branch(&self) -> Result<String, String>;
     fn open_issues(&self, label: &str) -> Result<Vec<Issue>, String>;
     fn issue(&self, number: u64) -> Result<Issue, String>;
+    /// issues with `label` in `state` (`open` | `closed` | `all`), PRs excluded
+    fn issues(&self, label: &str, state: &str) -> Result<Vec<Issue>, String>;
     fn add_labels(&self, number: u64, labels: &[&str]) -> Result<(), String>;
     fn remove_label(&self, number: u64, label: &str) -> Result<(), String>;
     fn add_assignee(&self, number: u64, login: &str) -> Result<(), String>;
@@ -21,6 +23,8 @@ pub trait Forge: Send + Sync {
     fn pr(&self, number: u64) -> Result<PullRequest, String>;
     fn pr_by_branch(&self, branch: &str) -> Result<Option<PullRequest>, String>;
     fn create_pr(&self, title: &str, body: &str, head: &str, base: &str) -> Result<PullRequest, String>;
+    /// GitHub refuses to merge a draft, which keeps discovery PRs out of the PO's merges
+    fn create_draft_pr(&self, title: &str, body: &str, head: &str, base: &str) -> Result<PullRequest, String>;
     fn edit_pr_body(&self, number: u64, body: &str) -> Result<(), String>;
     /// atomic cross-machine lock (`refs/team-locks/<key>`); false = held by someone else
     fn try_lock(&self, key: &str, owner: &str) -> Result<bool, String>;
@@ -41,6 +45,9 @@ impl Forge for gh::Repo {
     }
     fn issue(&self, number: u64) -> Result<Issue, String> {
         gh::Repo::issue(self, number)
+    }
+    fn issues(&self, label: &str, state: &str) -> Result<Vec<Issue>, String> {
+        gh::Repo::issues(self, label, state)
     }
     fn add_labels(&self, number: u64, labels: &[&str]) -> Result<(), String> {
         gh::Repo::add_labels(self, number, labels)
@@ -80,6 +87,9 @@ impl Forge for gh::Repo {
     }
     fn create_pr(&self, title: &str, body: &str, head: &str, base: &str) -> Result<PullRequest, String> {
         gh::Repo::create_pr(self, title, body, head, base)
+    }
+    fn create_draft_pr(&self, title: &str, body: &str, head: &str, base: &str) -> Result<PullRequest, String> {
+        gh::Repo::create_draft_pr(self, title, body, head, base)
     }
     fn edit_pr_body(&self, number: u64, body: &str) -> Result<(), String> {
         gh::Repo::edit_pr_body(self, number, body)

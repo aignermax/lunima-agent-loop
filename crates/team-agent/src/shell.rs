@@ -74,6 +74,10 @@ pub fn run_shell_env(line: &str, cwd: &Path, timeout: Duration, env: &[(&str, &s
         }
     };
     let out = out.map_err(|e| format!("`{line}` konnte nicht gestartet werden: {e}"))?;
+    // not a test failure: the run was stopped before it could finish
+    if let Some(m) = out.memory {
+        return Err(format!("`{line}` abgebrochen — {m}"));
+    }
     Ok(CmdResult { exit_code: out.status, stdout: out.stdout, stderr: out.stderr, timed_out: out.timed_out })
 }
 

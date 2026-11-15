@@ -3,7 +3,7 @@
 use crate::collector::{Action, Handle};
 use crate::core::health::{self, Health, Level};
 use crate::core::snapshot::{relative, Snapshot};
-use crate::ui::{activity::ActivityPage, github, logs::LogsPage, overview, projects::ProjectsPage, rules::RulesPage, settings::SettingsPage, setup, team::TeamPage};
+use crate::ui::{activity::ActivityPage, discovery, github, logs::LogsPage, overview, projects::ProjectsPage, rules::RulesPage, settings::SettingsPage, setup, team::TeamPage};
 use crate::ui::theme::{self, MUTED};
 use crate::ui::widgets::level_dot;
 use crate::{tray, win};
@@ -22,6 +22,7 @@ pub enum Page {
     Rules,
     Logs,
     Setup,
+    Discovery,
 }
 
 const PAGES: &[(Page, &str, &str)] = &[
@@ -30,6 +31,7 @@ const PAGES: &[(Page, &str, &str)] = &[
     (Page::Projects, "📦", "Projekte"),
     (Page::Activity, "📋", "Aktivität"),
     (Page::Github, "🐙", "GitHub"),
+    (Page::Discovery, "🔭", "Discovery"),
     (Page::Settings, "⚙", "Einstellungen"),
     (Page::Rules, "📜", "Regeln"),
     (Page::Logs, "🗒", "Protokolle"),
@@ -39,10 +41,10 @@ const PAGES: &[(Page, &str, &str)] = &[
 const NOTICE_SECONDS: u64 = 6;
 
 impl Page {
-    /// `--page overview|team|projects|activity|github|settings|rules|logs|setup`
+    /// `--page overview|team|projects|activity|github|discovery|settings|rules|logs|setup`
     pub fn from_arg(name: &str) -> Option<Self> {
-        let all = [Page::Overview, Page::Team, Page::Projects, Page::Activity, Page::Github, Page::Settings, Page::Rules, Page::Logs, Page::Setup];
-        let names = ["overview", "team", "projects", "activity", "github", "settings", "rules", "logs", "setup"];
+        let all = [Page::Overview, Page::Team, Page::Projects, Page::Activity, Page::Github, Page::Discovery, Page::Settings, Page::Rules, Page::Logs, Page::Setup];
+        let names = ["overview", "team", "projects", "activity", "github", "discovery", "settings", "rules", "logs", "setup"];
         names.iter().position(|n| n.eq_ignore_ascii_case(name)).map(|i| all[i])
     }
 }
@@ -144,6 +146,7 @@ impl eframe::App for App {
                     Page::Projects => self.projects.show(ui, &s, &self.handle),
                     Page::Activity => self.activity.show(ui, &s),
                     Page::Github => github::show(ui, &s),
+                    Page::Discovery => discovery::show(ui, &s, &self.handle),
                     Page::Settings => {
                         if self.settings.show(ui, &s, &self.handle) {
                             self.page = Page::Setup;

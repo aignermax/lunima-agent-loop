@@ -7,6 +7,7 @@ pub mod config;
 pub mod gh;
 pub mod git;
 pub mod import;
+pub mod mem;
 pub mod paths;
 pub mod proc;
 pub mod prompts;

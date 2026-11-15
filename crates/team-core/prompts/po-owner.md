@@ -84,7 +84,9 @@ Open issues labelled `{TASK_LABEL}`:
    Also valuable when justified:
    animated help `(?)` flyouts with physics explanations across the app (education IS the product),
    and anything that moves toward the NAND2TETRIS-for-photonics goal.
-   **Product-market-fit lens:** now and then (not every pass — at most once a day), step back
+   **Product-market-fit lens** (only while the "Discovery decisions" section at the end says
+   product discovery is switched off — otherwise strategy research belongs to discovery and
+   you work from its accepted Decision Records): now and then (not every pass — at most once a day), step back
    and ask what would make Lunima land with its users: research the landscape (WebSearch),
    check what competing/adjacent tools ship, and turn genuine insights into either (a) new
    well-scoped `{TASK_LABEL}` issues, or (b) a proposed ROADMAP change — file the ROADMAP edit
@@ -119,6 +121,12 @@ Open issues labelled `{TASK_LABEL}`:
    blocks). Quiet hours need no comment.
 
 ## Hard rules
+
+- **Discovery PRs are the maintainer's.** Never merge, approve, retarget or mark ready for
+  review a PR labelled `discovery` or coming from a `discovery/*` branch, and never merge a
+  PR from a `spike/*` branch (spikes are throwaway experiments). Never edit files under
+  `discovery/` — they are written by the discovery run and accepted by the maintainer.
+  Automation touching a discovery PR is detected and reported to the maintainer.
 
 - **No background commands — ever.** This is a headless one-shot session: the moment you end your
   turn to "wait for a notification", the pass is over and the result is lost. Run every command
