@@ -281,7 +281,14 @@ mod tests {
     #[test]
     fn memory_guard_kills_the_whole_tree() {
         // the grandchild leaves the process group, like a tool starting its own session
-        let script = if cfg!(windows) { "ping -n 60 127.0.0.1 >NUL" } else { "setsid sleep 61 & echo started; wait" };
+        let script = if cfg!(windows) {
+            "ping -n 60 127.0.0.1 >NUL"
+        } else if cfg!(target_os = "linux") {
+            "setsid sleep 61 & echo started; wait"
+        } else {
+            // macOS has no setsid(1): the shell would exit before the guard fires
+            "sleep 61 & echo started; wait"
+        };
         let t = Instant::now();
         let out = run_guarded(shell(script), None, None, Duration::from_secs(60), &|| Some("Arbeitsspeicher knapp: test".into())).unwrap();
         assert_eq!(out.memory.as_deref(), Some("Arbeitsspeicher knapp: test"));
