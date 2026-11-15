@@ -69,6 +69,29 @@ impl Tools {
         Self { dir: dir.display().to_string(), python }
     }
 
+    /// Upstream installer (bash) that fills `~/.cap-tools`, venv included.
+    pub const INSTALLER: &'static str = "https://raw.githubusercontent.com/aignermax/python-dev-tools/main/install.sh";
+
+    /// Installs python-dev-tools into `~/.cap-tools` when they are missing, since every prompt
+    /// tells Claude to use them. Windows has no bash installer: the error names the manual step.
+    pub fn ensure_installed(home: Option<PathBuf>) -> Result<Self, String> {
+        let found = Self::detect(home.clone());
+        if found != Self::default() || home.is_none() {
+            return Ok(found);
+        }
+        if cfg!(windows) {
+            return Err(format!("~/.cap-tools fehlt; Installation von Hand: bash <(curl -fsSL {})", Self::INSTALLER));
+        }
+        let mut cmd = team_core::proc::command("bash");
+        cmd.args(["-c", &format!("curl -fsSL {} | bash", Self::INSTALLER)]);
+        team_core::proc::run(cmd, None, std::time::Duration::from_secs(600)).map_err(|e| e.to_string())?.into_result()?;
+        let installed = Self::detect(home);
+        if installed == Self::default() {
+            return Err("Installer lief durch, die Tools fehlen aber weiterhin".into());
+        }
+        Ok(installed)
+    }
+
     pub fn insert(&self, values: &mut HashMap<&str, String>) {
         values.insert("tools_dir", self.dir.clone());
         values.insert("tools_python", self.python.clone());
@@ -108,3 +131,22 @@ impl From<LlmError> for RoleError {
 }
 
 pub type RoleResult<T = ()> = Result<T, RoleError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn complete_tools_are_used_without_installing() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".cap-tools");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(Tools::detect(Some(home.path().into())), Tools::default(), "incomplete = defaults");
+        for f in Tools::REQUIRED {
+            std::fs::write(dir.join(f), "").unwrap();
+        }
+        let t = Tools::ensure_installed(Some(home.path().into())).unwrap();
+        assert_eq!(t.dir, dir.display().to_string());
+        assert_eq!(Tools::ensure_installed(None).unwrap(), Tools::default());
+    }
+}
