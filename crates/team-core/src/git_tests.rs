@@ -137,3 +137,18 @@ fn reset_to_remote_discards_local_changes() {
 fn remote_url_has_no_token() {
     assert_eq!(remote_url("Akhetonics/khepri"), "https://github.com/Akhetonics/khepri.git");
 }
+
+#[cfg(unix)]
+#[test]
+fn a_push_the_server_refuses_keeps_its_reason() {
+    use std::os::unix::fs::PermissionsExt;
+    let (tmp, c) = setup();
+    let hook = tmp.path().join("origin.git").join("hooks").join("pre-receive");
+    std::fs::write(&hook, "#!/bin/sh\necho 'refusing to allow an OAuth App to create or update workflow `.github/workflows/ci.yml` without `workflow` scope' >&2\nexit 1\n").unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let wt = c.worktree(&tmp.path().join("wt").join("ci"), "agent/issue-56", "dev").unwrap();
+    std::fs::write(wt.join("ci.yml"), "jobs: {}").unwrap();
+    let err = commit_and_push(&wt, "agent/issue-56", "Agent: CI").unwrap_err();
+    assert!(err.contains("[remote rejected]") && err.contains("gh auth refresh -h github.com -s workflow"), "{err}");
+    assert!(!err.contains("couldn't find remote ref"));
+}

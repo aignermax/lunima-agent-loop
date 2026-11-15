@@ -215,7 +215,10 @@ pub fn commit_and_push(dir: &Path, branch: &str, message: &str) -> Result<Pushed
     }
     match gn(&["push", "--set-upstream", "origin", branch]) {
         Ok(_) => Ok(Pushed::Yes),
-        Err(e) if e.contains("rejected") || e.contains("fetch first") || e.contains("non-fast-forward") => {
+        // `[remote rejected]` is the server refusing the push (permissions, hooks, missing
+        // token scope); only a plain `[rejected]` means origin moved on.
+        Err(e) if e.contains("[remote rejected]") => Err(refused_push(e)),
+        Err(e) if e.contains("[rejected]") || e.contains("fetch first") || e.contains("non-fast-forward") => {
             gn(&["fetch", "origin", &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}")])?;
             let behind = g(&["rev-list", "--count", &format!("{branch}..{remote}")])?.trim().parse::<u32>().unwrap_or(1);
             if behind == 0 {
@@ -225,6 +228,16 @@ pub fn commit_and_push(dir: &Path, branch: &str, message: &str) -> Result<Pushed
             }
         }
         Err(e) => Err(e),
+    }
+}
+
+/// GitHub refuses workflow files from an OAuth token without the `workflow` scope; the
+/// error then says what the maintainer has to run.
+fn refused_push(e: String) -> String {
+    if e.contains("workflow") && e.contains("scope") {
+        format!("{e}\nThe gh login lacks the `workflow` scope needed to push workflow files: run `gh auth refresh -h github.com -s workflow`.")
+    } else {
+        e
     }
 }
 
