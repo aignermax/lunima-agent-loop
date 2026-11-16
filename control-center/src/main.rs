@@ -1,7 +1,7 @@
 //! Lunima Team Control Center — status, health, activity, settings and rules of the team
 //! agent (`lunima-team-agent`), with a tray icon.
 //!
-//! Usage: `lunima-po [--home <data folder>] [--tray] [--page <name>]`
+//! Usage: `lunima-po [--home <data folder>] [--tray] [--page <name>] [--screenshot <file.png>]`
 //! (`--tray` starts hidden in the tray; `--home` defaults to the agent's data folder,
 //! `LUNIMA_TEAM_HOME` or `%LOCALAPPDATA%\lunima-team`; pages: overview, team, projects,
 //! activity, github, discovery, settings, rules, logs, setup)
@@ -10,6 +10,7 @@
 
 mod app;
 mod collector;
+mod screenshot;
 mod core;
 mod sys;
 mod tray;
@@ -24,18 +25,30 @@ struct Args {
     home: Option<PathBuf>,
     start_hidden: bool,
     page: app::Page,
+    screenshot: Option<PathBuf>,
 }
 
 fn parse_args() -> Args {
     let mut args = std::env::args().skip(1);
-    let mut parsed = Args { home: None, start_hidden: false, page: app::Page::Overview };
+    let mut parsed = Args { home: None, start_hidden: false, page: app::Page::Overview, screenshot: None };
     while let Some(a) = args.next() {
         match a.as_str() {
             "--home" => parsed.home = args.next().map(PathBuf::from),
             "--tray" => parsed.start_hidden = true,
+            "--screenshot" => match args.next() {
+                Some(file) => parsed.screenshot = Some(PathBuf::from(file)),
+                None => {
+                    eprintln!("--screenshot braucht einen Dateinamen, z. B. --screenshot team.png");
+                    std::process::exit(2);
+                }
+            },
             "--page" => parsed.page = args.next().and_then(|p| app::Page::from_arg(&p)).unwrap_or(parsed.page),
             _ => {}
         }
+    }
+    // a screenshot needs a visible window: a hidden one never paints or delivers the image
+    if parsed.screenshot.is_some() {
+        parsed.start_hidden = false;
     }
     parsed
 }
@@ -54,17 +67,18 @@ fn main() -> eframe::Result<()> {
         default_hook(info);
         std::process::abort();
     }));
-    if !win::claim_single_instance() {
+    let args = parse_args();
+    // a screenshot run must not be swallowed by (or block) an instance that is already open
+    if args.screenshot.is_none() && !win::claim_single_instance() {
         return Ok(());
     }
-    let args = parse_args();
     if let Some(h) = &args.home {
         crate::sys::agent_service::set_home(h.clone());
     }
     let home = args.home.or_else(team_core::paths::Paths::default_root).unwrap_or_else(|| PathBuf::from("lunima-team"));
     let paths = team_core::paths::Paths::new(home);
     // a new machine starts in the setup assistant
-    let page = if paths.config().is_file() { args.page } else { app::Page::Setup };
+    let page = if paths.config().is_file() || args.screenshot.is_some() { args.page } else { app::Page::Setup };
     let on_change: Arc<dyn Fn() + Send + Sync> = Arc::new(win::request_repaint);
     let handle = collector::start(paths, on_change);
 
@@ -76,11 +90,13 @@ fn main() -> eframe::Result<()> {
         // Linux: a hidden window can't be shown again from the tray — start minimised instead
         .with_visible(!args.start_hidden || !cfg!(windows));
     let minimise_at_start = args.start_hidden && !cfg!(windows);
-    let options = eframe::NativeOptions { viewport, persist_window: true, ..Default::default() };
+    let screenshot = args.screenshot.map(screenshot::Screenshot::new);
+    let persist_window = screenshot.is_none();
+    let options = eframe::NativeOptions { viewport, persist_window, ..Default::default() };
     eframe::run_native(win::TITLE, options, Box::new(move |cc| {
         if minimise_at_start {
             cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
-        Ok(Box::new(app::App::new(cc, handle, page)))
+        Ok(Box::new(app::App::new(cc, handle, page, screenshot)))
     }))
 }

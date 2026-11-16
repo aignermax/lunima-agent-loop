@@ -58,14 +58,17 @@ pub struct App {
     settings: SettingsPage,
     rules: RulesPage,
     logs: LogsPage,
+    screenshot: Option<crate::screenshot::Screenshot>,
 }
 
 impl App {
-    pub fn new(cc: &eframe::CreationContext<'_>, handle: Handle, page: Page) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, handle: Handle, page: Page, screenshot: Option<crate::screenshot::Screenshot>) -> Self {
         theme::apply(&cc.egui_ctx);
         win::register(cc);
-        tray::install(handle.clone());
-        Self { handle, page, activity: ActivityPage::default(), team: TeamPage, projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default() }
+        if screenshot.is_none() {
+            tray::install(handle.clone());
+        }
+        Self { handle, page, activity: ActivityPage::default(), team: TeamPage, projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default(), screenshot }
     }
 
     fn sidebar(&mut self, ctx: &egui::Context, s: &Snapshot, h: &Health) {
@@ -125,7 +128,8 @@ fn footer(ui: &mut egui::Ui, s: &Snapshot, handle: &Handle) {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if ctx.input(|i| i.viewport().close_requested()) {
+        // closing hides the window into the tray; a screenshot run has no tray, so it quits
+        if self.screenshot.is_none() && ctx.input(|i| i.viewport().close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             win::hide_main();
         }
@@ -159,6 +163,9 @@ impl eframe::App for App {
             });
         });
         self.notice(ctx);
+        if let Some(shot) = &mut self.screenshot {
+            shot.tick(ctx);
+        }
         let working = s.heartbeats.values().any(|hb| hb.state == "working");
         let poll = if h.overall == Level::Pending || working { 1 } else { 5 };
         ctx.request_repaint_after(Duration::from_secs(poll));

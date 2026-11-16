@@ -112,7 +112,10 @@ impl World {
 #[test]
 fn complete_review_files_issues_and_publishes_the_report_for_every_machine() {
     let w = world();
-    let a = w.ctx("A");
+    let mut a = w.ctx("A");
+    // every journey tonight: `plan::pick` rotates by calendar day, and on some days none of
+    // the default three needs the sample GDS whose staged path is checked below
+    a.cfg.ux_review.goals_per_run = plan::load_goals(&a.cfg.ux_review.goals_file).unwrap().len();
     assert_eq!(w.reviewer(Tester::Complete, night()).cycle(&a), Ok(true));
     let st = UxState::load(&a.paths.state()).unwrap();
     assert_eq!((st.last_result.as_str(), st.filed_issues.clone()), ("ok", vec![77]));
@@ -127,7 +130,7 @@ fn complete_review_files_issues_and_publishes_the_report_for_every_machine() {
     let goals = std::fs::read_to_string(a.paths.state().join("ux").join("goals.json")).unwrap();
     assert!(!goals.contains("{SAMPLE_GDS}") && goals.contains("customer_context"));
     if cfg!(windows) {
-        assert!(goals.contains("%TEMP%") && !goals.contains("AppData"), "no user folder in goals");
+        assert!(goals.contains("%TEMP%") && !goals.contains("AppData"), "no user folder in goals: {goals}");
     }
     // a machine that never ran the review still gives its PO the report
     let section = po_section(&w.ctx("B"));
