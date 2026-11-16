@@ -92,6 +92,11 @@ impl Handle {
     pub fn snapshot(&self) -> Snapshot {
         self.shared.snapshot.lock().expect("snapshot lock").clone()
     }
+
+    /// An action failed after `t`: a switch shown ahead of the file goes back at once.
+    pub fn failed_since(&self, t: Instant) -> bool {
+        self.shared.notice.lock().expect("notice lock").as_ref().is_some_and(|n| !n.ok && n.at > t)
+    }
 }
 
 /// Starts the worker thread. `on_change` is called after every update (repaint + tray).
@@ -117,6 +122,10 @@ struct Worker {
 
 impl Worker {
     fn run(mut self, rx: Receiver<Action>) {
+        // the slow probes read the configuration from the snapshot: their first round has to
+        // wait for the first file refresh, or it judges an empty snapshot for 90 s
+        self.refresh_fast();
+        let _ = self.slow.send(());
         loop {
             self.refresh_fast();
             match rx.recv_timeout(FAST) {
@@ -171,6 +180,13 @@ impl Worker {
         });
     }
 
+
+    /// The scheduled task's state right after a change to it, so the switch and the next
+    /// action don't wait for the slow round.
+    fn refresh_service(&self) {
+        let service = agent_service::query();
+        self.update(|s| s.service = Some(service));
+    }
 }
 
 struct SlowWorker {
@@ -180,8 +196,12 @@ struct SlowWorker {
 }
 
 impl SlowWorker {
-    /// Every `SLOW`, and right after each action (several requests in a row: one round).
+    /// After the first file refresh, then every `SLOW` and right after each action
+    /// (several requests in a row: one round).
     fn run(self, rx: Receiver<()>) {
+        if rx.recv().is_err() {
+            return;
+        }
         loop {
             self.refresh_slow();
             match rx.recv_timeout(SLOW) {
@@ -291,8 +311,12 @@ impl Worker {
                 Ok(if *paused { "Alle Rollen pausiert (laufende Arbeit wird noch beendet)" } else { "Alle Rollen laufen wieder" }.into())
             }
             Action::Agent(verb) => {
-                let info = self.snap().service.and_then(|s| s.ok());
-                agent_service::control(*verb, &exe()?, info.as_ref(), &state)?;
+                // live, not from the snapshot: the slow round may not have seen the last
+                // autostart change yet, and a stale "managed" stops the agent for good
+                let info = agent_service::query().ok();
+                let result = agent_service::control(*verb, &exe()?, info.as_ref(), &state);
+                self.refresh_service();
+                result?;
                 Ok(match verb {
                     Verb::Start => "Team-Agent gestartet",
                     Verb::Stop => "Team-Agent gestoppt",
@@ -301,7 +325,9 @@ impl Worker {
                 .into())
             }
             Action::SetAgentAutostart(on) => {
-                agent_service::set_autostart(*on, &exe()?)?;
+                let result = agent_service::set_autostart(*on, &exe()?);
+                self.refresh_service();
+                result?;
                 Ok(if *on { "Team-Agent startet ab jetzt mit der Anmeldung" } else { "Autostart des Team-Agents aus" }.into())
             }
             Action::SetAutostart(on) => autostart::set_enabled(*on).map(|_| if *on { "Control Center startet mit der Anmeldung" } else { "Autostart aus" }.into()),

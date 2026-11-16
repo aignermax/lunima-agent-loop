@@ -47,14 +47,15 @@ pub const MIN_SIZE: [f32; 2] = [900.0, 600.0];
 /// eframe restores the size it saved last. Saved while the window was minimised, that is
 /// 0×0, which eframe raises only to 64×64 — an unreadable window that the minimum size
 /// doesn't fix, because Windows applies it only while the user drags the border.
-fn fix_tiny_window(ctx: &egui::Context) {
+/// Returns true once it has looked: only the first frame with a known, non-minimised size
+/// counts, so a window manager that refuses the size can't make it resend every frame.
+fn fix_tiny_window(ctx: &egui::Context) -> bool {
     let (rect, minimized) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().minimized));
-    if minimized == Some(true) {
-        return;
-    }
-    if rect.is_some_and(|r| r.width() < MIN_SIZE[0] - 1.0 || r.height() < MIN_SIZE[1] - 1.0) {
+    let Some(rect) = rect.filter(|_| minimized != Some(true)) else { return false };
+    if rect.width() < MIN_SIZE[0] - 1.0 || rect.height() < MIN_SIZE[1] - 1.0 {
         ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(DEFAULT_SIZE[0], DEFAULT_SIZE[1])));
     }
+    true
 }
 
 impl Page {
@@ -76,6 +77,8 @@ pub struct App {
     rules: RulesPage,
     logs: LogsPage,
     screenshot: Option<crate::screenshot::Screenshot>,
+    /// the restored window size was checked (`fix_tiny_window`)
+    window_checked: bool,
 }
 
 impl App {
@@ -85,7 +88,7 @@ impl App {
         if screenshot.is_none() {
             tray::install(handle.clone());
         }
-        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default(), screenshot }
+        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default(), screenshot, window_checked: false }
     }
 
     fn sidebar(&mut self, ctx: &egui::Context, s: &Snapshot, h: &Health) {
@@ -155,7 +158,9 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             win::hide_main();
         }
-        fix_tiny_window(ctx);
+        if !self.window_checked {
+            self.window_checked = fix_tiny_window(ctx);
+        }
         let s = self.handle.snapshot();
         let h = health::evaluate(&s, Local::now());
         tray::sync(&self.handle);

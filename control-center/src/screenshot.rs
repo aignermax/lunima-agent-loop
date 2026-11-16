@@ -8,9 +8,10 @@ use std::time::{Duration, Instant};
 
 /// The collector's slow probes (GitHub, tools) need a moment before the pages are complete.
 const SETTLE: Duration = Duration::from_secs(6);
-/// Window size of every screenshot (points), whatever size and state the user's window had
-/// last: eframe restores those even with persistence off, and README images should match.
-const SIZE: [f32; 2] = [1240.0, 820.0];
+/// Window size of every screenshot (the default size), whatever size and state the user's
+/// window had last: eframe restores those even with persistence off, and README images
+/// should match.
+const SIZE: [f32; 2] = crate::app::DEFAULT_SIZE;
 /// A script waiting for the PNG must not hang when the capture never arrives.
 const GIVE_UP: Duration = Duration::from_secs(25);
 

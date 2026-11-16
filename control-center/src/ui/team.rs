@@ -126,7 +126,7 @@ impl TeamPage {
     fn role_card_for(&mut self, ui: &mut Ui, s: &Snapshot, handle: &Handle, role: &'static str, name: &str, cfg: &TeamConfig) {
         let (level, status) = role_status(s, role, Local::now());
         let saved = crate::core::team::role_enabled(cfg, role);
-        if self.wanted.get(role).is_some_and(|(on, at)| *on == saved || at.elapsed() > WANTED_FOR) {
+        if self.wanted.get(role).is_some_and(|(on, at)| *on == saved || at.elapsed() > WANTED_FOR || handle.failed_since(*at)) {
             self.wanted.remove(role);
         }
         let enabled = self.wanted.get(role).map_or(saved, |(on, _)| *on);

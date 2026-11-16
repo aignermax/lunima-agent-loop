@@ -73,7 +73,7 @@ impl SettingsPage {
                             }
                         });
                         let saved = settings_model::get(cfg, spec.path);
-                        if self.sent.get(spec.path).is_some_and(|(v, at)| *v == saved || at.elapsed() > SENT_FOR) {
+                        if self.sent.get(spec.path).is_some_and(|(v, at)| *v == saved || at.elapsed() > SENT_FOR || handle.failed_since(*at)) {
                             self.sent.remove(spec.path);
                         }
                         let shown = self.sent.get(spec.path).map_or(saved, |(v, _)| v.clone());
@@ -111,7 +111,10 @@ impl SettingsPage {
     /// Saves one field; a rejected value stays in the field with the reason above the form.
     fn save(&mut self, cfg: &TeamConfig, path: &'static str, handle: &Handle) {
         let Some(text) = self.edits.get(path).cloned() else { return };
-        if text == settings_model::get(cfg, path) {
+        // compared with what the field shows: a value still on its way to the file counts,
+        // or clicking back to the file's value before the first click is saved gets lost
+        let shown = self.sent.get(path).map(|(v, _)| v.clone()).unwrap_or_else(|| settings_model::get(cfg, path));
+        if text == shown {
             self.edits.remove(path);
             return;
         }
