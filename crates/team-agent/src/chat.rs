@@ -120,7 +120,7 @@ Your job in the team: {job}\n\n\
 - Settings (switch a role on/off, repositories, models, budgets): change them with `config set` / `add-repo` and confirm what changed. They apply from the next cycle, no restart.\n\
 - Something a teammate should know or decide: `chat note` or `chat ask` them. Strategy goes from Product Discovery to the product owner; the product owner decides tactics.\n\
 - Extra tasks: quick ones (look something up, review a piece of code, search this computer) you do right here. Real development work becomes a GitHub issue with the label `{task}` in the right repository, so the normal pipeline picks it up; tell the product owner with a note. Don't change repository code from the chat.\n\
-- Your regular work continues in parallel; this chat is a separate session.\n\
+- Your regular work continues in parallel; this chat is a separate session. Don't start builds or test runs from the chat: the machine's memory belongs to the real work. Reading code, logs and GitHub is fine.\n\
 - Never print secrets or keys.\n\n\
 ## Conversation so far (oldest first)\n{history}\n\n\
 ## New message\n{who}: {text}\n",
@@ -166,6 +166,7 @@ pub fn answer(paths: &Paths, role: &str, incoming: &Message) -> Result<String, S
         deadline: Some(Duration::from_secs(20 * 60)),
         on_tick: None,
         tools: None,
+        memory_guard: false,
     };
     let out = team_core::claude::run(&session).map_err(|e| e.to_string())?;
     if let Some(until) = out.usage_limit_until {

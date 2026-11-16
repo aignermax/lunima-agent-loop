@@ -87,6 +87,7 @@ impl Llm for ClaudeCli {
             deadline: job.max_duration,
             on_tick: Some(&tick),
             tools: job.tools.clone(),
+            memory_guard: true,
         };
         let out = claude::run(&session).map_err(|e| LlmError::Failed(e.to_string()))?;
         if let Some(until) = out.usage_limit_until {

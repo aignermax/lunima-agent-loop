@@ -36,6 +36,10 @@ pub struct Session<'a> {
     pub on_tick: Option<&'a (dyn Fn() + Sync)>,
     /// `Some` = only these built-in tools exist and no permission bypass (see `args`)
     pub tools: Option<Vec<String>>,
+    /// killed when free RAM drops below the guard's floor (`crate::mem`). Off only for
+    /// sessions that start no builds or tests: a chat answer needs a few hundred MB, and
+    /// killing it frees nothing worth having while Max waits for a reply.
+    pub memory_guard: bool,
 }
 
 #[derive(Debug)]
@@ -188,7 +192,7 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
             kill_tree(&mut child);
             break;
         }
-        if mem_checked.elapsed() >= Duration::from_millis(500) {
+        if s.memory_guard && mem_checked.elapsed() >= Duration::from_millis(500) {
             mem_checked = Instant::now();
             if let Some(m) = crate::mem::must_kill() {
                 kill_tree(&mut child);
@@ -248,6 +252,7 @@ mod tests {
             deadline: None,
             on_tick: None,
             tools: None,
+            memory_guard: true,
         };
         let a = args(&s);
         assert_eq!(&a[..4], ["-p", "--output-format", "stream-json", "--verbose"]);
@@ -272,6 +277,7 @@ mod tests {
             deadline: None,
             on_tick: None,
             tools: Some(vec!["Read".into(), "Write".into(), "WebSearch".into()]),
+            memory_guard: true,
         };
         let a = args(&s);
         assert!(!a.iter().any(|x| x == "--dangerously-skip-permissions"));
@@ -310,6 +316,7 @@ mod live {
             deadline: None,
             on_tick: None,
             tools: None,
+            memory_guard: true,
         };
         let o = run(&s).expect("session");
         println!("text={:?} turns={} tokens={} cost={} subtype={}", o.text, o.num_turns, o.usage.total(), o.cost_usd, o.subtype);
