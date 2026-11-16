@@ -40,6 +40,23 @@ const PAGES: &[(Page, &str, &str)] = &[
 
 const NOTICE_SECONDS: u64 = 6;
 
+/// Window size on first start and the smallest one the layout works with (points).
+pub const DEFAULT_SIZE: [f32; 2] = [1240.0, 820.0];
+pub const MIN_SIZE: [f32; 2] = [900.0, 600.0];
+
+/// eframe restores the size it saved last. Saved while the window was minimised, that is
+/// 0×0, which eframe raises only to 64×64 — an unreadable window that the minimum size
+/// doesn't fix, because Windows applies it only while the user drags the border.
+fn fix_tiny_window(ctx: &egui::Context) {
+    let (rect, minimized) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().minimized));
+    if minimized == Some(true) {
+        return;
+    }
+    if rect.is_some_and(|r| r.width() < MIN_SIZE[0] - 1.0 || r.height() < MIN_SIZE[1] - 1.0) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(DEFAULT_SIZE[0], DEFAULT_SIZE[1])));
+    }
+}
+
 impl Page {
     /// `--page overview|team|projects|activity|github|discovery|settings|rules|logs|setup`
     pub fn from_arg(name: &str) -> Option<Self> {
@@ -137,13 +154,17 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             win::hide_main();
         }
+        fix_tiny_window(ctx);
         let s = self.handle.snapshot();
         let h = health::evaluate(&s, Local::now());
         tray::sync(&self.handle);
         self.sidebar(ctx, &s, &h);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::symmetric(28, 22))).show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                ui.set_max_width(ui.available_width().min(1080.0));
+                // forms and lists read best at a limited width; the Team page's two columns of
+                // role cards with chats use whatever the window offers
+                let max = if self.page == Page::Team { f32::INFINITY } else { 1080.0 };
+                ui.set_max_width(ui.available_width().min(max));
                 match self.page {
                     Page::Overview => {
                         if let Some(target) = overview::show(ui, &s, &h, &self.handle) {
