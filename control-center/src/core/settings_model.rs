@@ -96,7 +96,7 @@ pub const FIELDS: &[Field] = &[
     f("Budgets", "budgets.pr_feedback_max_turns", "Max. Schritte PR-Feedback", N, ""),
     f("Budgets", "budgets.inactivity_minutes", "Hänger-Erkennung (Min.)", N, "Claude ohne Ausgabe wird danach beendet"),
     f("Budgets", "resources.min_free_mb", "RAM-Notbremse (MB frei)", N, "Darunter werden laufende Sitzungen samt Builds/Tests beendet; 0 = automatisch (10 % des RAM, 1–4 GB)"),
-    f("Budgets", "resources.start_free_mb", "RAM für neue Arbeit (MB frei)", N, "Darunter wartet jede Rolle; 0 = doppelte Notbremse"),
+    f("Budgets", "resources.start_free_mb", "RAM für neue Arbeit (MB frei)", N, "Darunter wartet jede Rolle; 0 = Notbremse + Puffer (nochmal die Notbremse, höchstens 2 GB)"),
     f("Budgets", "budgets.test_gate", "Test-Gate vor dem Review", B, "test_cmd aus .agent.toml"),
     f("Labels", "labels.task", "Task-Label", T, ""),
     f("Labels", "labels.pr", "Label für Coder-PRs", T, "Leer = keines"),
@@ -160,21 +160,7 @@ pub fn apply(cfg: &TeamConfig, edits: &BTreeMap<&'static str, String>) -> Result
     let mut root = Value::try_from(cfg).map_err(|e| e.to_string())?;
     for (path, text) in edits {
         let label = FIELDS.iter().find(|f| f.path == *path).map(|f| f.label).unwrap_or(path);
-        let (parents, key) = path.rsplit_once('.').map(|(p, k)| (Some(p), k)).unwrap_or((None, path));
-        let table = match parents {
-            Some(p) => p.split('.').try_fold(&mut root, |v, k| v.get_mut(k)),
-            None => Some(&mut root),
-        }
-        .and_then(Value::as_table_mut)
-        .ok_or_else(|| format!("{label}: unbekannte Einstellung"))?;
-        let old = table.get(key).ok_or_else(|| format!("{label}: unbekannte Einstellung"))?;
-        let new = match old {
-            Value::Integer(_) => Value::Integer(text.trim().parse::<i64>().ok().filter(|n| *n >= 0).ok_or_else(|| format!("{label}: „{text}“ ist keine Zahl"))?),
-            Value::Float(_) => Value::Float(text.trim().replace(',', ".").parse::<f64>().ok().filter(|x| x.is_finite() && *x >= 0.0).ok_or_else(|| format!("{label}: „{text}“ ist keine Zahl"))?),
-            Value::Boolean(_) => Value::Boolean(text.trim() == "true"),
-            _ => Value::String(text.trim().to_string()),
-        };
-        table.insert(key.to_string(), new);
+        team_core::config::set_value(&mut root, path, text, label)?;
     }
     let updated: TeamConfig = root.try_into().map_err(|e: toml::de::Error| e.to_string())?;
     updated.validate()?;

@@ -73,12 +73,46 @@ the agent's builds and test runs are the usual cause. `team_core::mem` therefore
 ```toml
 [resources]
 min_free_mb = 0     # 0 = automatic: 10 % of RAM, 1–4 GB
-start_free_mb = 0   # 0 = twice min_free_mb
+start_free_mb = 0   # 0 = min_free_mb + headroom (min_free_mb again, at most 2 GB)
 ```
 
 Free RAM is `MemAvailable` (Linux) or `GlobalMemoryStatusEx` (Windows); on other systems
 the guard is off. It reacts to the whole machine, so memory used by other programs also
 stops agent work; that is intended.
+
+## Team chat and memory
+
+Max talks to every role in the Control Center (Team page); the roles talk to each other.
+
+```
+team/chat/<role>.jsonl   messages (append-only; Control Center, daemon and CLI all write)
+team/chat/<role>.busy    the role is composing an answer
+team/memory/<role>.md    standing instructions — appended to every prompt of the role
+```
+
+- **Answers** come from the daemon's chat worker (`chat.rs`): for Max's latest unanswered
+  message and for every unanswered ask from a teammate it starts a separate Claude session
+  with the role's identity, live status (switch, pause, heartbeat, its log lines), memory,
+  the last 30 messages and the commands below. One conversation per role at a time, at
+  most three at once, independent of the role's work cycle: a long build never blocks a
+  chat and a chat never touches a worktree or starts a build. A message counts as answered
+  only by a reply naming it (`reply_to`); notes get no answer, so roles cannot loop.
+- **Commands** for the roles' sessions (the agent's folder is on every session's PATH, texts
+  in single quotes): `chat ask` (posted for the worker; waits up to 90 s, a later answer
+  shows up in the asker's next prompt; asks nest at most 2 deep), `chat note`,
+  `chat say [--question]` (to Max), `chat read`, `chat remember` (only in the chat with
+  Max and only for the role itself — memory is followed in every prompt, so text a work
+  session read in an issue must not get there), `config set <dotted.path> <value>`,
+  `config add-repo|remove-repo|show`. `config set` parses by the setting's type and
+  validates like the Settings page; every save writes a per-process temp file.
+- **Memory and notes reach the work**: `Ctx::render` adds the role's memory, the notes and
+  answers teammates left in the last 14 days and the commands to every prompt of that role
+  (coder, QA fix → coder; PO; PR feedback). The read-only reviewers (`reviewer`,
+  `qa-review`) get memory and notes in front of the prompt, so their verdict block stays
+  last; discovery stages get memory and notes but no commands (sandboxed, no shell). The
+  nightly UX tester does not read memory.
+- Escalation: a role asks its product owner first and Max only when the PO is off or can't
+  decide; it carries on with the rest of its work instead of waiting.
 
 ## Phases
 

@@ -35,7 +35,14 @@ impl Ctx {
         if let Some(w) = warning {
             crate::log::warn(&format!("Prompt-Override {name}: {w} — Standardtext verwendet"));
         }
-        Ok(text)
+        // what Max told the role in the chat must reach its real work, not only the chat
+        let Some(role) = team_core::chat::role_of_prompt(name) else { return Ok(text) };
+        if team_core::chat::strict_output(name) {
+            // the verdict block must stay the end of the prompt; read-only, so no commands
+            return Ok(format!("{}\n\n{text}", team_core::chat::prompt_section(&self.paths, role, false).trim()));
+        }
+        // discovery stages run sandboxed without a shell: memory yes, commands no
+        Ok(text + &team_core::chat::prompt_section(&self.paths, role, role != "product-discovery"))
     }
     pub fn logs(&self) -> PathBuf {
         self.paths.logs()

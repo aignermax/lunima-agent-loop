@@ -84,8 +84,8 @@ fn main() -> eframe::Result<()> {
 
     let viewport = egui::ViewportBuilder::default()
         .with_title(win::TITLE)
-        .with_inner_size([1240.0, 820.0])
-        .with_min_inner_size([900.0, 600.0])
+        .with_inner_size(app::DEFAULT_SIZE)
+        .with_min_inner_size(app::MIN_SIZE)
         .with_icon(app_icon())
         // Linux: a hidden window can't be shown again from the tray — start minimised instead
         .with_visible(!args.start_hidden || !cfg!(windows));

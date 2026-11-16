@@ -36,6 +36,10 @@ pub struct Session<'a> {
     pub on_tick: Option<&'a (dyn Fn() + Sync)>,
     /// `Some` = only these built-in tools exist and no permission bypass (see `args`)
     pub tools: Option<Vec<String>>,
+    /// killed when free RAM drops below the guard's floor (`crate::mem`). Off only for
+    /// sessions that start no builds or tests: a chat answer needs a few hundred MB, and
+    /// killing it frees nothing worth having while Max waits for a reply.
+    pub memory_guard: bool,
 }
 
 #[derive(Debug)]
@@ -120,6 +124,14 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
     cmd.args(args(s)).current_dir(&s.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     s.env.apply(&mut cmd);
     cmd.env("GIT_TERMINAL_PROMPT", "0").env_remove("CLAUDE_CODE_ENTRYPOINT");
+    // prompts call `lunima-team-agent chat …` by name (chat::CLI): a quoted absolute path
+    // is a parse error in PowerShell and breaks on paths with spaces
+    if let Some(dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.to_path_buf())) {
+        let old = std::env::var_os("PATH").unwrap_or_default();
+        if let Ok(path) = std::env::join_paths(std::iter::once(dir).chain(std::env::split_paths(&old))) {
+            cmd.env("PATH", path);
+        }
+    }
     // the subscription login would hand the agent the user's claude.ai connectors (mail,
     // drive …) — an autonomous agent gets none of them; a repo's own .mcp.json still works
     cmd.env("ENABLE_CLAUDEAI_MCP_SERVERS", "false");
@@ -188,7 +200,7 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
             kill_tree(&mut child);
             break;
         }
-        if mem_checked.elapsed() >= Duration::from_millis(500) {
+        if s.memory_guard && mem_checked.elapsed() >= Duration::from_millis(500) {
             mem_checked = Instant::now();
             if let Some(m) = crate::mem::must_kill() {
                 kill_tree(&mut child);
@@ -248,6 +260,7 @@ mod tests {
             deadline: None,
             on_tick: None,
             tools: None,
+            memory_guard: true,
         };
         let a = args(&s);
         assert_eq!(&a[..4], ["-p", "--output-format", "stream-json", "--verbose"]);
@@ -272,6 +285,7 @@ mod tests {
             deadline: None,
             on_tick: None,
             tools: Some(vec!["Read".into(), "Write".into(), "WebSearch".into()]),
+            memory_guard: true,
         };
         let a = args(&s);
         assert!(!a.iter().any(|x| x == "--dangerously-skip-permissions"));
@@ -310,6 +324,7 @@ mod live {
             deadline: None,
             on_tick: None,
             tools: None,
+            memory_guard: true,
         };
         let o = run(&s).expect("session");
         println!("text={:?} turns={} tokens={} cost={} subtype={}", o.text, o.num_turns, o.usage.total(), o.cost_usd, o.subtype);

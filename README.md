@@ -25,7 +25,18 @@ lunima-team-agent once product-discovery   # one weekly discovery run (scout →
 lunima-team-agent experiment publish <Lunima clone> <slug> --approved-by <you> --contact <address>
                                 # maintainer only: render an approved experiment page into docs/x/<slug>/
 lunima-team-agent run           # all roles, forever (scheduled task / systemd user unit)
+lunima-team-agent config set roles.product_owner true   # one validated setting (also used by the roles)
+lunima-team-agent chat read --role coder                 # the team chat (see below)
 ```
+
+**Talk to the team.** The Team page of the Control Center shows every role with an on/off
+switch and a chat. Write to a role like to a colleague: ask what it works on and why, tell it
+something to keep in mind from now on, ask it to switch itself or a teammate on, to add a
+repository or to look into the code. A separate Claude session answers with the role's live
+status, so the role keeps working meanwhile. Roles store standing instructions in their
+memory (part of every later prompt), leave each other notes, ask each other
+(`chat ask`, coder → product owner first) and put questions for you into the chat; the
+sidebar and the tray show how many wait. Details: [`docs/TEAM-AGENT.md`](docs/TEAM-AGENT.md#team-chat-and-memory).
 
 Configuration is a single `team.toml` in the data folder (`%LOCALAPPDATA%\lunima-team`,
 `~/.local/share/lunima-team`); the Control Center edits it. The Product Owner's settings live in

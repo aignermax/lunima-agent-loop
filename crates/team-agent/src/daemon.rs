@@ -45,7 +45,8 @@ pub fn role_enabled(cfg: &TeamConfig, name: &str) -> bool {
 /// The real context for one cycle (GitHub via gh, Claude via the CLI).
 pub fn context(cfg: TeamConfig, paths: &Paths, login: &str, heartbeat: Arc<Heartbeat>, role: &str) -> Ctx {
     let inactivity = Duration::from_secs(cfg.budgets.inactivity_minutes.max(1) * 60);
-    let llm = ClaudeCli::new(&paths.state(), paths.logs().join(role), inactivity, Some(heartbeat.clone()));
+    let mut llm = ClaudeCli::new(&paths.state(), paths.logs().join(role), inactivity, Some(heartbeat.clone()));
+    llm.role = role.to_string();
     Ctx {
         machine: cfg.machine.clone(),
         cfg,
@@ -88,6 +89,7 @@ pub fn run(paths: Paths) -> ! {
         Ok(t) => crate::log::info(&format!("python-dev-tools: {}", t.dir)),
         Err(e) => crate::log::warn(&format!("python-dev-tools nicht verfügbar ({e}) — die Prompts verweisen trotzdem darauf")),
     }
+    crate::chat::spawn_worker(paths.clone());
     let limit: UsageLimit = Arc::new(Mutex::new(None));
     let threads: Vec<_> = all_roles()
         .into_iter()

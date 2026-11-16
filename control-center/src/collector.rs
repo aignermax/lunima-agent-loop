@@ -1,4 +1,7 @@
-//! Background worker: keeps the snapshot fresh and executes user actions off the UI thread.
+//! Background workers: one keeps the file-based part of the snapshot fresh and executes
+//! user actions off the UI thread; a second one runs the slow probes (GitHub, tool
+//! versions, the scheduled task). They are separate so a click never waits seconds for a
+//! probe that happens to be running.
 
 use crate::core::agent_files;
 use crate::core::logs::{self, PassCache};
@@ -19,12 +22,11 @@ const SLOW: Duration = Duration::from_secs(90);
 const PASSES_SHOWN: usize = 40;
 const HISTORY_SHOWN: usize = 60;
 const TOML_REFRESH: Duration = Duration::from_secs(600);
+const CHAT_SHOWN: usize = 60;
 
 #[derive(Debug, Clone)]
 pub enum Action {
     RefreshAll,
-    /// settings page: everything except the repository list
-    SaveConfig(Box<TeamConfig>),
     /// projects page: only the repository list
     SaveRepos(Vec<team_core::config::RepoConfig>),
     /// import legacy settings (.env / agent-loop.json) and write team.toml
@@ -33,6 +35,10 @@ pub enum Action {
     /// Back to the built-in prompt: remove the override file.
     DeletePrompt(PathBuf),
     SetRolePaused(String, bool),
+    /// one setting of team.toml by dotted path (`roles.coder`), saved at once
+    SetSetting(String, String),
+    /// Max writes to a role (team page); the team agent's chat worker answers
+    SendChat(String, String),
     PauseAll(bool),
     Agent(Verb),
     SetAgentAutostart(bool),
@@ -49,7 +55,8 @@ impl Action {
     fn label(&self) -> String {
         match self {
             Action::Agent(v) => format!("Team-Agent {v:?}"),
-            Action::SaveConfig(_) => "Einstellungen speichern".into(),
+            Action::SetSetting(..) => "Einstellungen speichern".into(),
+            Action::SendChat(..) => "Nachricht senden".into(),
             Action::SaveRepos(_) => "Projekte speichern".into(),
             Action::CreateConfig => "Konfiguration anlegen".into(),
             other => format!("{other:?}").chars().take(40).collect(),
@@ -85,13 +92,21 @@ impl Handle {
     pub fn snapshot(&self) -> Snapshot {
         self.shared.snapshot.lock().expect("snapshot lock").clone()
     }
+
+    /// An action failed after `t`: a switch shown ahead of the file goes back at once.
+    pub fn failed_since(&self, t: Instant) -> bool {
+        self.shared.notice.lock().expect("notice lock").as_ref().is_some_and(|n| !n.ok && n.at > t)
+    }
 }
 
 /// Starts the worker thread. `on_change` is called after every update (repaint + tray).
 pub fn start(paths: Paths, on_change: Arc<dyn Fn() + Send + Sync>) -> Handle {
     let shared = Arc::new(Shared { snapshot: Mutex::new(Snapshot::empty(paths.clone())), notice: Mutex::new(None), busy: Mutex::new(None) });
     let (tx, rx) = mpsc::channel();
-    let worker = Worker { shared: shared.clone(), paths, cache: PassCache::default(), on_change };
+    let (slow_tx, slow_rx) = mpsc::channel();
+    let slow = SlowWorker { shared: shared.clone(), paths: paths.clone(), on_change: on_change.clone() };
+    std::thread::Builder::new().name("collector-slow".into()).spawn(move || slow.run(slow_rx)).expect("spawn slow collector");
+    let worker = Worker { shared: shared.clone(), paths, cache: PassCache::default(), on_change, slow: slow_tx };
     std::thread::Builder::new().name("collector".into()).spawn(move || worker.run(rx)).expect("spawn collector");
     Handle { shared, tx }
 }
@@ -101,21 +116,22 @@ struct Worker {
     paths: Paths,
     cache: PassCache,
     on_change: Arc<dyn Fn() + Send + Sync>,
+    /// asks the slow worker for a fresh round (after an action)
+    slow: Sender<()>,
 }
 
 impl Worker {
     fn run(mut self, rx: Receiver<Action>) {
-        let mut last_slow: Option<Instant> = None;
+        // the slow probes read the configuration from the snapshot: their first round has to
+        // wait for the first file refresh, or it judges an empty snapshot for 90 s
+        self.refresh_fast();
+        let _ = self.slow.send(());
         loop {
             self.refresh_fast();
-            if last_slow.is_none_or(|t| t.elapsed() >= SLOW) {
-                self.refresh_slow();
-                last_slow = Some(Instant::now());
-            }
             match rx.recv_timeout(FAST) {
                 Ok(action) => {
                     self.execute(action);
-                    last_slow = None;
+                    let _ = self.slow.send(());
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
@@ -148,10 +164,12 @@ impl Worker {
             agent_files::agent_running(&state),
         );
         let ux = team_core::state::UxState::load(&state);
+        let chats = load_chats(&self.paths);
         let discovery = crate::core::discovery::load(&state, config.as_ref().ok());
         self.update(|s| {
             (s.heartbeats, s.pauses, s.history, s.discovered, s.po, s.agent_running) = fresh;
             s.ux = ux;
+            s.chats = chats;
             s.discovery = discovery;
             s.config = config;
             s.config_missing = missing;
@@ -162,7 +180,48 @@ impl Worker {
         });
     }
 
-    fn refresh_slow(&mut self) {
+
+    /// The scheduled task's state right after a change to it, so the switch and the next
+    /// action don't wait for the slow round.
+    fn refresh_service(&self) {
+        let service = agent_service::query();
+        self.update(|s| s.service = Some(service));
+    }
+}
+
+struct SlowWorker {
+    shared: Arc<Shared>,
+    paths: Paths,
+    on_change: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl SlowWorker {
+    /// After the first file refresh, then every `SLOW` and right after each action
+    /// (several requests in a row: one round).
+    fn run(self, rx: Receiver<()>) {
+        if rx.recv().is_err() {
+            return;
+        }
+        loop {
+            self.refresh_slow();
+            match rx.recv_timeout(SLOW) {
+                Ok(()) => while rx.try_recv().is_ok() {},
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    }
+
+    fn snap(&self) -> Snapshot {
+        self.shared.snapshot.lock().expect("snapshot lock").clone()
+    }
+
+    fn update(&self, f: impl FnOnce(&mut Snapshot)) {
+        f(&mut self.shared.snapshot.lock().expect("snapshot lock"));
+        (self.on_change)();
+    }
+
+    fn refresh_slow(&self) {
         let snap = self.snap();
         let service = Some(agent_service::query());
         let setup = crate::core::setup::evaluate(&probes::System, !snap.config_missing);
@@ -192,7 +251,9 @@ impl Worker {
             s.slow_refreshed = Some(Local::now());
         });
     }
+}
 
+impl Worker {
     fn execute(&mut self, action: Action) {
         *self.shared.busy.lock().expect("busy lock") = Some(action.label());
         (self.on_change)();
@@ -211,12 +272,6 @@ impl Worker {
         let exe = || agent_service::find_exe().ok_or_else(|| "lunima-team-agent nicht gefunden".to_string());
         match action {
             Action::RefreshAll => Ok("Aktualisiert".into()),
-            Action::SaveConfig(cfg) => {
-                // repos may have changed on disk meanwhile (Projects page, another tool)
-                let current = TeamConfig::load(&self.paths.config())?;
-                let cfg = (**cfg).clone().with_repos_of(&current);
-                cfg.validate().and_then(|_| cfg.save(&self.paths.config())).map(|_| "Gespeichert — gilt ab dem nächsten Zyklus jeder Rolle".into())
-            }
             Action::SaveRepos(repos) => {
                 let mut cfg = TeamConfig::load(&self.paths.config())?;
                 cfg.repos = repos.clone();
@@ -229,6 +284,22 @@ impl Worker {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("Eingebaute Regeln sind bereits aktiv".into()),
                 Err(e) => Err(e.to_string()),
             },
+            Action::SetSetting(path, value) => {
+                let mut cfg = TeamConfig::load(&self.paths.config())?.with_setting(path, value)?;
+                // a product owner without a repository would idle: take the only project
+                if path == "roles.product_owner" && cfg.roles.product_owner && cfg.product_owner.repo.is_empty() {
+                    if let [only] = cfg.repos.as_slice() {
+                        cfg.product_owner.repo = only.name.clone();
+                    }
+                }
+                cfg.save(&self.paths.config())?;
+                Ok(setting_text(path, value))
+            }
+            Action::SendChat(role, text) => {
+                let msg = team_core::chat::Message::new(team_core::chat::MAX, role, team_core::chat::Kind::Chat, text);
+                team_core::chat::post(&self.paths, &msg)?;
+                Ok(if self.snap().agent_running { format!("An {} gesendet", role_label(role)) } else { format!("An {} gesendet — die Antwort kommt, sobald der Team-Agent läuft", role_label(role)) })
+            }
             Action::SetRolePaused(role, paused) => {
                 agent_files::set_pause(&state, role, paused.then_some("Control Center"))?;
                 Ok(format!("{} {}", role_label(role), if *paused { "pausiert (ab dem nächsten Zyklus)" } else { "läuft wieder" }))
@@ -240,8 +311,12 @@ impl Worker {
                 Ok(if *paused { "Alle Rollen pausiert (laufende Arbeit wird noch beendet)" } else { "Alle Rollen laufen wieder" }.into())
             }
             Action::Agent(verb) => {
-                let info = self.snap().service.and_then(|s| s.ok());
-                agent_service::control(*verb, &exe()?, info.as_ref(), &state)?;
+                // live, not from the snapshot: the slow round may not have seen the last
+                // autostart change yet, and a stale "managed" stops the agent for good
+                let info = agent_service::query().ok();
+                let result = agent_service::control(*verb, &exe()?, info.as_ref(), &state);
+                self.refresh_service();
+                result?;
                 Ok(match verb {
                     Verb::Start => "Team-Agent gestartet",
                     Verb::Stop => "Team-Agent gestoppt",
@@ -250,7 +325,9 @@ impl Worker {
                 .into())
             }
             Action::SetAgentAutostart(on) => {
-                agent_service::set_autostart(*on, &exe()?)?;
+                let result = agent_service::set_autostart(*on, &exe()?);
+                self.refresh_service();
+                result?;
                 Ok(if *on { "Team-Agent startet ab jetzt mit der Anmeldung" } else { "Autostart des Team-Agents aus" }.into())
             }
             Action::SetAutostart(on) => autostart::set_enabled(*on).map(|_| if *on { "Control Center startet mit der Anmeldung" } else { "Autostart aus" }.into()),
@@ -263,6 +340,25 @@ impl Worker {
             }
             Action::RunOnce(role) => probes::open_terminal(&agent_service::once_command(&exe()?, role)).map(|_| format!("{} läuft im Terminal", role_label(role))),
         }
+    }
+}
+
+fn load_chats(paths: &Paths) -> std::collections::BTreeMap<String, crate::core::snapshot::ChatView> {
+    use team_core::chat;
+    chat::ROLES
+        .iter()
+        .map(|(role, _)| {
+            let all = chat::read(paths, role);
+            let view = crate::core::snapshot::ChatView { unread: chat::unread_for_max(&all, role), busy: chat::is_busy(paths, role), messages: all[all.len().saturating_sub(CHAT_SHOWN)..].to_vec() };
+            (role.to_string(), view)
+        })
+        .collect()
+}
+
+fn setting_text(path: &str, value: &str) -> String {
+    match path.strip_prefix("roles.") {
+        Some(role) => format!("{} {}", role_label(&role.replace('_', "-")), if value == "true" { "eingeschaltet" } else { "ausgeschaltet" }),
+        None => "Gespeichert — gilt ab dem nächsten Zyklus".into(),
     }
 }
 

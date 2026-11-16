@@ -123,7 +123,12 @@ pub fn sync(handle: &Handle) {
     let snap = handle.snapshot();
     let h = health::evaluate(&snap, Local::now());
     let paused = snap.all_paused();
-    let tooltip = format!("Lunima Team — {}{}", h.headline, if h.subline.is_empty() { String::new() } else { format!("
+    let questions = match snap.unread_questions() {
+        0 => String::new(),
+        1 => "\n1 Frage vom Team wartet auf dich".into(),
+        n => format!("\n{n} Fragen vom Team warten auf dich"),
+    };
+    let tooltip = format!("Lunima Team — {}{}{questions}", h.headline, if h.subline.is_empty() { String::new() } else { format!("
 {}", h.subline) });
     TRAY.with(|t| {
         let mut t = t.borrow_mut();

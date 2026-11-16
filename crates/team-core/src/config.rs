@@ -218,7 +218,7 @@ impl Default for Budgets {
 }
 
 /// Memory guard (`crate::mem`): 0 = automatic (kill floor 10 % of RAM within 1–4 GB,
-/// start floor twice that).
+/// start floor that plus at most 2 GB headroom).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Resources {
@@ -457,16 +457,11 @@ impl TeamConfig {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let tmp = path.with_extension("toml.tmp");
+        // one temp file per process: the Control Center and a role's `config set` may save
+        // at the same moment, and a shared name would let one rename the other's half
+        let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
         std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, path).map_err(|e| e.to_string())
-    }
-
-    /// Applies settings edited elsewhere onto the file's current content: everything but
-    /// the repository list (the Projects page owns that).
-    pub fn with_repos_of(mut self, current: &TeamConfig) -> Self {
-        self.repos = current.repos.clone();
-        self
     }
 
     pub fn repo(&self, name: &str) -> Option<&RepoConfig> {
@@ -521,6 +516,46 @@ impl TeamConfig {
             return Err("poll_seconds muss größer als 0 sein.".into());
         }
         Ok(())
+    }
+}
+
+/// Sets one existing setting addressed by a dotted path (`roles.coder`,
+/// `budgets.max_turns_regular`) from text, parsed by the type the setting already has.
+/// `label` names the setting in error messages. The repository list is not a setting.
+pub fn set_value(root: &mut toml::Value, path: &str, text: &str, label: &str) -> Result<(), String> {
+    let unknown = || format!("{label}: unbekannte Einstellung");
+    let (parents, key) = path.rsplit_once('.').map(|(p, k)| (Some(p), k)).unwrap_or((None, path));
+    let table = match parents {
+        Some(p) => p.split('.').try_fold(&mut *root, |v, k| v.get_mut(k)),
+        None => Some(&mut *root),
+    }
+    .and_then(toml::Value::as_table_mut)
+    .ok_or_else(unknown)?;
+    let old = table.get(key).ok_or_else(unknown)?;
+    let not_a_number = || format!("{label}: „{text}“ ist keine Zahl");
+    let new = match old {
+        toml::Value::Integer(_) => toml::Value::Integer(text.trim().parse::<i64>().ok().filter(|n| *n >= 0).ok_or_else(not_a_number)?),
+        toml::Value::Float(_) => toml::Value::Float(text.trim().replace(',', ".").parse::<f64>().ok().filter(|x| x.is_finite() && *x >= 0.0).ok_or_else(not_a_number)?),
+        toml::Value::Boolean(_) => match text.trim().to_lowercase().as_str() {
+            "true" | "on" | "an" | "1" | "ja" | "yes" => toml::Value::Boolean(true),
+            "false" | "off" | "aus" | "0" | "nein" | "no" => toml::Value::Boolean(false),
+            _ => return Err(format!("{label}: „{text}“ — true oder false erwartet")),
+        },
+        toml::Value::String(_) => toml::Value::String(text.trim().to_string()),
+        _ => return Err(format!("{label}: lässt sich nicht als einzelner Wert setzen")),
+    };
+    table.insert(key.to_string(), new);
+    Ok(())
+}
+
+impl TeamConfig {
+    /// This configuration with one setting changed (see `set_value`), validated.
+    pub fn with_setting(&self, path: &str, text: &str) -> Result<TeamConfig, String> {
+        let mut root = toml::Value::try_from(self).map_err(|e| e.to_string())?;
+        set_value(&mut root, path, text, path)?;
+        let updated: TeamConfig = root.try_into().map_err(|e: toml::de::Error| e.to_string())?;
+        updated.validate()?;
+        Ok(updated)
     }
 }
 

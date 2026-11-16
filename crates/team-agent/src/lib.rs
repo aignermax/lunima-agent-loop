@@ -2,6 +2,7 @@
 //! they use, and the daemon that runs them. `main.rs` is the command-line front end.
 
 pub mod agent_toml;
+pub mod chat;
 pub mod claim;
 pub mod coder;
 pub mod ctx;

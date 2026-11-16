@@ -40,6 +40,24 @@ const PAGES: &[(Page, &str, &str)] = &[
 
 const NOTICE_SECONDS: u64 = 6;
 
+/// Window size on first start and the smallest one the layout works with (points).
+pub const DEFAULT_SIZE: [f32; 2] = [1240.0, 820.0];
+pub const MIN_SIZE: [f32; 2] = [900.0, 600.0];
+
+/// eframe restores the size it saved last. Saved while the window was minimised, that is
+/// 0×0, which eframe raises only to 64×64 — an unreadable window that the minimum size
+/// doesn't fix, because Windows applies it only while the user drags the border.
+/// Returns true once it has looked: only the first frame with a known, non-minimised size
+/// counts, so a window manager that refuses the size can't make it resend every frame.
+fn fix_tiny_window(ctx: &egui::Context) -> bool {
+    let (rect, minimized) = ctx.input(|i| (i.viewport().inner_rect, i.viewport().minimized));
+    let Some(rect) = rect.filter(|_| minimized != Some(true)) else { return false };
+    if rect.width() < MIN_SIZE[0] - 1.0 || rect.height() < MIN_SIZE[1] - 1.0 {
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(DEFAULT_SIZE[0], DEFAULT_SIZE[1])));
+    }
+    true
+}
+
 impl Page {
     /// `--page overview|team|projects|activity|github|discovery|settings|rules|logs|setup`
     pub fn from_arg(name: &str) -> Option<Self> {
@@ -59,6 +77,8 @@ pub struct App {
     rules: RulesPage,
     logs: LogsPage,
     screenshot: Option<crate::screenshot::Screenshot>,
+    /// the restored window size was checked (`fix_tiny_window`)
+    window_checked: bool,
 }
 
 impl App {
@@ -68,7 +88,7 @@ impl App {
         if screenshot.is_none() {
             tray::install(handle.clone());
         }
-        Self { handle, page, activity: ActivityPage::default(), team: TeamPage, projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default(), screenshot }
+        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default(), screenshot, window_checked: false }
     }
 
     fn sidebar(&mut self, ctx: &egui::Context, s: &Snapshot, h: &Health) {
@@ -83,9 +103,13 @@ impl App {
             ui.add_space(18.0);
             for (page, icon, label) in PAGES {
                 let selected = self.page == *page;
-                let text = RichText::new(format!("{icon}   {label}")).size(15.0).color(if selected { theme::TEXT } else { MUTED });
+                let badge = if *page == Page::Team && s.unread_questions() > 0 { format!("   ● {}", s.unread_questions()) } else { String::new() };
+                let text = RichText::new(format!("{icon}   {label}{badge}")).size(15.0).color(if selected { theme::TEXT } else { MUTED });
                 let button = egui::Button::new(text).fill(if selected { theme::tint(theme::ACCENT, 45) } else { egui::Color32::TRANSPARENT }).stroke(egui::Stroke::NONE).min_size(egui::vec2(ui.available_width(), 36.0));
                 if ui.add(button).clicked() {
+                    if self.page == Page::Settings && *page != Page::Settings {
+                        self.settings.flush(s, &self.handle);
+                    }
                     self.page = *page;
                 }
             }
@@ -130,8 +154,12 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // closing hides the window into the tray; a screenshot run has no tray, so it quits
         if self.screenshot.is_none() && ctx.input(|i| i.viewport().close_requested()) {
+            self.settings.flush(&self.handle.snapshot(), &self.handle);
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             win::hide_main();
+        }
+        if !self.window_checked {
+            self.window_checked = fix_tiny_window(ctx);
         }
         let s = self.handle.snapshot();
         let h = health::evaluate(&s, Local::now());
@@ -139,7 +167,10 @@ impl eframe::App for App {
         self.sidebar(ctx, &s, &h);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::symmetric(28, 22))).show(ctx, |ui| {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                ui.set_max_width(ui.available_width().min(1080.0));
+                // forms and lists read best at a limited width; the Team page's two columns of
+                // role cards with chats use whatever the window offers
+                let max = if self.page == Page::Team { f32::INFINITY } else { 1080.0 };
+                ui.set_max_width(ui.available_width().min(max));
                 match self.page {
                     Page::Overview => {
                         if let Some(target) = overview::show(ui, &s, &h, &self.handle) {

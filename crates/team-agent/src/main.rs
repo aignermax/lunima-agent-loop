@@ -8,6 +8,8 @@
 //!   lunima-team-agent experiment publish <repo clone> <slug> --approved-by <name> --contact <address> [--goatcounter <code>]
 //!                                         the maintainer's step that makes an experiment page public (writes files only)
 //!   lunima-team-agent experiment preview <repo clone> <out dir>
+//!   lunima-team-agent chat say|note|ask|remember|read …   team chat (used by the roles' sessions)
+//!   lunima-team-agent config set <path> <value> | add-repo | remove-repo | show
 
 use std::path::PathBuf;
 use team_core::config::TeamConfig;
@@ -28,16 +30,36 @@ fn main() {
         Some("run") => run(),
         Some("once") => once(args.get(1).map(String::as_str).unwrap_or("")),
         Some("experiment") => experiment(&args[1..]),
+        Some("chat") => team_cmd(|p| team_agent::chat::cli(p, &args[1..])),
+        Some("config") => team_cmd(|p| team_agent::chat::config_cli(&p.config(), &args[1..])),
         Some("version" | "--version" | "-V") => {
             println!("lunima-team-agent {}", env!("CARGO_PKG_VERSION"));
             0
         }
         _ => {
-            eprintln!("Verwendung: lunima-team-agent <init|status|run|once <rolle>|experiment publish|preview …|version>");
+            eprintln!("Verwendung: lunima-team-agent <init|status|run|once <rolle>|chat …|config …|experiment publish|preview …|version>");
             2
         }
     };
     std::process::exit(code);
+}
+
+/// Runs a team command (`chat`, `config`): the result on stdout, an error on stderr.
+fn team_cmd(f: impl FnOnce(&Paths) -> Result<String, String>) -> i32 {
+    let Some(p) = paths() else {
+        eprintln!("Kein Datenordner bestimmbar (LOCALAPPDATA/HOME fehlt) — LUNIMA_TEAM_HOME setzen.");
+        return 1;
+    };
+    match f(&p) {
+        Ok(out) => {
+            println!("{out}");
+            0
+        }
+        Err(e) => {
+            eprintln!("{e}");
+            1
+        }
+    }
 }
 
 fn paths() -> Option<Paths> {
