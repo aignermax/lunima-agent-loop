@@ -52,6 +52,8 @@ pub struct ClaudeCli {
     pub logs_dir: PathBuf,
     pub inactivity: Duration,
     pub heartbeat: Option<Arc<Heartbeat>>,
+    /// the role whose sessions these are (`LUNIMA_ROLE` in their environment)
+    pub role: String,
 }
 
 impl ClaudeCli {
@@ -61,7 +63,7 @@ impl ClaudeCli {
         if std::fs::read_to_string(&settings_file).ok().as_deref() != Some(claude::HOOK_SETTINGS) {
             let _ = team_core::state::write_atomic(&settings_file, claude::HOOK_SETTINGS.as_bytes());
         }
-        Self { settings_file, logs_dir, inactivity, heartbeat }
+        Self { settings_file, logs_dir, inactivity, heartbeat, role: String::new() }
     }
 }
 
@@ -79,7 +81,13 @@ impl Llm for ClaudeCli {
             cwd: job.cwd.clone(),
             model: job.model.clone(),
             max_turns: job.max_turns,
-            env: job.env.clone(),
+            env: {
+                let mut env = job.env.clone();
+                if !self.role.is_empty() {
+                    env.set.insert(team_core::chat::ENV_ROLE.into(), self.role.clone());
+                }
+                env
+            },
             settings_file: Some(self.settings_file.clone()),
             log_file: Some(log_file),
             // long foreground commands are allowed up to the hard limit

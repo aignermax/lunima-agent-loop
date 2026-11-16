@@ -48,13 +48,17 @@ impl SettingsPage {
             ui.label(RichText::new(e).color(theme::ERROR));
             ui.add_space(6.0);
         }
+        if !self.edits.is_empty() {
+            ui.label(RichText::new(format!("{} Feld(er) noch nicht gespeichert — Enter drücken oder das Feld verlassen", self.edits.len())).color(theme::WARN));
+            ui.add_space(6.0);
+        }
         let mut groups: Vec<&str> = Vec::new();
         for f in FIELDS.iter().filter(|f| f.group != ROLES_GROUP) {
             if !groups.contains(&f.group) {
                 groups.push(f.group);
             }
         }
-        let mut save: Option<&'static str> = None;
+        let mut save: Vec<&'static str> = Vec::new();
         for group in groups {
             card(ui, Some(group), |ui| {
                 egui::Grid::new(group).num_columns(2).spacing([24.0, 10.0]).min_col_width(210.0).show(ui, |ui| {
@@ -72,7 +76,7 @@ impl SettingsPage {
                             self.edits.insert(spec.path, text);
                         }
                         if done && self.edits.contains_key(spec.path) {
-                            save = Some(spec.path);
+                            save.push(spec.path);
                         }
                         ui.end_row();
                     }
@@ -80,8 +84,19 @@ impl SettingsPage {
             });
             ui.add_space(10.0);
         }
-        if let Some(path) = save {
+        for path in save {
             self.save(cfg, path, handle);
+        }
+    }
+
+    /// Saves what is still being typed — called when the page is left, where a text field
+    /// never gets its "focus lost".
+    pub fn flush(&mut self, s: &Snapshot, handle: &Handle) {
+        if let Some(cfg) = s.cfg() {
+            let paths: Vec<&'static str> = self.edits.keys().copied().collect();
+            for path in paths {
+                self.save(cfg, path, handle);
+            }
         }
     }
 
@@ -92,10 +107,12 @@ impl SettingsPage {
             self.edits.remove(path);
             return;
         }
-        let one = BTreeMap::from([(path, text)]);
+        // checked here for an immediate message, then saved as this one change onto the
+        // file's current content: the roles may have changed other settings meanwhile
+        let one = BTreeMap::from([(path, text.clone())]);
         match settings_model::apply(cfg, &one) {
-            Ok(updated) => {
-                handle.send(Action::SaveConfig(Box::new(updated)));
+            Ok(_) => {
+                handle.send(Action::SetSetting(path.to_string(), text));
                 self.edits.remove(path);
                 self.error = None;
             }

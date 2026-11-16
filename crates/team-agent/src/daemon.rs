@@ -45,7 +45,8 @@ pub fn role_enabled(cfg: &TeamConfig, name: &str) -> bool {
 /// The real context for one cycle (GitHub via gh, Claude via the CLI).
 pub fn context(cfg: TeamConfig, paths: &Paths, login: &str, heartbeat: Arc<Heartbeat>, role: &str) -> Ctx {
     let inactivity = Duration::from_secs(cfg.budgets.inactivity_minutes.max(1) * 60);
-    let llm = ClaudeCli::new(&paths.state(), paths.logs().join(role), inactivity, Some(heartbeat.clone()));
+    let mut llm = ClaudeCli::new(&paths.state(), paths.logs().join(role), inactivity, Some(heartbeat.clone()));
+    llm.role = role.to_string();
     Ctx {
         machine: cfg.machine.clone(),
         cfg,

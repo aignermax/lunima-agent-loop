@@ -90,22 +90,27 @@ team/chat/<role>.busy    the role is composing an answer
 team/memory/<role>.md    standing instructions — appended to every prompt of the role
 ```
 
-- **Answers** come from the daemon's chat worker (`chat.rs`): for each unanswered message
-  from Max it starts a separate Claude session with the role's identity, live status
-  (switch, pause, heartbeat, its log lines), memory, the last 30 messages and the commands
-  below. One conversation per role at a time, all roles in parallel, independent of the
-  role's work cycle — a long build never blocks a chat and a chat never touches a worktree.
-  Only Max's messages are answered automatically, so notes between roles cannot loop.
-- **Commands** for the roles' sessions (the prompts name the binary's full path):
-  `chat ask --from <r> --to <r> <q>` (waits for the answer; nested asks stop at depth 2),
-  `chat note`, `chat say --from <r> [--question]` (to Max), `chat remember --role <r>`,
-  `chat read --role <r>`, `config set <dotted.path> <value>`, `config add-repo|remove-repo`,
-  `config show`. `config set` parses by the setting's type and validates like the
-  Settings page.
-- **Memory and notes reach the work**: `Ctx::render` appends the role's memory, the notes
-  teammates left in the last 14 days and the commands to every prompt of that role
-  (coder, reviewer, QA fix → coder; QA review → qa; PO; PR feedback; discovery stages get
-  memory and notes but no commands — they run sandboxed without a shell).
+- **Answers** come from the daemon's chat worker (`chat.rs`): for Max's latest unanswered
+  message and for every unanswered ask from a teammate it starts a separate Claude session
+  with the role's identity, live status (switch, pause, heartbeat, its log lines), memory,
+  the last 30 messages and the commands below. One conversation per role at a time, at
+  most three at once, independent of the role's work cycle: a long build never blocks a
+  chat and a chat never touches a worktree or starts a build. A message counts as answered
+  only by a reply naming it (`reply_to`); notes get no answer, so roles cannot loop.
+- **Commands** for the roles' sessions (the agent's folder is on every session's PATH, texts
+  in single quotes): `chat ask` (posted for the worker; waits up to 90 s, a later answer
+  shows up in the asker's next prompt; asks nest at most 2 deep), `chat note`,
+  `chat say [--question]` (to Max), `chat read`, `chat remember` (only in the chat with
+  Max and only for the role itself — memory is followed in every prompt, so text a work
+  session read in an issue must not get there), `config set <dotted.path> <value>`,
+  `config add-repo|remove-repo|show`. `config set` parses by the setting's type and
+  validates like the Settings page; every save writes a per-process temp file.
+- **Memory and notes reach the work**: `Ctx::render` adds the role's memory, the notes and
+  answers teammates left in the last 14 days and the commands to every prompt of that role
+  (coder, QA fix → coder; PO; PR feedback). The read-only reviewers (`reviewer`,
+  `qa-review`) get memory and notes in front of the prompt, so their verdict block stays
+  last; discovery stages get memory and notes but no commands (sandboxed, no shell). The
+  nightly UX tester does not read memory.
 - Escalation: a role asks its product owner first and Max only when the PO is off or can't
   decide; it carries on with the rest of its work instead of waiting.
 

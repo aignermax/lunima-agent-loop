@@ -24,8 +24,6 @@ const CHAT_SHOWN: usize = 60;
 #[derive(Debug, Clone)]
 pub enum Action {
     RefreshAll,
-    /// settings page: everything except the repository list
-    SaveConfig(Box<TeamConfig>),
     /// projects page: only the repository list
     SaveRepos(Vec<team_core::config::RepoConfig>),
     /// import legacy settings (.env / agent-loop.json) and write team.toml
@@ -54,7 +52,7 @@ impl Action {
     fn label(&self) -> String {
         match self {
             Action::Agent(v) => format!("Team-Agent {v:?}"),
-            Action::SaveConfig(_) | Action::SetSetting(..) => "Einstellungen speichern".into(),
+            Action::SetSetting(..) => "Einstellungen speichern".into(),
             Action::SendChat(..) => "Nachricht senden".into(),
             Action::SaveRepos(_) => "Projekte speichern".into(),
             Action::CreateConfig => "Konfiguration anlegen".into(),
@@ -219,12 +217,6 @@ impl Worker {
         let exe = || agent_service::find_exe().ok_or_else(|| "lunima-team-agent nicht gefunden".to_string());
         match action {
             Action::RefreshAll => Ok("Aktualisiert".into()),
-            Action::SaveConfig(cfg) => {
-                // repos may have changed on disk meanwhile (Projects page, another tool)
-                let current = TeamConfig::load(&self.paths.config())?;
-                let cfg = (**cfg).clone().with_repos_of(&current);
-                cfg.validate().and_then(|_| cfg.save(&self.paths.config())).map(|_| "Gespeichert — gilt ab dem nächsten Zyklus jeder Rolle".into())
-            }
             Action::SaveRepos(repos) => {
                 let mut cfg = TeamConfig::load(&self.paths.config())?;
                 cfg.repos = repos.clone();

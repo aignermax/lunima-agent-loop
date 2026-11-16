@@ -457,16 +457,11 @@ impl TeamConfig {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         }
-        let tmp = path.with_extension("toml.tmp");
+        // one temp file per process: the Control Center and a role's `config set` may save
+        // at the same moment, and a shared name would let one rename the other's half
+        let tmp = path.with_extension(format!("toml.{}.tmp", std::process::id()));
         std::fs::write(&tmp, text).map_err(|e| e.to_string())?;
         std::fs::rename(&tmp, path).map_err(|e| e.to_string())
-    }
-
-    /// Applies settings edited elsewhere onto the file's current content: everything but
-    /// the repository list (the Projects page owns that).
-    pub fn with_repos_of(mut self, current: &TeamConfig) -> Self {
-        self.repos = current.repos.clone();
-        self
     }
 
     pub fn repo(&self, name: &str) -> Option<&RepoConfig> {

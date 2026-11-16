@@ -87,6 +87,9 @@ impl App {
                 let text = RichText::new(format!("{icon}   {label}{badge}")).size(15.0).color(if selected { theme::TEXT } else { MUTED });
                 let button = egui::Button::new(text).fill(if selected { theme::tint(theme::ACCENT, 45) } else { egui::Color32::TRANSPARENT }).stroke(egui::Stroke::NONE).min_size(egui::vec2(ui.available_width(), 36.0));
                 if ui.add(button).clicked() {
+                    if self.page == Page::Settings && *page != Page::Settings {
+                        self.settings.flush(s, &self.handle);
+                    }
                     self.page = *page;
                 }
             }
@@ -130,6 +133,7 @@ fn footer(ui: &mut egui::Ui, s: &Snapshot, handle: &Handle) {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if ctx.input(|i| i.viewport().close_requested()) {
+            self.settings.flush(&self.handle.snapshot(), &self.handle);
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             win::hide_main();
         }
