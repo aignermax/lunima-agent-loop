@@ -1,4 +1,7 @@
-//! Background worker: keeps the snapshot fresh and executes user actions off the UI thread.
+//! Background workers: one keeps the file-based part of the snapshot fresh and executes
+//! user actions off the UI thread; a second one runs the slow probes (GitHub, tool
+//! versions, the scheduled task). They are separate so a click never waits seconds for a
+//! probe that happens to be running.
 
 use crate::core::agent_files;
 use crate::core::logs::{self, PassCache};
@@ -95,7 +98,10 @@ impl Handle {
 pub fn start(paths: Paths, on_change: Arc<dyn Fn() + Send + Sync>) -> Handle {
     let shared = Arc::new(Shared { snapshot: Mutex::new(Snapshot::empty(paths.clone())), notice: Mutex::new(None), busy: Mutex::new(None) });
     let (tx, rx) = mpsc::channel();
-    let worker = Worker { shared: shared.clone(), paths, cache: PassCache::default(), on_change };
+    let (slow_tx, slow_rx) = mpsc::channel();
+    let slow = SlowWorker { shared: shared.clone(), paths: paths.clone(), on_change: on_change.clone() };
+    std::thread::Builder::new().name("collector-slow".into()).spawn(move || slow.run(slow_rx)).expect("spawn slow collector");
+    let worker = Worker { shared: shared.clone(), paths, cache: PassCache::default(), on_change, slow: slow_tx };
     std::thread::Builder::new().name("collector".into()).spawn(move || worker.run(rx)).expect("spawn collector");
     Handle { shared, tx }
 }
@@ -105,21 +111,18 @@ struct Worker {
     paths: Paths,
     cache: PassCache,
     on_change: Arc<dyn Fn() + Send + Sync>,
+    /// asks the slow worker for a fresh round (after an action)
+    slow: Sender<()>,
 }
 
 impl Worker {
     fn run(mut self, rx: Receiver<Action>) {
-        let mut last_slow: Option<Instant> = None;
         loop {
             self.refresh_fast();
-            if last_slow.is_none_or(|t| t.elapsed() >= SLOW) {
-                self.refresh_slow();
-                last_slow = Some(Instant::now());
-            }
             match rx.recv_timeout(FAST) {
                 Ok(action) => {
                     self.execute(action);
-                    last_slow = None;
+                    let _ = self.slow.send(());
                 }
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return,
@@ -168,7 +171,37 @@ impl Worker {
         });
     }
 
-    fn refresh_slow(&mut self) {
+}
+
+struct SlowWorker {
+    shared: Arc<Shared>,
+    paths: Paths,
+    on_change: Arc<dyn Fn() + Send + Sync>,
+}
+
+impl SlowWorker {
+    /// Every `SLOW`, and right after each action (several requests in a row: one round).
+    fn run(self, rx: Receiver<()>) {
+        loop {
+            self.refresh_slow();
+            match rx.recv_timeout(SLOW) {
+                Ok(()) => while rx.try_recv().is_ok() {},
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return,
+            }
+        }
+    }
+
+    fn snap(&self) -> Snapshot {
+        self.shared.snapshot.lock().expect("snapshot lock").clone()
+    }
+
+    fn update(&self, f: impl FnOnce(&mut Snapshot)) {
+        f(&mut self.shared.snapshot.lock().expect("snapshot lock"));
+        (self.on_change)();
+    }
+
+    fn refresh_slow(&self) {
         let snap = self.snap();
         let service = Some(agent_service::query());
         let setup = crate::core::setup::evaluate(&probes::System, !snap.config_missing);
@@ -198,7 +231,9 @@ impl Worker {
             s.slow_refreshed = Some(Local::now());
         });
     }
+}
 
+impl Worker {
     fn execute(&mut self, action: Action) {
         *self.shared.busy.lock().expect("busy lock") = Some(action.label());
         (self.on_change)();

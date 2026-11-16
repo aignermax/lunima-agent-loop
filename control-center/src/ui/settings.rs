@@ -17,6 +17,9 @@ use team_core::config::TeamConfig;
 pub struct SettingsPage {
     /// Fields being typed in (path → text); saved when the field loses focus.
     edits: BTreeMap<&'static str, String>,
+    /// Values sent for saving but not yet read back from team.toml: shown meanwhile, so a
+    /// switch doesn't jump back for the moment the save takes.
+    sent: BTreeMap<&'static str, (String, std::time::Instant)>,
     error: Option<String>,
 }
 
@@ -69,7 +72,12 @@ impl SettingsPage {
                                 ui.label(RichText::new(spec.help).color(MUTED).size(11.5));
                             }
                         });
-                        let mut text = self.edits.get(spec.path).cloned().unwrap_or_else(|| settings_model::get(cfg, spec.path));
+                        let saved = settings_model::get(cfg, spec.path);
+                        if self.sent.get(spec.path).is_some_and(|(v, at)| *v == saved || at.elapsed() > SENT_FOR) {
+                            self.sent.remove(spec.path);
+                        }
+                        let shown = self.sent.get(spec.path).map_or(saved, |(v, _)| v.clone());
+                        let mut text = self.edits.get(spec.path).cloned().unwrap_or(shown);
                         let before = text.clone();
                         let done = field(ui, spec.kind, &mut text);
                         if text != before {
@@ -112,7 +120,8 @@ impl SettingsPage {
         let one = BTreeMap::from([(path, text.clone())]);
         match settings_model::apply(cfg, &one) {
             Ok(_) => {
-                handle.send(Action::SetSetting(path.to_string(), text));
+                handle.send(Action::SetSetting(path.to_string(), text.clone()));
+                self.sent.insert(path, (text, std::time::Instant::now()));
                 self.edits.remove(path);
                 self.error = None;
             }
@@ -120,6 +129,9 @@ impl SettingsPage {
         }
     }
 }
+
+/// After this the file wins again (a failed save shows its error as a toast).
+const SENT_FOR: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Roles are switched on the Team page; the form leaves them out.
 const ROLES_GROUP: &str = "Rollen";

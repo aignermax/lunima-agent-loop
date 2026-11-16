@@ -23,7 +23,13 @@ pub struct TeamPage {
     drafts: BTreeMap<&'static str, String>,
     /// roles whose chat is shown tall
     tall: BTreeSet<&'static str>,
+    /// switch positions clicked but not yet in team.toml: shown at once instead of the
+    /// switch jumping back until the save has gone through
+    wanted: BTreeMap<&'static str, (bool, std::time::Instant)>,
 }
+
+/// After this the file wins again (a save that failed shows its error as a toast).
+const WANTED_FOR: std::time::Duration = std::time::Duration::from_secs(15);
 
 const CHAT_HEIGHT: f32 = 230.0;
 const CHAT_HEIGHT_TALL: f32 = 620.0;
@@ -119,7 +125,12 @@ fn agent_card(ui: &mut Ui, s: &Snapshot, handle: &Handle) {
 impl TeamPage {
     fn role_card_for(&mut self, ui: &mut Ui, s: &Snapshot, handle: &Handle, role: &'static str, name: &str, cfg: &TeamConfig) {
         let (level, status) = role_status(s, role, Local::now());
-        let enabled = crate::core::team::role_enabled(cfg, role);
+        let saved = crate::core::team::role_enabled(cfg, role);
+        if self.wanted.get(role).is_some_and(|(on, at)| *on == saved || at.elapsed() > WANTED_FOR) {
+            self.wanted.remove(role);
+        }
+        let enabled = self.wanted.get(role).map_or(saved, |(on, _)| *on);
+        let mut clicked = None;
         let paused = s.pauses.contains_key(role);
         let empty = ChatView::default();
         let chat = s.chats.get(role).unwrap_or(&empty);
@@ -127,6 +138,7 @@ impl TeamPage {
             let mut on = enabled;
             if ui.add_enabled(s.cfg().is_some(), toggle(&mut on)).on_hover_text(if enabled { "Rolle ausschalten" } else { "Rolle einschalten" }).changed() {
                 handle.send(Action::SetSetting(format!("roles.{}", role.replace('-', "_")), on.to_string()));
+                clicked = Some(on);
             }
             ui.label(RichText::new(if enabled { "an" } else { "aus" }).color(MUTED).size(12.5));
             if enabled && s.agent_running {
@@ -142,11 +154,15 @@ impl TeamPage {
                 pill(ui, &format!("{} Frage{} an dich", chat.unread, if chat.unread == 1 { "" } else { "n" }), theme::WARN);
             }
         };
+        let status = if self.wanted.contains_key(role) { if enabled { "wird eingeschaltet …".to_string() } else { "wird ausgeschaltet …".to_string() } } else { status };
         role_card(ui, level, name, "", &status, right, |ui| {
             egui::CollapsingHeader::new(RichText::new("Details").size(12.5).color(MUTED)).id_salt(("details", role)).show(ui, |ui| details(ui, s, role, cfg));
             ui.add_space(4.0);
             self.chat(ui, s, handle, role, name, chat);
         });
+        if let Some(on) = clicked {
+            self.wanted.insert(role, (on, std::time::Instant::now()));
+        }
     }
 
     fn chat(&mut self, ui: &mut Ui, s: &Snapshot, handle: &Handle, role: &'static str, name: &str, chat: &ChatView) {
