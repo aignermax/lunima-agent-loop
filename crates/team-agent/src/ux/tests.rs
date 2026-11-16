@@ -35,6 +35,18 @@ fn night() -> DateTime<Local> {
     Local.from_local_datetime(&day.and_hms_opt(2, 30, 0).unwrap()).unwrap()
 }
 
+/// A recent night whose rotation (`plan::pick`) includes a journey with the sample GDS.
+/// `night()` alone follows the calendar, and on some days none of tonight's journeys
+/// needs the sample, so assertions about the staged sample path would fail by date.
+fn night_with_sample(w: &World) -> DateTime<Local> {
+    let ux = &w.ctx("A").cfg.ux_review;
+    let goals = plan::load_goals(&ux.goals_file).unwrap();
+    (0..30)
+        .map(|back| night() - Duration::days(back))
+        .find(|n| plan::pick(&goals, plan::window_day(*n, ux.hour), ux.goals_per_run).iter().any(|g| g.to_string().contains(plan::SAMPLE_GDS)))
+        .expect("the built-in rotation reaches a sample journey within 30 nights")
+}
+
 fn night_lock() -> String {
     format!("ux-{}", night().format("%Y%m%d"))
 }
@@ -113,7 +125,7 @@ impl World {
 fn complete_review_files_issues_and_publishes_the_report_for_every_machine() {
     let w = world();
     let a = w.ctx("A");
-    assert_eq!(w.reviewer(Tester::Complete, night()).cycle(&a), Ok(true));
+    assert_eq!(w.reviewer(Tester::Complete, night_with_sample(&w)).cycle(&a), Ok(true));
     let st = UxState::load(&a.paths.state()).unwrap();
     assert_eq!((st.last_result.as_str(), st.filed_issues.clone()), ("ok", vec![77]));
     assert!(st.last_ok_report.is_some() && st.last_ok_end.is_some());
@@ -127,7 +139,7 @@ fn complete_review_files_issues_and_publishes_the_report_for_every_machine() {
     let goals = std::fs::read_to_string(a.paths.state().join("ux").join("goals.json")).unwrap();
     assert!(!goals.contains("{SAMPLE_GDS}") && goals.contains("customer_context"));
     if cfg!(windows) {
-        assert!(goals.contains("%TEMP%") && !goals.contains("AppData"), "no user folder in goals");
+        assert!(goals.contains("%TEMP%") && !goals.contains("AppData"), "no user folder in goals: {goals}");
     }
     // a machine that never ran the review still gives its PO the report
     let section = po_section(&w.ctx("B"));
