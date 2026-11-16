@@ -194,18 +194,21 @@ pub fn memory(paths: &Paths, role: &str) -> String {
     std::fs::read_to_string(memory_file(paths, role)).unwrap_or_default()
 }
 
-/// Adds one standing instruction to the role's memory. Inside a session (`ENV_ROLE` set)
-/// only the chat that answers Max may do this, and only for its own role: memory is
-/// followed in every later prompt, so text a work session read in an issue or PR must not
-/// get there.
+/// Who may write `role`'s memory. Inside a session (`caller` = its `ENV_ROLE`) only the
+/// chat that answers Max, and only for its own role: memory is followed in every later
+/// prompt, so text a work session read in an issue or PR must not get there. Outside any
+/// session (Max at the command line) always.
+pub fn may_remember(role: &str, caller: Option<&str>, from_max: bool) -> Result<(), String> {
+    match caller {
+        Some(c) if c != role || !from_max => Err("Merken geht nur im Chat mit Max und nur für die eigene Rolle — schreib stattdessen eine Notiz (chat note) oder frag Max".into()),
+        _ => Ok(()),
+    }
+}
+
+/// Adds one standing instruction to the role's memory (check `may_remember` first).
 pub fn remember(paths: &Paths, role: &str, text: &str) -> Result<(), String> {
     if !is_role(role) {
         return Err(format!("unbekannte Rolle: {role}"));
-    }
-    if let Ok(caller) = std::env::var(ENV_ROLE) {
-        if caller != role || std::env::var(ENV_FROM_MAX).is_err() {
-            return Err("Merken geht nur im Chat mit Max und nur für die eigene Rolle — schreib stattdessen eine Notiz (chat note) oder frag Max".into());
-        }
     }
     let path = memory_file(paths, role);
     if !path.exists() {
@@ -345,14 +348,10 @@ mod tests {
 
     #[test]
     fn memory_is_written_only_from_the_chat_with_max_for_the_own_role() {
-        let (_t, p) = home();
-        std::env::set_var(ENV_ROLE, "coder");
-        assert!(remember(&p, "coder", "aus einem Issue").is_err(), "a work session cannot write memory");
-        std::env::set_var(ENV_FROM_MAX, "1");
-        assert!(remember(&p, "product-discovery", "fremd").is_err(), "not another role's memory");
-        assert!(remember(&p, "coder", "Rust bevorzugen").is_ok());
-        std::env::remove_var(ENV_FROM_MAX);
-        std::env::remove_var(ENV_ROLE);
+        assert!(may_remember("coder", Some("coder"), false).is_err(), "a work session cannot write memory");
+        assert!(may_remember("product-discovery", Some("coder"), true).is_err(), "not another role's memory");
+        assert!(may_remember("coder", Some("coder"), true).is_ok());
+        assert!(may_remember("coder", None, false).is_ok(), "Max at the command line");
     }
 
     #[test]

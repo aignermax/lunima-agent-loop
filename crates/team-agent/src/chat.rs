@@ -299,6 +299,15 @@ fn role_arg(a: &Args, name: &str) -> Result<String, String> {
     }
 }
 
+/// Hop count of a new ask from a session whose `ENV_HOPS` is `current`.
+fn ask_hops(current: Option<&str>) -> Result<u32, String> {
+    let hops = current.and_then(|d| d.parse::<u32>().ok()).unwrap_or(0) + 1;
+    if hops > MAX_HOPS {
+        return Err("zu viele verschachtelte Rückfragen — hinterlasse stattdessen eine Notiz (chat note)".into());
+    }
+    Ok(hops)
+}
+
 /// `lunima-team-agent chat …`
 pub fn cli(paths: &Paths, args: &[String]) -> Result<String, String> {
     let sub = args.first().map(String::as_str).unwrap_or("");
@@ -325,10 +334,7 @@ pub fn cli(paths: &Paths, args: &[String]) -> Result<String, String> {
             if from == to {
                 return Err("eine Rolle kann sich nicht selbst fragen".into());
             }
-            let hops = std::env::var(ENV_HOPS).ok().and_then(|d| d.parse::<u32>().ok()).unwrap_or(0) + 1;
-            if hops > MAX_HOPS {
-                return Err("zu viele verschachtelte Rückfragen — hinterlasse stattdessen eine Notiz (chat note)".into());
-            }
+            let hops = ask_hops(std::env::var(ENV_HOPS).ok().as_deref())?;
             let mut question = Message::new(&from, &to, Kind::Ask, &text);
             question.hops = hops;
             chat::post(paths, &question)?;
@@ -348,6 +354,7 @@ pub fn cli(paths: &Paths, args: &[String]) -> Result<String, String> {
         "remember" => {
             need_text()?;
             let role = role_arg(&a, "role")?;
+            chat::may_remember(&role, std::env::var(ENV_ROLE).ok().as_deref(), std::env::var(ENV_FROM_MAX).is_ok())?;
             chat::remember(paths, &role, &text)?;
             Ok(format!("Gemerkt in {}", chat::memory_file(paths, &role).display()))
         }
@@ -417,10 +424,8 @@ mod tests {
         assert_eq!(chat::read(&p, "product-owner")[0].text, "Richtung: eigener Chip");
         cli(&p, &s(&["say", "--from", "coder", "--question", "Rust oder C#?"])).unwrap();
         assert_eq!(chat::unread_for_max(&chat::read(&p, "coder"), "coder"), 1);
-        if std::env::var(ENV_ROLE).is_err() {
-            cli(&p, &s(&["remember", "--role", "coder", "Rust bevorzugen"])).unwrap();
-            assert!(chat::memory(&p, "coder").contains("Rust bevorzugen"));
-        }
+        chat::remember(&p, "coder", "Rust bevorzugen").unwrap();
+        assert!(chat::memory(&p, "coder").contains("Rust bevorzugen"));
         assert!(cli(&p, &s(&["note", "--from", "coder", "--to", "boss", "x"])).is_err());
         assert!(cli(&p, &s(&["say", "--from", "coder"])).unwrap_err().contains("Text fehlt"));
     }
@@ -432,10 +437,8 @@ mod tests {
         assert!(out.contains("noch nicht geantwortet"), "{out}");
         let po = chat::read(&p, "product-owner");
         assert_eq!(chat::pending(&po, "product-owner").unwrap().text, "Darf ich?", "the worker will answer it");
-        std::env::set_var(ENV_HOPS, MAX_HOPS.to_string());
-        let err = cli(&p, &s(&["ask", "--from", "product-owner", "--to", "qa", "Und?"])).unwrap_err();
-        std::env::remove_var(ENV_HOPS);
-        assert!(err.contains("verschachtelt"));
+        assert!(ask_hops(Some(&MAX_HOPS.to_string())).unwrap_err().contains("verschachtelt"));
+        assert_eq!(ask_hops(None), Ok(1));
     }
 
     #[test]
