@@ -53,7 +53,7 @@ fn working_text(hb: &Heartbeat, now: DateTime<Local>) -> String {
 /// Status line of a role: (level, text).
 pub fn role_status(s: &Snapshot, role: &str, now: DateTime<Local>) -> (Level, String) {
     if s.cfg().is_some_and(|c| !role_enabled(c, role)) {
-        return (Level::Info, "abgeschaltet (Einstellungen → Rollen)".into());
+        return (Level::Info, "ausgeschaltet — Schalter oben rechts, oder bitte die Rolle im Chat darum".into());
     }
     if !s.agent_running {
         return (Level::Error, "Team-Agent läuft nicht".into());

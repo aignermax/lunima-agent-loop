@@ -68,7 +68,7 @@ impl App {
         if screenshot.is_none() {
             tray::install(handle.clone());
         }
-        Self { handle, page, activity: ActivityPage::default(), team: TeamPage, projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default(), screenshot }
+        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default(), screenshot }
     }
 
     fn sidebar(&mut self, ctx: &egui::Context, s: &Snapshot, h: &Health) {
@@ -83,7 +83,8 @@ impl App {
             ui.add_space(18.0);
             for (page, icon, label) in PAGES {
                 let selected = self.page == *page;
-                let text = RichText::new(format!("{icon}   {label}")).size(15.0).color(if selected { theme::TEXT } else { MUTED });
+                let badge = if *page == Page::Team && s.unread_questions() > 0 { format!("   ● {}", s.unread_questions()) } else { String::new() };
+                let text = RichText::new(format!("{icon}   {label}{badge}")).size(15.0).color(if selected { theme::TEXT } else { MUTED });
                 let button = egui::Button::new(text).fill(if selected { theme::tint(theme::ACCENT, 45) } else { egui::Color32::TRANSPARENT }).stroke(egui::Stroke::NONE).min_size(egui::vec2(ui.available_width(), 36.0));
                 if ui.add(button).clicked() {
                     self.page = *page;

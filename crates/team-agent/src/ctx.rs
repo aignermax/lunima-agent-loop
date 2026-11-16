@@ -35,7 +35,11 @@ impl Ctx {
         if let Some(w) = warning {
             crate::log::warn(&format!("Prompt-Override {name}: {w} — Standardtext verwendet"));
         }
-        Ok(text)
+        // what Max told the role in the chat must reach its real work, not only the chat
+        let Some(role) = team_core::chat::role_of_prompt(name) else { return Ok(text) };
+        // discovery stages run sandboxed without a shell: memory yes, commands no
+        let exe = if role == "product-discovery" { None } else { crate::chat::agent_exe() };
+        Ok(text + &team_core::chat::prompt_section(&self.paths, role, exe.as_deref()))
     }
     pub fn logs(&self) -> PathBuf {
         self.paths.logs()

@@ -73,12 +73,41 @@ the agent's builds and test runs are the usual cause. `team_core::mem` therefore
 ```toml
 [resources]
 min_free_mb = 0     # 0 = automatic: 10 % of RAM, 1–4 GB
-start_free_mb = 0   # 0 = twice min_free_mb
+start_free_mb = 0   # 0 = min_free_mb + headroom (min_free_mb again, at most 2 GB)
 ```
 
 Free RAM is `MemAvailable` (Linux) or `GlobalMemoryStatusEx` (Windows); on other systems
 the guard is off. It reacts to the whole machine, so memory used by other programs also
 stops agent work; that is intended.
+
+## Team chat and memory
+
+Max talks to every role in the Control Center (Team page); the roles talk to each other.
+
+```
+team/chat/<role>.jsonl   messages (append-only; Control Center, daemon and CLI all write)
+team/chat/<role>.busy    the role is composing an answer
+team/memory/<role>.md    standing instructions — appended to every prompt of the role
+```
+
+- **Answers** come from the daemon's chat worker (`chat.rs`): for each unanswered message
+  from Max it starts a separate Claude session with the role's identity, live status
+  (switch, pause, heartbeat, its log lines), memory, the last 30 messages and the commands
+  below. One conversation per role at a time, all roles in parallel, independent of the
+  role's work cycle — a long build never blocks a chat and a chat never touches a worktree.
+  Only Max's messages are answered automatically, so notes between roles cannot loop.
+- **Commands** for the roles' sessions (the prompts name the binary's full path):
+  `chat ask --from <r> --to <r> <q>` (waits for the answer; nested asks stop at depth 2),
+  `chat note`, `chat say --from <r> [--question]` (to Max), `chat remember --role <r>`,
+  `chat read --role <r>`, `config set <dotted.path> <value>`, `config add-repo|remove-repo`,
+  `config show`. `config set` parses by the setting's type and validates like the
+  Settings page.
+- **Memory and notes reach the work**: `Ctx::render` appends the role's memory, the notes
+  teammates left in the last 14 days and the commands to every prompt of that role
+  (coder, reviewer, QA fix → coder; QA review → qa; PO; PR feedback; discovery stages get
+  memory and notes but no commands — they run sandboxed without a shell).
+- Escalation: a role asks its product owner first and Max only when the PO is off or can't
+  decide; it carries on with the rest of its work instead of waiting.
 
 ## Phases
 

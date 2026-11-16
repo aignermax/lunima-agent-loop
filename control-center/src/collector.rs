@@ -19,6 +19,7 @@ const SLOW: Duration = Duration::from_secs(90);
 const PASSES_SHOWN: usize = 40;
 const HISTORY_SHOWN: usize = 60;
 const TOML_REFRESH: Duration = Duration::from_secs(600);
+const CHAT_SHOWN: usize = 60;
 
 #[derive(Debug, Clone)]
 pub enum Action {
@@ -33,6 +34,10 @@ pub enum Action {
     /// Back to the built-in prompt: remove the override file.
     DeletePrompt(PathBuf),
     SetRolePaused(String, bool),
+    /// one setting of team.toml by dotted path (`roles.coder`), saved at once
+    SetSetting(String, String),
+    /// Max writes to a role (team page); the team agent's chat worker answers
+    SendChat(String, String),
     PauseAll(bool),
     Agent(Verb),
     SetAgentAutostart(bool),
@@ -49,7 +54,8 @@ impl Action {
     fn label(&self) -> String {
         match self {
             Action::Agent(v) => format!("Team-Agent {v:?}"),
-            Action::SaveConfig(_) => "Einstellungen speichern".into(),
+            Action::SaveConfig(_) | Action::SetSetting(..) => "Einstellungen speichern".into(),
+            Action::SendChat(..) => "Nachricht senden".into(),
             Action::SaveRepos(_) => "Projekte speichern".into(),
             Action::CreateConfig => "Konfiguration anlegen".into(),
             other => format!("{other:?}").chars().take(40).collect(),
@@ -148,10 +154,12 @@ impl Worker {
             agent_files::agent_running(&state),
         );
         let ux = team_core::state::UxState::load(&state);
+        let chats = load_chats(&self.paths);
         let discovery = crate::core::discovery::load(&state, config.as_ref().ok());
         self.update(|s| {
             (s.heartbeats, s.pauses, s.history, s.discovered, s.po, s.agent_running) = fresh;
             s.ux = ux;
+            s.chats = chats;
             s.discovery = discovery;
             s.config = config;
             s.config_missing = missing;
@@ -229,6 +237,22 @@ impl Worker {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok("Eingebaute Regeln sind bereits aktiv".into()),
                 Err(e) => Err(e.to_string()),
             },
+            Action::SetSetting(path, value) => {
+                let mut cfg = TeamConfig::load(&self.paths.config())?.with_setting(path, value)?;
+                // a product owner without a repository would idle: take the only project
+                if path == "roles.product_owner" && cfg.roles.product_owner && cfg.product_owner.repo.is_empty() {
+                    if let [only] = cfg.repos.as_slice() {
+                        cfg.product_owner.repo = only.name.clone();
+                    }
+                }
+                cfg.save(&self.paths.config())?;
+                Ok(setting_text(path, value))
+            }
+            Action::SendChat(role, text) => {
+                let msg = team_core::chat::Message::new(team_core::chat::MAX, role, team_core::chat::Kind::Chat, text);
+                team_core::chat::post(&self.paths, &msg)?;
+                Ok(if self.snap().agent_running { format!("An {} gesendet", role_label(role)) } else { format!("An {} gesendet — die Antwort kommt, sobald der Team-Agent läuft", role_label(role)) })
+            }
             Action::SetRolePaused(role, paused) => {
                 agent_files::set_pause(&state, role, paused.then_some("Control Center"))?;
                 Ok(format!("{} {}", role_label(role), if *paused { "pausiert (ab dem nächsten Zyklus)" } else { "läuft wieder" }))
@@ -263,6 +287,25 @@ impl Worker {
             }
             Action::RunOnce(role) => probes::open_terminal(&agent_service::once_command(&exe()?, role)).map(|_| format!("{} läuft im Terminal", role_label(role))),
         }
+    }
+}
+
+fn load_chats(paths: &Paths) -> std::collections::BTreeMap<String, crate::core::snapshot::ChatView> {
+    use team_core::chat;
+    chat::ROLES
+        .iter()
+        .map(|(role, _)| {
+            let all = chat::read(paths, role);
+            let view = crate::core::snapshot::ChatView { unread: chat::unread_for_max(&all, role), busy: chat::is_busy(paths, role), messages: all[all.len().saturating_sub(CHAT_SHOWN)..].to_vec() };
+            (role.to_string(), view)
+        })
+        .collect()
+}
+
+fn setting_text(path: &str, value: &str) -> String {
+    match path.strip_prefix("roles.") {
+        Some(role) => format!("{} {}", role_label(&role.replace('_', "-")), if value == "true" { "eingeschaltet" } else { "ausgeschaltet" }),
+        None => "Gespeichert — gilt ab dem nächsten Zyklus".into(),
     }
 }
 

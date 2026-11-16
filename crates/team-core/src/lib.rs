@@ -2,6 +2,7 @@
 //! configuration, external tools (gh, git, claude), prompts and the state files the
 //! Control Center reads. Native on Windows and Linux.
 
+pub mod chat;
 pub mod claude;
 pub mod config;
 pub mod gh;

@@ -95,3 +95,15 @@ fn product_discovery_defaults_and_validation() {
     let parsed: TeamConfig = toml::from_str("[roles]\nproduct_discovery = true\n[product_discovery]\nweekday = \"fri\"\n").unwrap();
     assert!(parsed.roles.product_discovery && parsed.product_discovery.weekday == "fri" && parsed.product_discovery.max_open_opportunities == 3);
 }
+
+#[test]
+fn one_setting_by_path() {
+    let c = TeamConfig::default();
+    assert!(c.with_setting("roles.product_owner", "an").unwrap().roles.product_owner);
+    assert_eq!(c.with_setting("budgets.max_turns_regular", " 42 ").unwrap().budgets.max_turns_regular, 42);
+    assert_eq!(c.with_setting("product_owner.repo", "aignermax/Lunima").unwrap().product_owner.repo, "aignermax/Lunima");
+    assert!(c.with_setting("roles.product_owner", "vielleicht").is_err());
+    assert!(c.with_setting("roles.nonsense", "true").unwrap_err().contains("unbekannt"));
+    assert!(c.with_setting("poll_seconds", "0").is_err(), "validated");
+    assert!(c.with_setting("repos", "x").is_err(), "the repository list is not a single value");
+}

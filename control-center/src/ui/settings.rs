@@ -1,7 +1,10 @@
 //! Settings: a form over team.toml plus system toggles (autostart of agent and app).
+//! Every change is saved on its own — a switch at once, a text field when it loses focus
+//! or on Enter — so there is no save button to hunt for. Roles are switched on the Team
+//! page, not here.
 
 use super::theme::{self, MUTED};
-use super::widgets::{card, muted, page_title, primary, secondary, toggle};
+use super::widgets::{card, muted, page_title, primary, toggle};
 use crate::collector::{Action, Handle};
 use crate::core::settings_model::{self, Kind, FIELDS};
 use crate::core::snapshot::Snapshot;
@@ -12,7 +15,7 @@ use team_core::config::TeamConfig;
 
 #[derive(Default)]
 pub struct SettingsPage {
-    /// Edit buffer (path → text). Empty = not editing, mirror the file.
+    /// Fields being typed in (path → text); saved when the field loses focus.
     edits: BTreeMap<&'static str, String>,
     error: Option<String>,
 }
@@ -20,7 +23,7 @@ pub struct SettingsPage {
 impl SettingsPage {
     /// Returns true when the user wants the setup assistant.
     pub fn show(&mut self, ui: &mut Ui, s: &Snapshot, handle: &Handle) -> bool {
-        page_title(ui, "Einstellungen", "team.toml — gilt ab dem nächsten Zyklus jeder Rolle, ohne Neustart.");
+        page_title(ui, "Einstellungen", "Änderungen werden sofort gespeichert und gelten ab dem nächsten Zyklus jeder Rolle, ohne Neustart. Rollen schaltest du auf der Seite Team ein und aus — oder du bittest die Rolle im Chat darum.");
         let mut open_setup = false;
         match &s.config {
             Err(e) => {
@@ -41,8 +44,17 @@ impl SettingsPage {
     }
 
     fn form(&mut self, ui: &mut Ui, cfg: &TeamConfig, handle: &Handle) {
-        let mut groups: Vec<&str> = FIELDS.iter().map(|f| f.group).collect();
-        groups.dedup();
+        if let Some(e) = &self.error {
+            ui.label(RichText::new(e).color(theme::ERROR));
+            ui.add_space(6.0);
+        }
+        let mut groups: Vec<&str> = Vec::new();
+        for f in FIELDS.iter().filter(|f| f.group != ROLES_GROUP) {
+            if !groups.contains(&f.group) {
+                groups.push(f.group);
+            }
+        }
+        let mut save: Option<&'static str> = None;
         for group in groups {
             card(ui, Some(group), |ui| {
                 egui::Grid::new(group).num_columns(2).spacing([24.0, 10.0]).min_col_width(210.0).show(ui, |ui| {
@@ -55,13 +67,12 @@ impl SettingsPage {
                         });
                         let mut text = self.edits.get(spec.path).cloned().unwrap_or_else(|| settings_model::get(cfg, spec.path));
                         let before = text.clone();
-                        field(ui, spec.kind, &mut text);
+                        let done = field(ui, spec.kind, &mut text);
                         if text != before {
-                            if text == settings_model::get(cfg, spec.path) {
-                                self.edits.remove(spec.path);
-                            } else {
-                                self.edits.insert(spec.path, text);
-                            }
+                            self.edits.insert(spec.path, text);
+                        }
+                        if done && self.edits.contains_key(spec.path) {
+                            save = Some(spec.path);
                         }
                         ui.end_row();
                     }
@@ -69,52 +80,46 @@ impl SettingsPage {
             });
             ui.add_space(10.0);
         }
-        self.footer(ui, cfg, handle);
+        if let Some(path) = save {
+            self.save(cfg, path, handle);
+        }
     }
 
-    fn footer(&mut self, ui: &mut Ui, cfg: &TeamConfig, handle: &Handle) {
-        ui.horizontal(|ui| {
-            let dirty = !self.edits.is_empty();
-            ui.add_enabled_ui(dirty, |ui| {
-                if primary(ui, "Speichern") {
-                    match settings_model::apply(cfg, &self.edits) {
-                        Ok(updated) => {
-                            handle.send(Action::SaveConfig(Box::new(updated)));
-                            self.edits.clear();
-                            self.error = None;
-                        }
-                        Err(e) => self.error = Some(e),
-                    }
-                }
-                if secondary(ui, "Verwerfen") {
-                    self.edits.clear();
-                    self.error = None;
-                }
-            });
-            if dirty {
-                ui.label(RichText::new(format!("{} ungespeicherte Änderung(en)", self.edits.len())).color(theme::WARN));
+    /// Saves one field; a rejected value stays in the field with the reason above the form.
+    fn save(&mut self, cfg: &TeamConfig, path: &'static str, handle: &Handle) {
+        let Some(text) = self.edits.get(path).cloned() else { return };
+        if text == settings_model::get(cfg, path) {
+            self.edits.remove(path);
+            return;
+        }
+        let one = BTreeMap::from([(path, text)]);
+        match settings_model::apply(cfg, &one) {
+            Ok(updated) => {
+                handle.send(Action::SaveConfig(Box::new(updated)));
+                self.edits.remove(path);
+                self.error = None;
             }
-            if let Some(e) = &self.error {
-                ui.label(RichText::new(e).color(theme::ERROR));
-            }
-        });
+            Err(e) => self.error = Some(e),
+        }
     }
 }
 
-fn field(ui: &mut Ui, kind: Kind, text: &mut String) {
+/// Roles are switched on the Team page; the form leaves them out.
+const ROLES_GROUP: &str = "Rollen";
+
+/// Draws the input; `true` when the value is final (switch flipped, Enter, focus left).
+fn field(ui: &mut Ui, kind: Kind, text: &mut String) -> bool {
     match kind {
         Kind::Toggle => {
             let mut on = text == "true";
-            if ui.add(toggle(&mut on)).changed() {
+            let changed = ui.add(toggle(&mut on)).changed();
+            if changed {
                 *text = on.to_string();
             }
+            changed
         }
-        Kind::Number => {
-            ui.add(egui::TextEdit::singleline(text).desired_width(110.0));
-        }
-        Kind::Text => {
-            ui.add(egui::TextEdit::singleline(text).desired_width(380.0));
-        }
+        Kind::Number => ui.add(egui::TextEdit::singleline(text).desired_width(110.0)).lost_focus(),
+        Kind::Text => ui.add(egui::TextEdit::singleline(text).desired_width(380.0)).lost_focus(),
     }
 }
 

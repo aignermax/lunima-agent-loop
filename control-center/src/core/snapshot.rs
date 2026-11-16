@@ -14,6 +14,17 @@ use team_core::config::TeamConfig;
 use team_core::paths::Paths;
 use team_core::state::{PoState, UxState};
 
+/// One role's chat as the team page shows it.
+#[derive(Clone, Default)]
+pub struct ChatView {
+    /// the latest messages, oldest first
+    pub messages: Vec<team_core::chat::Message>,
+    /// the role is composing an answer
+    pub busy: bool,
+    /// questions to Max he hasn't reacted to
+    pub unread: usize,
+}
+
 /// A value that is checked asynchronously: `None` = not checked yet.
 pub type Probe<T> = Option<Result<T, String>>;
 
@@ -42,6 +53,8 @@ pub struct Snapshot {
     pub agent_tomls: BTreeMap<String, Result<Vec<String>, String>>,
     pub agent_toml_at: BTreeMap<String, std::time::Instant>,
     pub log: Option<LogFindings>,
+    /// role → its chat
+    pub chats: BTreeMap<String, ChatView>,
     pub autostart: bool,
     pub refreshed: DateTime<Local>,
     pub slow_refreshed: Option<DateTime<Local>>,
@@ -70,10 +83,16 @@ impl Snapshot {
             agent_tomls: BTreeMap::new(),
             agent_toml_at: BTreeMap::new(),
             log: None,
+            chats: BTreeMap::new(),
             autostart: false,
             refreshed: Local::now(),
             slow_refreshed: None,
         }
+    }
+
+    /// Questions from all roles that wait for Max.
+    pub fn unread_questions(&self) -> usize {
+        self.chats.values().map(|c| c.unread).sum()
     }
 
     pub fn cfg(&self) -> Option<&TeamConfig> {

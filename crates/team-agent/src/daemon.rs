@@ -88,6 +88,7 @@ pub fn run(paths: Paths) -> ! {
         Ok(t) => crate::log::info(&format!("python-dev-tools: {}", t.dir)),
         Err(e) => crate::log::warn(&format!("python-dev-tools nicht verfügbar ({e}) — die Prompts verweisen trotzdem darauf")),
     }
+    crate::chat::spawn_worker(paths.clone());
     let limit: UsageLimit = Arc::new(Mutex::new(None));
     let threads: Vec<_> = all_roles()
         .into_iter()
