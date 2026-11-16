@@ -73,12 +73,22 @@ pub fn kill_floor_mb(m: &Mem) -> u64 {
     }
 }
 
-/// Below this, no new work starts (default twice the kill floor: a test run needs room).
+/// Headroom a new job needs above the kill floor before it may start.
+const START_HEADROOM_MAX_MB: u64 = 2048;
+
+/// Below this, no new work starts. Default: the kill floor plus room for a build or test
+/// run — the floor again on small machines, at most 2 GB. A build needs a fixed amount, not
+/// a share of the RAM, so doubling a 4 GB floor on a 48 GB machine kept work waiting with
+/// 7.7 GB free.
 pub fn start_floor_mb(m: &Mem) -> u64 {
     match START_FLOOR_MB.load(Ordering::Relaxed) {
-        0 => kill_floor_mb(m) * 2,
+        0 => default_start_floor_mb(kill_floor_mb(m)),
         v => v,
     }
+}
+
+pub fn default_start_floor_mb(kill_floor_mb: u64) -> u64 {
+    kill_floor_mb + kill_floor_mb.min(START_HEADROOM_MAX_MB)
 }
 
 /// `Some(reason)` when free memory is below `floor` (unknown memory = no objection).
@@ -127,6 +137,13 @@ mod tests {
         assert_eq!(auto_floor_mb(8 * 1024), 1024);
         assert_eq!(auto_floor_mb(32 * 1024), 3276);
         assert_eq!(auto_floor_mb(128 * 1024), 4096);
+    }
+
+    #[test]
+    fn start_floor_adds_bounded_headroom() {
+        assert_eq!(default_start_floor_mb(1024), 2048, "small machine: twice the floor");
+        assert_eq!(default_start_floor_mb(auto_floor_mb(48 * 1024)), 6144, "48 GB: floor + 2 GB");
+        assert!(default_start_floor_mb(auto_floor_mb(48 * 1024)) < 7764, "the reported 7.7 GB free must be enough");
     }
 
     #[cfg(any(target_os = "linux", windows))]
