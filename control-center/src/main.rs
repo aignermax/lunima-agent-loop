@@ -35,10 +35,20 @@ fn parse_args() -> Args {
         match a.as_str() {
             "--home" => parsed.home = args.next().map(PathBuf::from),
             "--tray" => parsed.start_hidden = true,
-            "--screenshot" => parsed.screenshot = args.next().map(PathBuf::from),
+            "--screenshot" => match args.next() {
+                Some(file) => parsed.screenshot = Some(PathBuf::from(file)),
+                None => {
+                    eprintln!("--screenshot braucht einen Dateinamen, z. B. --screenshot team.png");
+                    std::process::exit(2);
+                }
+            },
             "--page" => parsed.page = args.next().and_then(|p| app::Page::from_arg(&p)).unwrap_or(parsed.page),
             _ => {}
         }
+    }
+    // a screenshot needs a visible window: a hidden one never paints or delivers the image
+    if parsed.screenshot.is_some() {
+        parsed.start_hidden = false;
     }
     parsed
 }

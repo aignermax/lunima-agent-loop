@@ -42,6 +42,15 @@ fn check(title: &'static str, result: Result<String, String>, optional: bool, ac
     }
 }
 
+/// `path` with the user's own folder shown as `~`: the page ends up in screenshots and
+/// support requests, and the user name doesn't help anyone there.
+pub fn without_home(path: &str, home: Option<&str>) -> String {
+    match home.filter(|h| !h.is_empty()) {
+        Some(h) if path.get(..h.len()).is_some_and(|p| p.eq_ignore_ascii_case(h)) && matches!(path.as_bytes().get(h.len()), Some(b'\\' | b'/')) => format!("~{}", &path[h.len()..]),
+        _ => path.to_string(),
+    }
+}
+
 /// All checks in the order a new machine has to work through them.
 pub fn evaluate(p: &dyn Probes, config_exists: bool) -> Vec<SetupCheck> {
     let git = check("Git", p.version("git"), false, Some(("Herunterladen", SetupAction::Open("https://git-scm.com/downloads"))));
@@ -54,7 +63,9 @@ pub fn evaluate(p: &dyn Probes, config_exists: bool) -> Vec<SetupCheck> {
         check("GitHub-Anmeldung", Err("erst gh installieren".into()), false, None)
     };
     let cli = p.claude_cli();
-    let claude = check("Claude Code CLI", cli.clone().ok_or_else(|| "claude nicht im PATH".to_string()), false, Some(("Anleitung öffnen", SetupAction::Open("https://docs.claude.com/en/docs/claude-code/setup"))));
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok();
+    let shown = cli.as_deref().map(|c| without_home(c, home.as_deref()));
+    let claude = check("Claude Code CLI", shown.ok_or_else(|| "claude nicht im PATH".to_string()), false, Some(("Anleitung öffnen", SetupAction::Open("https://docs.claude.com/en/docs/claude-code/setup"))));
     let login = match (cli.is_some(), p.claude_login()) {
         (false, _) => Err("erst die Claude-CLI installieren".to_string()),
         (true, Ok(true)) => Ok("angemeldet (Abo)".to_string()),
@@ -155,5 +166,16 @@ GITHUB_TOKEN=secret
         let login = checks.iter().find(|c| c.title == "GitHub-Anmeldung").unwrap();
         assert!(!login.ok && login.action.is_none());
         assert!(!checks.iter().find(|c| c.title == "Claude-Anmeldung").unwrap().ok);
+    }
+
+    #[test]
+    fn paths_hide_the_user_folder() {
+        let home = Some(r"C:\Users\max_a");
+        assert_eq!(without_home(r"C:\Users\max_a\AppData\Roaming\npm\claude.cmd", home), r"~\AppData\Roaming\npm\claude.cmd");
+        assert_eq!(without_home(r"c:\users\MAX_A\x.exe", home), r"~\x.exe", "Windows paths ignore case");
+        assert_eq!(without_home(r"C:\Users\max_ab\x.exe", home), r"C:\Users\max_ab\x.exe", "another user's folder");
+        assert_eq!(without_home("/home/max/.local/bin/claude", Some("/home/max")), "~/.local/bin/claude");
+        assert_eq!(without_home("claude.exe", None), "claude.exe");
+        assert_eq!(without_home(r"C:\Üser\x", Some(r"C:\Ü")), r"C:\Üser\x", "no panic inside a multi-byte character");
     }
 }
