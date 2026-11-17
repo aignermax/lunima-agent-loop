@@ -49,7 +49,7 @@ const FILTERS: [(Filter, &str); 6] = [
 
 impl LogsPage {
     pub fn show(&mut self, ui: &mut Ui, s: &Snapshot) {
-        page_title(ui, "Protokolle", "agent.log (alle Rollen, Fehlerursachen) und die Claude-Sitzungen jeder Rolle im Rohformat.");
+        page_title(ui, "Protokolle", "agent.log (alle Rollen, Fehlerursachen) und die Runner-Sitzungen jeder Rolle im Rohformat.");
         ui.horizontal(|ui| {
             for (f, label) in FILTERS {
                 if ui.selectable_label(self.filter == f, label).clicked() {
@@ -86,7 +86,9 @@ impl LogsPage {
     }
 
     fn viewer(&mut self, ui: &mut Ui, s: &Snapshot) {
-        let Some(path) = self.selected.clone() else { return };
+        let Some(path) = self.selected.clone() else {
+            return;
+        };
         let size = s.logs.iter().find(|f| f.path == path).map(|f| f.size).unwrap_or(0);
         if self.cached.as_ref().is_none_or(|(p, sz, _)| p != &path || *sz != size) {
             self.cached = Some((path.clone(), size, tail(&path, TAIL_LINES)));

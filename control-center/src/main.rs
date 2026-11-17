@@ -16,6 +16,7 @@ mod sys;
 mod tray;
 mod ui;
 mod win;
+mod updater;
 
 use eframe::egui;
 use std::path::PathBuf;

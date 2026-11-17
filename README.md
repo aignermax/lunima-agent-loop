@@ -80,7 +80,7 @@ Without the UI: `lunima-team-agent init`, then `lunima-team-agent status`, then
 Debian/Ubuntu:
 
 ```sh
-sudo apt install ./lunima-team_<version>-1_amd64.deb    # or _arm64.deb
+sudo apt install ./lunima-team_<version>_amd64.deb      # or _arm64.deb
 lunima-team-agent init                                  # writes ~/.local/share/lunima-team/team.toml
 systemctl --user enable --now lunima-team-agent         # agent in the background (user unit)
 lunima-po                                               # Control Center
@@ -93,6 +93,28 @@ To keep the agent running while you are logged out: `loginctl enable-linger $USE
 
 The Control Center's tray icon needs a desktop with StatusNotifier/AppIndicator support
 (GNOME: the *AppIndicator* extension).
+
+### Automatic updates
+
+The Control Center checks the latest stable GitHub release at startup and every hour.
+It automatically downloads the MSI (Windows) or `.deb` (Ubuntu/Debian) matching the
+machine's architecture, verifies its size and SHA-256 against GitHub's release metadata,
+and shows **Update bereit → Jetzt aktualisieren** in the top bar. Leaving it prepared
+installs it at the next full Control Center launch; hiding/showing the tray window does
+not count as a restart. The background agent and Control Center update together.
+
+Before installation, the daemon stops accepting new tasks/chat answers and finishes
+current work. A waiting update can be postponed. Windows UAC or Linux PolicyKit asks for
+permission to install the package; Linux requires `pkexec` (the `pkexec` package on Ubuntu).
+An unsuccessful or cancelled installation retains the download, recovers the previous
+agent and requires a manual retry instead of prompting on every launch. Details are in
+`updates/install.log` beneath the data folder.
+
+Automatic installation requires a registered Windows MSI in `Program Files/Lunima Team`
+or the Ubuntu/Debian package at `/usr/bin/lunima-po`. Portable/source builds download
+updates but offer the package for manual installation. Existing releases without this
+updater need one manual installation of a release containing it. Configuration, login
+credentials, worktrees and logs remain in the existing data folder.
 
 ### Cutting a release
 
@@ -304,3 +326,83 @@ substitute for a live customer run after setup.
   folder's `prompts/` overrides one (the Control Center's rules editor writes those).
 - A crashed worker can leave a stale `agent-running` claim behind; the Product-Owner pass
   removes claims older than ~6 h so the issue is retried.
+
+
+### Codex with ChatGPT
+
+The loop and role chat can use the Codex CLI with a ChatGPT login. To switch,
+set the following in `team.toml` (or set `runner.backend` and `runner.model`
+in the Control Center settings / `lunima-team-agent config set`):
+
+```toml
+[runner]
+backend = "codex"
+model = "gpt-6-astra" # verified locally; empty string uses the Codex CLI default
+```
+
+Run `codex login` interactively first. `lunima-team-agent status` and the setup
+assistant show the selected CLI and check for ChatGPT authentication. Existing
+configurations without `[runner]` keep Claude; `backend = "claude"` restores the
+existing model/endpoint policy.
+
+Codex selection overrides all repository routing (`kimi`, `kimi-only`) and
+model labels (`eco`, `complex`, `critical`, `claudeapi`), including reviewer,
+QA, PR feedback, Product Owner, discovery stages, and every role's chat. It
+uses `runner.model` everywhere, ignoring the Claude role models. API keys and
+endpoint overrides are removed from Codex child environments. No personal
+Codex apps/plugins or user configuration are loaded. Backend changes apply
+on the next cycle/new chat answer; already running sessions finish with their
+original backend. A Claude usage-limit pause does not block Codex.
+
+Codex has no equivalent to Claude's `max-turns`: those budgets do not cap a
+Codex session. Existing per-role hard deadlines still apply; sessions without
+one have a two-hour hard deadline. Chat has a 20-minute deadline. Inactivity
+and memory guards remain active. Native events are normalized to the existing
+session-log format, so the activity parser is unchanged. Restricted discovery
+jobs retain their explicit tool boundary; they must never fall back to an
+unrestricted session.
+
+The nightly UX desktop tester is a separate Python program that calls the
+Anthropic API, not a loop CLI session. It is unavailable while Codex is
+selected, with an explicit status/log explanation, even if `roles.ux_review`
+is enabled; its role chat does use Codex. External commands such as
+`product_owner.customer_command` are not converted to Codex: review those
+separately if configured. Switching the runner does not install tools, alter
+credentials, restart processes, or change any live settings by itself.
+
+
+The Control Center has a durable dropdown under **Einstellungen → Runner →
+Backend für alle Rollen und Chat**:
+
+- **Claude (Abo / Repo-Routing)** retains the existing per-repository and label policy.
+- **Codex (ChatGPT-Abo)** uses the ChatGPT subscription for all sessions.
+- **OpenRouter / Kimi (API-Key)** uses `providers.openrouter` globally.
+- **Moonshot / eco (API-Key)** uses `providers.eco` globally.
+- **OpenAI / Responses-kompatibel (API-Key)** uses `providers.openai` globally
+  through Codex's API runner. Configure its base URL, model and key-file path
+  or key environment-variable name in the OpenAI API settings group.
+
+API selections override every role/chat model and repository/label policy.
+OpenRouter/eco require the Claude CLI for its Anthropic-compatible protocol;
+OpenAI-compatible endpoints require the Codex CLI and Responses support.
+Missing configured keys fail explicitly, without subscription fallback. The
+selector preserves all existing keys and endpoint settings. `runner.model`
+applies only to the Codex subscription; API choices use their endpoint's model.
+The OpenAI API backend has the same hard-deadline behavior as Codex subscription.
+The standalone UX desktop tester remains Anthropic-based; no API selector
+converts that Python program into another provider.
+
+The bundled commit-comment check also runs under Codex: a native PostToolUse
+hook starts an independent read-only review using the selected model/provider.
+It requires Node.js and Codex CLI 0.169.0; it does not call Claude or modify
+global hook settings. Findings ask the worker to remove unnecessary comments
+and amend the commit. See [hook behavior and validation](crates/team-core/assets/codex-hooks.md).
+
+Restricted discovery sessions have no shell or personal connectors. Existing
+discovery Markdown/JSON/TOML/text files and prepared `.discovery` context are
+supplied in a bounded local snapshot; editing uses `apply_patch`. Context above
+1 MB is rejected explicitly. Codex sessions also receive an instruction to
+honor the repository's `CLAUDE.md` alongside `AGENTS.md`.
+The global Claude SessionStart memory behavior is retained by loading the current
+user's `~/.claude/memory/*.md` notes directly (up to 256 KB). The wmux terminal
+telemetry hooks are not installed in the background runner.

@@ -5,6 +5,39 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// CLI used for every loop session and role chat.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Backend {
+    #[default]
+    Claude,
+    Codex,
+    Openrouter,
+    #[serde(rename = "openai")]
+    OpenAi,
+    Eco,
+}
+
+impl Backend {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+            Self::Openrouter => "OpenRouter",
+            Self::OpenAi => "OpenAI API",
+            Self::Eco => "Moonshot/eco",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Runner {
+    pub backend: Backend,
+    /// Codex model for every role; empty = Codex CLI default. Claude uses `models`.
+    pub model: String,
+}
+
 /// How a repo's coder sessions are routed (see `provider`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -156,6 +189,8 @@ impl Endpoint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Providers {
+    /// OpenAI Responses-compatible endpoint, executed by Codex.
+    pub openai: Endpoint,
     pub openrouter: Endpoint,
     pub eco: Endpoint,
     /// complex issues run the coder on the premium Claude model
@@ -164,11 +199,7 @@ pub struct Providers {
 
 impl Default for Providers {
     fn default() -> Self {
-        Self {
-            openrouter: Endpoint { base_url: "https://openrouter.ai/api".into(), model: "moonshotai/kimi-k3".into(), ..Default::default() },
-            eco: Endpoint { base_url: "https://api.moonshot.ai/anthropic".into(), model: "kimi-k2-thinking".into(), key_env: "MOONSHOT_API_KEY".into(), ..Default::default() },
-            complex_uses_premium: true,
-        }
+        Self { openai: Endpoint { base_url: "https://api.openai.com/v1".into(), key_env: "OPENAI_API_KEY".into(), ..Default::default() }, openrouter: Endpoint { base_url: "https://openrouter.ai/api".into(), model: "moonshotai/kimi-k3".into(), ..Default::default() }, eco: Endpoint { base_url: "https://api.moonshot.ai/anthropic".into(), model: "kimi-k2-thinking".into(), key_env: "MOONSHOT_API_KEY".into(), ..Default::default() }, complex_uses_premium: true }
     }
 }
 
@@ -389,6 +420,7 @@ impl Default for ProductDiscovery {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TeamConfig {
+    pub runner: Runner,
     /// shown in claim comments; default: the computer name
     pub machine: String,
     pub poll_seconds: u64,
@@ -409,22 +441,7 @@ pub struct TeamConfig {
 
 impl Default for TeamConfig {
     fn default() -> Self {
-        Self {
-            machine: machine_name(),
-            poll_seconds: 15,
-            roles: Roles::default(),
-            repos: Vec::new(),
-            discovery: Discovery::default(),
-            labels: Labels::default(),
-            models: Models::default(),
-            providers: Providers::default(),
-            budgets: Budgets::default(),
-            product_owner: ProductOwner::default(),
-            ux_review: UxReview::default(),
-            product_discovery: ProductDiscovery::default(),
-            resources: Resources::default(),
-            pr_feedback_marker: "@agent".into(),
-        }
+        Self { runner: Runner::default(), machine: machine_name(), poll_seconds: 15, roles: Roles::default(), repos: Vec::new(), discovery: Discovery::default(), labels: Labels::default(), models: Models::default(), providers: Providers::default(), budgets: Budgets::default(), product_owner: ProductOwner::default(), ux_review: UxReview::default(), product_discovery: ProductDiscovery::default(), resources: Resources::default(), pr_feedback_marker: "@agent".into() }
     }
 }
 

@@ -12,6 +12,7 @@ pub enum Kind {
     Text,
     Number,
     Toggle,
+    Backend,
 }
 
 pub struct Field {
@@ -74,6 +75,12 @@ pub const FIELDS: &[Field] = &[
     f("Product Owner", "product_owner.max_turns", "Max. Schritte pro Lauf", N, ""),
     f("Product Owner", "product_owner.customer_command", "Kunden-Review (Befehl)", T, "Leer = aus"),
     f("Product Owner", "product_owner.customer_max_age_hours", "Kunden-Review gültig (Std.)", N, ""),
+    f("OpenAI API", "providers.openai.base_url", "Responses-Endpoint", T, "OpenAI-kompatible Basis-URL, z. B. https://api.openai.com/v1"),
+    f("OpenAI API", "providers.openai.model", "Modell", T, "Erforderlich; muss vom Endpoint unterstützt werden"),
+    f("OpenAI API", "providers.openai.key_file", "Key-Datei", T, "Pfad, niemals den API-Key selbst eingeben"),
+    f("OpenAI API", "providers.openai.key_env", "Key-Umgebungsvariable", T, "Name der Variable, z. B. OPENAI_API_KEY"),
+    f("Runner", "runner.backend", "Backend für alle Rollen und Chat", Kind::Backend, "API-Auswahl nutzt vorhandene Schlüssel und überschreibt Repo-/Label-Routing"),
+    f("Runner", "runner.model", "Codex-Modell", T, "Leer = CLI-Standard; gilt auch für Rollen-Chat"),
     f("Modelle", "models.product_owner", "Product Owner", T, ""),
     f("Modelle", "models.coder", "Coder (Standard)", T, "Leer = Standard der Claude-CLI"),
     f("Modelle", "models.premium", "Coder (complex / claudeapi)", T, ""),
@@ -117,7 +124,7 @@ pub const FIELDS: &[Field] = &[
 /// Read-only lines about where third-party keys come from (never the keys themselves).
 pub fn key_sources(cfg: &TeamConfig) -> Vec<(String, String)> {
     let p = &cfg.providers;
-    [("OpenRouter", &p.openrouter), ("eco", &p.eco)]
+    [("OpenRouter", &p.openrouter), ("eco", &p.eco), ("OpenAI API", &p.openai)]
         .into_iter()
         .map(|(name, e)| {
             let mut src = Vec::new();
@@ -144,7 +151,9 @@ pub fn exists(cfg: &TeamConfig, path: &str) -> bool {
 
 /// The field's current value as text.
 pub fn get(cfg: &TeamConfig, path: &str) -> String {
-    let Ok(root) = Value::try_from(cfg) else { return String::new() };
+    let Ok(root) = Value::try_from(cfg) else {
+        return String::new();
+    };
     match lookup(&root, path) {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Integer(i)) => i.to_string(),
@@ -175,6 +184,21 @@ mod tests {
     const PO_PORT: &[&str] = &["product_owner.max_runs_per_day", "product_owner.backlog_min", "product_owner.max_turns", "product_owner.customer_command", "product_owner.customer_max_age_hours"];
 
     #[test]
+    fn backend_selector_round_trips_and_preserves_provider_settings() {
+        let mut cfg = TeamConfig::default();
+        cfg.providers.openrouter.key_file = "existing-secret-file".into();
+        for backend in ["claude", "codex", "openrouter", "eco", "openai"] {
+            let updated = apply(&cfg, &BTreeMap::from([("runner.backend", backend.into())])).unwrap();
+            assert_eq!(get(&updated, "runner.backend"), backend);
+            assert_eq!(updated.providers, cfg.providers);
+            let t = tempfile::tempdir().unwrap();
+            updated.save(&t.path().join("team.toml")).unwrap();
+            assert_eq!(TeamConfig::load(&t.path().join("team.toml")).unwrap(), updated);
+        }
+        assert!(FIELDS.iter().any(|f| f.path == "runner.backend" && f.kind == Kind::Backend));
+    }
+
+    #[test]
     fn every_field_exists_in_team_toml() {
         let cfg = TeamConfig::default();
         let root = Value::try_from(&cfg).unwrap();
@@ -186,7 +210,7 @@ mod tests {
             let ok = match f.kind {
                 Kind::Number => v.is_integer() || v.is_float(),
                 Kind::Toggle => v.is_bool(),
-                Kind::Text => v.is_str(),
+                Kind::Text | Kind::Backend => v.is_str(),
             };
             assert!(ok, "{} hat den falschen Typ", f.path);
         }

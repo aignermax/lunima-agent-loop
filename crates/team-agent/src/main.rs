@@ -125,17 +125,45 @@ fn status() -> i32 {
             None
         }
     };
-    match team_core::claude::find_cli() {
-        Some(cli) => check(true, "Claude-CLI", &cli.display().to_string()),
-        None => check(false, "Claude-CLI", "nicht gefunden"),
+    let backend = cfg.as_ref().map(|c| c.runner.backend).unwrap_or_default();
+    let cli = match backend {
+        team_core::config::Backend::Claude | team_core::config::Backend::Openrouter | team_core::config::Backend::Eco => team_core::claude::find_cli(),
+        team_core::config::Backend::Codex | team_core::config::Backend::OpenAi => team_core::codex::find_cli(),
+    };
+    let title = format!("{}-CLI", backend.label());
+    match cli {
+        Some(cli) => {
+            check(true, &title, &cli.display().to_string());
+            if backend == team_core::config::Backend::Codex {
+                let mut cmd = team_core::proc::command(cli);
+                cmd.args(["login", "status"]);
+                team_core::provider::ChildEnv::codex_subscription().apply(&mut cmd);
+                match team_core::proc::run(cmd, None, std::time::Duration::from_secs(20)) {
+                    Ok(out) => {
+                        let chatgpt = out.ok() && format!("{} {}", out.stdout, out.stderr).to_ascii_lowercase().contains("chatgpt");
+                        check(chatgpt, "Codex-Anmeldung", if chatgpt { "ChatGPT" } else { "ChatGPT-Login erforderlich: `codex login`" });
+                    }
+                    Err(e) => check(false, "Codex-Anmeldung", &e.to_string()),
+                }
+            }
+        }
+        None => check(false, &title, "nicht gefunden"),
     }
     match team_core::gh::current_user() {
         Ok(login) => check(true, "GitHub (gh)", &format!("angemeldet als {login}")),
         Err(e) => check(false, "GitHub (gh)", &format!("{e} → `gh auth login`")),
     }
     if let Some(c) = cfg {
+        if matches!(backend, team_core::config::Backend::Openrouter | team_core::config::Backend::Eco | team_core::config::Backend::OpenAi) {
+            match team_core::provider::runner_choice(&c.runner, &c.providers) {
+                Ok(Some(choice)) => check(true, "API-Provider", &format!("{} / {} (Key konfiguriert)", backend.label(), choice.model)),
+                Err(e) => check(false, "API-Provider", &e),
+                _ => {}
+            }
+        }
         for r in &c.repos {
-            println!("  Repo {} · Coder {} · {:?}", r.name, if r.coder { "an" } else { "aus" }, r.routing);
+            let routing = if backend == team_core::config::Backend::Claude { format!("{:?}", r.routing) } else { format!("{} (global)", backend.label()) };
+            println!("  Repo {} · Coder {} · {}", r.name, if r.coder { "an" } else { "aus" }, routing);
         }
     }
     0
@@ -178,6 +206,10 @@ fn once(role: &str) -> i32 {
         eprintln!("Der Team-Agent läuft bereits — `once` würde mit ihm konkurrieren.");
         return 3;
     };
+    if team_agent::daemon::update_requested(&p) {
+        eprintln!("Ein Team-Agent-Update wird vorbereitet — `once` wartet bis nach dem Update.");
+        return 3;
+    }
     let Some(mut r) = team_agent::daemon::all_roles().into_iter().find(|r| r.name() == role) else {
         eprintln!("Unbekannte Rolle „{role}“ (coder | qa | pr-feedback | product-owner | ux-review | product-discovery)");
         return 2;
@@ -206,6 +238,36 @@ fn once(role: &str) -> i32 {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod update_drain_tests {
+    use super::*;
+
+    #[test]
+    fn once_rejects_fresh_drain_before_role_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path());
+        paths.ensure().unwrap();
+        TeamConfig::default().save(&paths.config()).unwrap();
+        std::fs::write(paths.state().join("update-drain.json"), serde_json::json!({"token": "once-test", "requested_at": chrono::Local::now().timestamp()}).to_string()).unwrap();
+        let previous = std::env::var_os(team_core::paths::ENV_HOME);
+        std::env::set_var(team_core::paths::ENV_HOME, dir.path());
+        // Unknown role prevents any external work if the guard regresses.
+        let code = once("unknown-test-role");
+        std::fs::write(paths.state().join("update-drain.json"), serde_json::json!({"token": "expired", "requested_at": chrono::Local::now().timestamp() - 121}).to_string()).unwrap();
+        let stale_code = once("unknown-test-role");
+        std::fs::write(paths.state().join("update-drain.json"), "{").unwrap();
+        let malformed_code = once("unknown-test-role");
+        match previous {
+            Some(value) => std::env::set_var(team_core::paths::ENV_HOME, value),
+            None => std::env::remove_var(team_core::paths::ENV_HOME),
+        }
+        assert_eq!(code, 3);
+        assert_eq!(stale_code, 2, "expired requests must not block manual startup");
+        assert_eq!(malformed_code, 2, "malformed requests must not block manual startup");
+        assert!(!paths.state().join("update-drained.json").exists(), "manual commands must not acknowledge daemon draining");
+    }
 }
 
 /// `experiment publish|preview`: runs on the maintainer's machine, never inside the daemon.

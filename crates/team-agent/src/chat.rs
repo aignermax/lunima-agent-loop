@@ -7,13 +7,14 @@
 //! so a long build never makes Max wait and a chat never disturbs a build.
 
 use crate::daemon::role_enabled;
+use crate::daemon::update_drain::Drain;
 use chrono::Local;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use team_core::chat::{self, Kind, Message, MAX};
-use team_core::config::TeamConfig;
+use team_core::config::{Backend, TeamConfig};
 use team_core::paths::Paths;
 use team_core::provider::ChildEnv;
 
@@ -39,6 +40,13 @@ fn describe(role: &str) -> &'static str {
 }
 
 fn model(cfg: &TeamConfig, role: &str) -> String {
+    match cfg.runner.backend {
+        Backend::Codex => return cfg.runner.model.clone(),
+        Backend::OpenAi => return cfg.providers.openai.model.clone(),
+        Backend::Openrouter => return cfg.providers.openrouter.model.clone(),
+        Backend::Eco => return cfg.providers.eco.model.clone(),
+        Backend::Claude => {}
+    }
     let m = &cfg.models;
     match role {
         "coder" => m.coder.clone(),
@@ -113,12 +121,12 @@ Your job in the team: {job}\n\n\
 - team configuration: {config} (change it only with `config set`, which validates)\n\
 - your memory (standing instructions, part of every prompt you get): {memory}{memory_note}\n\
 - your chat: {chat_file}\n\
-- logs: {logs} (agent.log; raw Claude sessions of your work in {logs}{sep}{role})\n\
+- logs: {logs} (agent.log; normalized runner sessions of your work in {logs}{sep}{role})\n\
 - state: {state}\n\n\
 ## Commands (shell tool; texts in single quotes)\n\
 - {CLI} config set <dotted.path> <value>   e.g. `roles.product_owner true`, `product_owner.repo aignermax/Lunima`, `budgets.max_turns_regular 200`\n\
 - {CLI} config add-repo <owner/name>   /   config remove-repo <owner/name>   (repositories the coder works on)\n\
-- {CLI} config show   /   {CLI} status   (configuration, Claude CLI, gh login, repositories)\n\
+- {CLI} config show   /   {CLI} status   (configuration, runner CLI, gh login, repositories)\n\
 - {CLI} chat remember --role {role} '<text>'   (only when Max asks you to keep something in mind)\n\
 - gh is logged in as the team's GitHub user; git and the usual tools are available.\n\
 {howto}\n\n\
@@ -158,7 +166,11 @@ pub fn answer(paths: &Paths, role: &str, incoming: &Message) -> Result<String, S
     let mut history = chat::tail(paths, role, HISTORY + 1);
     history.retain(|m| m.id != incoming.id);
     let prompt = persona_prompt(paths, &cfg, role, &history, incoming);
-    let mut env = ChildEnv::subscription();
+    let choice = team_core::provider::runner_choice(&cfg.runner, &cfg.providers)?;
+    let mut env = if cfg.runner.backend == Backend::Codex { ChildEnv::codex_subscription() } else { ChildEnv::subscription() };
+    if let Some(c) = &choice {
+        env = c.env.clone();
+    }
     env.set.insert(ENV_ROLE.into(), role.into());
     env.set.insert(ENV_HOPS.into(), incoming.hops.to_string());
     if incoming.from == MAX {
@@ -166,21 +178,8 @@ pub fn answer(paths: &Paths, role: &str, incoming: &Message) -> Result<String, S
     }
     let logs = paths.logs().join("chat");
     let _ = std::fs::create_dir_all(&logs);
-    let session = team_core::claude::Session {
-        prompt,
-        cwd: paths.root.clone(),
-        model: model(&cfg, role),
-        max_turns: 60,
-        env,
-        settings_file: None,
-        log_file: Some(logs.join(format!("{}_{role}.jsonl", Local::now().format("%Y-%m-%d_%H%M%S")))),
-        inactivity: Duration::from_secs(300),
-        deadline: Some(Duration::from_secs(20 * 60)),
-        on_tick: None,
-        tools: None,
-        memory_guard: false,
-    };
-    let out = team_core::claude::run(&session).map_err(|e| e.to_string())?;
+    let session = team_core::claude::Session { prompt, cwd: paths.root.clone(), model: choice.map(|c| c.model).unwrap_or_else(|| model(&cfg, role)), max_turns: 60, env, settings_file: None, log_file: Some(logs.join(format!("{}_{role}.jsonl", Local::now().format("%Y-%m-%d_%H%M%S")))), inactivity: Duration::from_secs(300), deadline: Some(Duration::from_secs(20 * 60)), on_tick: None, tools: None, memory_guard: false };
+    let out = crate::llm::run_session(cfg.runner.backend, &session).map_err(|e| e.to_string())?;
     if let Some(until) = out.usage_limit_until {
         return Err(format!("Claude-Nutzungslimit erreicht — ich antworte ab {} wieder", until.format("%H:%M")));
     }
@@ -207,7 +206,12 @@ impl Drop for Busy {
 
 /// Answers Max's messages and teammates' asks: one conversation per role at a time, up to
 /// `MAX_PARALLEL` roles at once. Only this worker writes the busy markers.
-pub fn spawn_worker(paths: Paths) {
+pub(crate) fn spawn_worker(paths: Paths, drain: Arc<Drain>) -> std::thread::JoinHandle<()> {
+    spawn_worker_with_answer(paths, drain, answer)
+}
+
+fn spawn_worker_with_answer(paths: Paths, drain: Arc<Drain>, answer: impl Fn(&Paths, &str, &Message) -> Result<String, String> + Send + Sync + 'static) -> std::thread::JoinHandle<()> {
+    let answer = Arc::new(answer);
     for (role, _) in chat::ROLES {
         chat::set_busy(&paths, role, false);
     }
@@ -217,44 +221,69 @@ pub fn spawn_worker(paths: Paths) {
     let (failed_tx, failed_rx) = std::sync::mpsc::channel::<String>();
     std::thread::Builder::new()
         .name("chat".into())
-        .spawn(move || loop {
-            given_up.extend(failed_rx.try_iter());
-            for (role, _) in chat::ROLES {
-                {
-                    let set = busy.lock().unwrap_or_else(|p| p.into_inner());
-                    if set.contains(role) || set.len() >= MAX_PARALLEL {
+        .spawn(move || {
+            let mut answers = Vec::<std::thread::JoinHandle<()>>::new();
+            loop {
+                if drain.draining() {
+                    break;
+                }
+                // Reap completed replies during normal operation, retaining every live handle.
+                let mut i = 0;
+                while i < answers.len() {
+                    if answers[i].is_finished() {
+                        let _ = answers.swap_remove(i).join();
+                    } else {
+                        i += 1;
+                    }
+                }
+                given_up.extend(failed_rx.try_iter());
+                for (role, _) in chat::ROLES {
+                    {
+                        let set = busy.lock().unwrap_or_else(|p| p.into_inner());
+                        if set.contains(role) || set.len() >= MAX_PARALLEL {
+                            continue;
+                        }
+                    }
+                    let Some(msg) = chat::pending(&chat::read(&paths, role), role) else {
+                        continue;
+                    };
+                    if given_up.contains(&msg.id) {
                         continue;
                     }
-                }
-                let Some(msg) = chat::pending(&chat::read(&paths, role), role) else { continue };
-                if given_up.contains(&msg.id) {
-                    continue;
-                }
-                busy.lock().unwrap_or_else(|p| p.into_inner()).insert(role);
-                chat::set_busy(&paths, role, true);
-                let guard = Busy { paths: paths.clone(), role, set: busy.clone() };
-                let failed = failed_tx.clone();
-                std::thread::spawn(move || {
-                    let _guard = guard;
-                    crate::log::set_role("chat");
-                    let paths = &_guard.paths;
-                    let to = if msg.from == MAX { MAX.to_string() } else { msg.from.clone() };
-                    let reply = match answer(paths, role, &msg) {
-                        Ok(text) => Message::new(role, &to, Kind::Chat, &text),
-                        Err(e) => {
-                            crate::log::warn(&format!("Chat {role}: {e}"));
-                            Message::new(role, &to, Kind::Error, &format!("Ich konnte gerade nicht antworten: {e}"))
+                    let Some(work) = drain.try_start() else { break };
+                    busy.lock().unwrap_or_else(|p| p.into_inner()).insert(role);
+                    chat::set_busy(&paths, role, true);
+                    let guard = Busy { paths: paths.clone(), role, set: busy.clone() };
+                    let failed = failed_tx.clone();
+                    let answer = answer.clone();
+                    answers.push(std::thread::spawn(move || {
+                        let _work = work;
+                        let _guard = guard;
+                        crate::log::set_role("chat");
+                        let paths = &_guard.paths;
+                        let to = if msg.from == MAX { MAX.to_string() } else { msg.from.clone() };
+                        let reply = match answer(paths, role, &msg) {
+                            Ok(text) => Message::new(role, &to, Kind::Chat, &text),
+                            Err(e) => {
+                                crate::log::warn(&format!("Chat {role}: {e}"));
+                                Message::new(role, &to, Kind::Error, &format!("Ich konnte gerade nicht antworten: {e}"))
+                            }
+                        };
+                        if let Err(e) = chat::post(paths, &reply.reply(&msg)) {
+                            crate::log::error(&format!("Chat {role}: Antwort nicht gespeichert ({e})"));
+                            let _ = failed.send(msg.id.clone());
                         }
-                    };
-                    if let Err(e) = chat::post(paths, &reply.reply(&msg)) {
-                        crate::log::error(&format!("Chat {role}: Antwort nicht gespeichert ({e})"));
-                        let _ = failed.send(msg.id.clone());
-                    }
-                });
+                    }));
+                }
+                if drain.wait(Duration::from_secs(2)) {
+                    break;
+                }
             }
-            std::thread::sleep(Duration::from_secs(2));
+            for answer in answers {
+                let _ = answer.join();
+            }
         })
-        .expect("spawn chat worker");
+        .expect("spawn chat worker")
 }
 
 /// `--flag value` pairs, `--switch`es and the remaining words (the text).
@@ -313,7 +342,13 @@ pub fn cli(paths: &Paths, args: &[String]) -> Result<String, String> {
     let sub = args.first().map(String::as_str).unwrap_or("");
     let a = parse(args.get(1..).unwrap_or_default());
     let text = a.text();
-    let need_text = || if text.trim().is_empty() { Err("Text fehlt".to_string()) } else { Ok(()) };
+    let need_text = || {
+        if text.trim().is_empty() {
+            Err("Text fehlt".to_string())
+        } else {
+            Ok(())
+        }
+    };
     match sub {
         "say" => {
             need_text()?;
@@ -415,6 +450,67 @@ mod tests {
         p.ensure().unwrap();
         TeamConfig::default().save(&p.config()).unwrap();
         (t, p)
+    }
+
+    fn request_drain(paths: &Paths) {
+        let request = serde_json::json!({"token": "chat-test", "requested_at": Local::now().timestamp()});
+        std::fs::write(paths.state().join("update-drain.json"), request.to_string()).unwrap();
+    }
+
+    #[test]
+    fn draining_chat_joins_current_answer_and_leaves_new_messages_pending() {
+        let (_dir, paths) = home();
+        let drain = Drain::new(paths.state());
+        let incoming = Message::new(MAX, "coder", Kind::Chat, "current question");
+        chat::post(&paths, &incoming).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let worker = spawn_worker_with_answer(paths.clone(), drain.clone(), move |_, role, _| {
+            started_tx.send(role.to_string()).unwrap();
+            release_rx.lock().unwrap().recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok("finished answer".into())
+        });
+        assert_eq!(started_rx.recv_timeout(Duration::from_secs(2)).unwrap(), "coder");
+        request_drain(&paths);
+        chat::post(&paths, &Message::new(MAX, "qa", Kind::Chat, "leave pending")).unwrap();
+        assert!(drain.draining());
+        assert!(drain.acknowledge().is_err(), "an active chat answer must block ack");
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let joiner = std::thread::spawn(move || { worker.join().unwrap(); done_tx.send(()).unwrap(); });
+        assert!(done_rx.recv_timeout(Duration::from_millis(300)).is_err(), "worker must join its answer thread");
+        release_tx.send(()).unwrap();
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        joiner.join().unwrap();
+        assert!(started_rx.try_recv().is_err(), "no new answers after drain");
+        assert!(chat::read(&paths, "coder").iter().any(|msg| msg.reply_to.as_deref() == Some(incoming.id.as_str()) && msg.text == "finished answer"));
+        assert!(chat::pending(&chat::read(&paths, "qa"), "qa").is_some());
+        drain.acknowledge().unwrap();
+    }
+
+    #[test]
+    fn idle_chat_worker_exits_promptly_on_drain() {
+        let (_dir, paths) = home();
+        request_drain(&paths);
+        let drain = Drain::new(paths.state());
+        let worker = spawn_worker_with_answer(paths, drain, |_, _, _| panic!("no chat should be accepted"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let joiner = std::thread::spawn(move || { worker.join().unwrap(); tx.send(()).unwrap(); });
+        rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        joiner.join().unwrap();
+    }
+
+    #[test]
+    fn codex_chat_model_overrides_every_role_including_discovery_and_ux() {
+        let mut cfg = TeamConfig::default();
+        cfg.runner.backend = Backend::Codex;
+        cfg.product_discovery.model = "claude-discovery".into();
+        for name in ["", "gpt-test"] {
+            cfg.runner.model = name.into();
+            for (role, _) in chat::ROLES {
+                assert_eq!(model(&cfg, role), name, "{role}");
+            }
+        }
     }
 
     #[test]

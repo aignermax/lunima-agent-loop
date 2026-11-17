@@ -4,6 +4,8 @@
 
 pub mod chat;
 pub mod claude;
+pub mod codex;
+pub mod codex_hooks;
 pub mod config;
 pub mod gh;
 pub mod git;

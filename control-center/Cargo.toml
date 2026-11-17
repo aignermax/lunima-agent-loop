@@ -21,6 +21,9 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-p
 raw-window-handle = "0.6"
 toml = "0.8"
 png = "0.17"
+semver = "1"
+sha2 = "0.10"
+tempfile = "3"
 team-core = { path = "../crates/team-core" }
 
 [target.'cfg(windows)'.dependencies]
@@ -54,7 +57,7 @@ systemctl --user enable --now lunima-team-agent."""
 section = "devel"
 priority = "optional"
 depends = "$auto, git"
-recommends = "gh"
+recommends = "gh, pkexec"
 assets = [
     ["target/release/lunima-team-agent", "usr/bin/", "755"],
     ["target/release/lunima-po", "usr/bin/", "755"],

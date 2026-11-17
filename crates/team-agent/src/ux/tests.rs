@@ -215,3 +215,14 @@ fn po_prompt_says_when_there_is_no_report() {
     let w = world();
     assert!(po_section(&w.ctx("A")).contains("No recent UX report"));
 }
+
+#[test]
+fn codex_backends_do_not_start_the_anthropic_desktop_tester() {
+    let w = world();
+    let mut ctx = w.ctx("test");
+    for backend in [team_core::config::Backend::Codex, team_core::config::Backend::OpenAi] {
+        ctx.cfg.runner.backend = backend;
+        assert!(UxReviewer::target(&ctx).unwrap_err().contains("Anthropic"));
+    }
+    assert!(w.lines.lock().unwrap().is_empty());
+}

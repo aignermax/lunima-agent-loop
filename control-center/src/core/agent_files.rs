@@ -70,11 +70,17 @@ impl LogFindings {
 
 pub fn read_heartbeats(state: &Path) -> BTreeMap<String, Heartbeat> {
     let mut out = BTreeMap::new();
-    let Ok(entries) = std::fs::read_dir(state) else { return out };
+    let Ok(entries) = std::fs::read_dir(state) else {
+        return out;
+    };
     for e in entries.flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
-        let Some(role) = name.strip_prefix("status-").and_then(|r| r.strip_suffix(".json")) else { continue };
-        let Some(v) = std::fs::read_to_string(e.path()).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else { continue };
+        let Some(role) = name.strip_prefix("status-").and_then(|r| r.strip_suffix(".json")) else {
+            continue;
+        };
+        let Some(v) = std::fs::read_to_string(e.path()).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok()) else {
+            continue;
+        };
         let time = |k: &str| v.get(k).and_then(Value::as_str).and_then(parse_time);
         out.insert(role.to_string(), Heartbeat {
             state: v.get("state").and_then(Value::as_str).unwrap_or_default().to_string(),
@@ -108,7 +114,9 @@ pub fn read_discovered(state: &Path, expiry_days: i64, now: NaiveDateTime) -> Ve
 /// Roles paused in control.json (role → reason), ignoring elapsed pauses.
 pub fn read_pauses(state: &Path, now: DateTime<Local>) -> BTreeMap<String, String> {
     let doc = read_control(state);
-    let Some(paused) = doc.get("paused").and_then(Value::as_object) else { return BTreeMap::new() };
+    let Some(paused) = doc.get("paused").and_then(Value::as_object) else {
+        return BTreeMap::new();
+    };
     paused
         .iter()
         .filter_map(|(role, entry)| {
@@ -130,7 +138,9 @@ fn read_control(state: &Path) -> Map<String, Value> {
 pub fn set_pause(state: &Path, role: &str, reason: Option<&str>) -> Result<(), String> {
     let mut doc = read_control(state);
     let paused = doc.entry("paused").or_insert_with(|| Value::Object(Map::new()));
-    let Some(map) = paused.as_object_mut() else { return Err("control.json: 'paused' ist kein Objekt".into()) };
+    let Some(map) = paused.as_object_mut() else {
+        return Err("control.json: 'paused' ist kein Objekt".into());
+    };
     match reason {
         Some(r) => {
             map.insert(role.to_string(), serde_json::json!({ "until": null, "reason": r }));
@@ -154,7 +164,9 @@ pub fn agent_running(state: &Path) -> bool {
 }
 
 fn tail_text(path: &Path, bytes: u64) -> (String, u64) {
-    let Ok(mut f) = std::fs::File::open(path) else { return (String::new(), 0) };
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return (String::new(), 0);
+    };
     let len = f.metadata().map(|m| m.len()).unwrap_or(0);
     let _ = f.seek(SeekFrom::Start(len.saturating_sub(bytes)));
     let mut buf = Vec::new();
@@ -185,7 +197,7 @@ pub fn scan_log(logs: &Path) -> LogFindings {
         if lower.contains("not logged in") || lower.contains("authentication_failed") || lower.contains("please run /login") {
             f.not_logged_in = Some(t);
         }
-        if line.contains("Claude beendet ohne Ergebnis") || line.contains("Claude hing") || line.contains("Claude konnte nicht gestartet") {
+        if line.contains("Codex beendet ohne Ergebnis") || line.contains("Codex hing") || line.contains("Codex konnte nicht gestartet") || line.contains("Claude beendet ohne Ergebnis") || line.contains("Claude hing") || line.contains("Claude konnte nicht gestartet") {
             f.claude_failures.push(t);
         }
         if line.contains("(panic)") {

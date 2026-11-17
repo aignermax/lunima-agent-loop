@@ -108,14 +108,20 @@ impl SettingsPage {
         }
     }
 
+    /// Update handoff must not discard invalid text which has not been saved.
+    pub fn can_update(&self) -> bool { self.edits.is_empty() && self.error.is_none() }
+
     /// Saves one field; a rejected value stays in the field with the reason above the form.
     fn save(&mut self, cfg: &TeamConfig, path: &'static str, handle: &Handle) {
-        let Some(text) = self.edits.get(path).cloned() else { return };
+        let Some(text) = self.edits.get(path).cloned() else {
+            return;
+        };
         // compared with what the field shows: a value still on its way to the file counts,
         // or clicking back to the file's value before the first click is saved gets lost
         let shown = self.sent.get(path).map(|(v, _)| v.clone()).unwrap_or_else(|| settings_model::get(cfg, path));
         if text == shown {
             self.edits.remove(path);
+            self.error = None;
             return;
         }
         // checked here for an immediate message, then saved as this one change onto the
@@ -142,6 +148,17 @@ const ROLES_GROUP: &str = "Rollen";
 /// Draws the input; `true` when the value is final (switch flipped, Enter, focus left).
 fn field(ui: &mut Ui, kind: Kind, text: &mut String) -> bool {
     match kind {
+        Kind::Backend => {
+            let before = text.clone();
+            let options = [("claude", "Claude (Abo / Repo-Routing)"), ("codex", "Codex (ChatGPT-Abo)"), ("openrouter", "OpenRouter / Kimi (API-Key)"), ("eco", "Moonshot / eco (API-Key)"), ("openai", "OpenAI / Responses-kompatibel (API-Key)")];
+            let label = options.iter().find(|(value, _)| *value == text).map(|(_, label)| *label).unwrap_or(text);
+            egui::ComboBox::from_id_salt("runner-backend").selected_text(label).show_ui(ui, |ui| {
+                for (value, label) in options {
+                    ui.selectable_value(text, value.into(), label);
+                }
+            });
+            *text != before
+        }
         Kind::Toggle => {
             let mut on = text == "true";
             let changed = ui.add(toggle(&mut on)).changed();
@@ -163,7 +180,7 @@ fn keys(ui: &mut Ui, cfg: &TeamConfig) {
                 ui.label(RichText::new(line).color(MUTED));
             });
         }
-        muted(ui, "Claude läuft über dein Abo, GitHub über deinen gh-Login. Schlüssel werden hier nie angezeigt oder geändert.");
+        muted(ui, "Claude/Codex nutzen dein Abo; API-Provider nutzen die vorhandenen Schlüssel. GitHub nutzt deinen gh-Login. Schlüssel werden hier nie angezeigt oder geändert.");
     });
 }
 
