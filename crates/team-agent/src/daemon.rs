@@ -18,13 +18,13 @@ use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use team_core::config::TeamConfig;
+use team_core::config::{Backend, TeamConfig};
 use team_core::detail;
 use team_core::paths::Paths;
 use team_core::state::{pause_reason, Heartbeat};
 
 /// Shared "subscription exhausted until" across the role threads.
-pub type UsageLimit = Arc<Mutex<Option<DateTime<Local>>>>;
+pub type UsageLimit = Arc<Mutex<Option<(Backend, DateTime<Local>)>>>;
 
 pub fn home() -> Option<PathBuf> {
     std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from)
@@ -45,7 +45,7 @@ pub fn role_enabled(cfg: &TeamConfig, name: &str) -> bool {
 /// The real context for one cycle (GitHub via gh, Claude via the CLI).
 pub fn context(cfg: TeamConfig, paths: &Paths, login: &str, heartbeat: Arc<Heartbeat>, role: &str) -> Ctx {
     let inactivity = Duration::from_secs(cfg.budgets.inactivity_minutes.max(1) * 60);
-    let mut llm = ClaudeCli::new(&paths.state(), paths.logs().join(role), inactivity, Some(heartbeat.clone()));
+    let mut llm = ClaudeCli::new(&paths.state(), paths.logs().join(role), inactivity, Some(heartbeat.clone()), &cfg);
     llm.role = role.to_string();
     Ctx {
         machine: cfg.machine.clone(),
@@ -137,6 +137,7 @@ fn role_loop(mut role: Box<dyn Role>, paths: Paths, login: String, limit: UsageL
             continue;
         }
         hb.idle();
+        let backend = cfg.runner.backend;
         let ctx = context(cfg, &paths, &login, hb.clone(), name);
         if !recovered {
             role.recover(&ctx);
@@ -154,8 +155,8 @@ fn role_loop(mut role: Box<dyn Role>, paths: Paths, login: String, limit: UsageL
                 poll
             }
             Ok(Err(RoleError::UsageLimit(until))) => {
-                crate::log::warn(&format!("Claude-Nutzungslimit — alle Rollen warten bis {}", until.format("%d.%m. %H:%M")));
-                *limit.lock().unwrap_or_else(|p| p.into_inner()) = Some(until);
+                crate::log::warn(&format!("{}-Nutzungslimit — Rollen dieses Backends warten bis {}", backend.label(), until.format("%d.%m. %H:%M")));
+                *limit.lock().unwrap_or_else(|p| p.into_inner()) = Some((backend, until));
                 1
             }
             Ok(Err(RoleError::Failed(e))) => {
@@ -188,7 +189,7 @@ fn blocked(cfg: &TeamConfig, name: &str, paths: &Paths, limit: &UsageLimit) -> O
     }
     let mut until = limit.lock().unwrap_or_else(|p| p.into_inner());
     match *until {
-        Some(t) if t > Local::now() => Some(format!("Claude-Nutzungslimit bis {}", t.format("%H:%M"))),
+        Some((backend, t)) if t > Local::now() => (backend == cfg.runner.backend).then(|| format!("{}-Nutzungslimit bis {}", backend.label(), t.format("%H:%M"))),
         Some(_) => {
             *until = None;
             None
@@ -211,6 +212,8 @@ mod tests {
         let paths = Paths::new(t.path());
         paths.ensure().unwrap();
         let mut cfg = TeamConfig::default();
+        cfg.resources.min_free_mb = 1;
+        cfg.resources.start_free_mb = 1;
         let limit: UsageLimit = Arc::new(Mutex::new(None));
         assert_eq!(all_roles().iter().map(|r| r.name()).collect::<Vec<_>>(), vec!["coder", "qa", "pr-feedback", "product-owner", "ux-review", "product-discovery"]);
         assert!(blocked(&cfg, "coder", &paths, &limit).is_none());
@@ -222,9 +225,13 @@ mod tests {
         assert_eq!(blocked(&cfg, "product-discovery", &paths, &limit).as_deref(), Some("Notstopp"), "discovery pauses independently of delivery");
         assert!(blocked(&cfg, "coder", &paths, &limit).is_none());
         std::fs::remove_file(paths.state().join("control.json")).unwrap();
-        *limit.lock().unwrap() = Some(Local::now() + chrono::Duration::minutes(5));
+        *limit.lock().unwrap() = Some((Backend::Claude, Local::now() + chrono::Duration::minutes(5)));
         assert!(blocked(&cfg, "coder", &paths, &limit).unwrap().contains("Nutzungslimit"));
-        *limit.lock().unwrap() = Some(Local::now() - chrono::Duration::minutes(1));
+        cfg.runner.backend = Backend::Codex;
+        assert!(blocked(&cfg, "coder", &paths, &limit).is_none(), "Claude exhaustion must not block Codex");
+        *limit.lock().unwrap() = Some((Backend::Codex, Local::now() + chrono::Duration::minutes(5)));
+        assert!(blocked(&cfg, "coder", &paths, &limit).unwrap().contains("Codex"));
+        *limit.lock().unwrap() = Some((Backend::Claude, Local::now() - chrono::Duration::minutes(1)));
         assert!(blocked(&cfg, "coder", &paths, &limit).is_none());
         assert!(limit.lock().unwrap().is_none(), "elapsed limit is cleared");
         std::fs::write(paths.state().join("control.json"), r#"{"paused":{"coder":{"until":null,"reason":"Urlaub"}}}"#).unwrap();

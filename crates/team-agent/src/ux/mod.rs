@@ -47,6 +47,9 @@ impl UxReviewer {
 
     /// The repo to review, or why the role can't run.
     fn target(ctx: &Ctx) -> Result<String, &'static str> {
+        if matches!(ctx.cfg.runner.backend, team_core::config::Backend::Codex | team_core::config::Backend::OpenAi) {
+            return Err("Desktop-Tester benötigt Anthropic; unter Codex/OpenAI deaktiviert (Rollen-Chat nutzt den gewählten Runner)");
+        }
         let ux = &ctx.cfg.ux_review;
         let repo = if ux.repo.trim().is_empty() { ctx.cfg.product_owner.repo.clone() } else { ux.repo.clone() };
         if repo.is_empty() {

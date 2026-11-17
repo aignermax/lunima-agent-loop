@@ -94,32 +94,40 @@ fn agent_card(ui: &mut Ui, s: &Snapshot, handle: &Handle) {
         (Some(_), false) => (Level::Error, "gestoppt".to_string()),
     };
     let place = if cfg!(windows) { "Aufgabe LunimaTeamAgent" } else { "systemd: lunima-team-agent" };
-    role_card(ui, level, "Team-Agent", place, &status, |_| {}, |ui| {
-        ui.horizontal(|ui| {
-            let can = s.agent_exe.is_some() && s.config.is_ok();
-            ui.add_enabled_ui(can, |ui| {
-                if s.agent_running {
-                    if secondary(ui, "Neu starten") {
-                        handle.send(Action::Agent(Verb::Restart));
+    role_card(
+        ui,
+        level,
+        "Team-Agent",
+        place,
+        &status,
+        |_| {},
+        |ui| {
+            ui.horizontal(|ui| {
+                let can = s.agent_exe.is_some() && s.config.is_ok();
+                ui.add_enabled_ui(can, |ui| {
+                    if s.agent_running {
+                        if secondary(ui, "Neu starten") {
+                            handle.send(Action::Agent(Verb::Restart));
+                        }
+                        if secondary(ui, "Stoppen") {
+                            handle.send(Action::Agent(Verb::Stop));
+                        }
+                    } else if primary(ui, "Starten") {
+                        handle.send(Action::Agent(Verb::Start));
                     }
-                    if secondary(ui, "Stoppen") {
-                        handle.send(Action::Agent(Verb::Stop));
-                    }
-                } else if primary(ui, "Starten") {
-                    handle.send(Action::Agent(Verb::Start));
+                });
+                ui.add_space(16.0);
+                let mut on = service.is_some_and(|i| i.autostart);
+                if ui.add_enabled(s.agent_exe.is_some() && service.is_some(), toggle(&mut on)).changed() {
+                    handle.send(Action::SetAgentAutostart(on));
                 }
+                ui.label("Agent beim Anmelden starten");
             });
-            ui.add_space(16.0);
-            let mut on = service.is_some_and(|i| i.autostart);
-            if ui.add_enabled(s.agent_exe.is_some() && service.is_some(), toggle(&mut on)).changed() {
-                handle.send(Action::SetAgentAutostart(on));
+            if let Some(exe) = &s.agent_exe {
+                muted(ui, exe.display().to_string());
             }
-            ui.label("Agent beim Anmelden starten");
-        });
-        if let Some(exe) = &s.agent_exe {
-            muted(ui, exe.display().to_string());
-        }
-    });
+        },
+    );
 }
 
 impl TeamPage {
@@ -255,7 +263,24 @@ fn bubble(ui: &mut Ui, m: &Message, role: &str) {
 }
 
 fn details(ui: &mut Ui, s: &Snapshot, role: &str, cfg: &TeamConfig) {
-    let m = &cfg.models;
+    let mut effective = cfg.models.clone();
+    let codex = cfg.runner.backend == team_core::config::Backend::Codex;
+    model_row(ui, "Backend:", cfg.runner.backend.label());
+    let override_model = match cfg.runner.backend {
+        team_core::config::Backend::Claude => None,
+        team_core::config::Backend::Codex => Some(&cfg.runner.model),
+        team_core::config::Backend::OpenAi => Some(&cfg.providers.openai.model),
+        team_core::config::Backend::Openrouter => Some(&cfg.providers.openrouter.model),
+        team_core::config::Backend::Eco => Some(&cfg.providers.eco.model),
+    };
+    if let Some(model) = override_model {
+        effective.coder = model.clone();
+        effective.premium = model.clone();
+        effective.reviewer = model.clone();
+        effective.reviewer_critical = model.clone();
+        effective.product_owner = model.clone();
+    }
+    let m = &effective;
     match role {
         "product-owner" => {
             model_row(ui, "Modell:", &m.product_owner);
@@ -276,11 +301,14 @@ fn details(ui: &mut Ui, s: &Snapshot, role: &str, cfg: &TeamConfig) {
             model_row(ui, "complex / claudeapi:", &m.premium);
             model_row(ui, "Reviewer:", &m.reviewer);
             let kimi: Vec<&str> = cfg.repos.iter().filter(|r| r.routing != team_core::config::Routing::Claude).map(|r| r.name.as_str()).collect();
-            if !kimi.is_empty() {
+            if override_model.is_none() && !kimi.is_empty() {
                 model_row(ui, &format!("Kimi für {}:", kimi.join(", ")), &cfg.providers.openrouter.model);
             }
         }
         "ux-review" => {
+            if codex || cfg.runner.backend == team_core::config::Backend::OpenAi {
+                muted(ui, "Desktop-Tester unter Codex/OpenAI nicht verfügbar (benötigt Anthropic). Rollen-Chat nutzt den gewählten Runner.");
+            }
             let ux = &cfg.ux_review;
             model_row(ui, "Modell:", &ux.model);
             model_row(ui, "Zeitfenster:", &format!("ab {:02}:00 für {} Std., {} Abläufe pro Nacht", ux.hour, team_core::config::UxReview::WINDOW_HOURS, ux.goals_per_run));
@@ -297,7 +325,7 @@ fn details(ui: &mut Ui, s: &Snapshot, role: &str, cfg: &TeamConfig) {
         }
         "product-discovery" => {
             let pd = &cfg.product_discovery;
-            model_row(ui, "Modell:", if pd.model.is_empty() { &m.product_owner } else { &pd.model });
+            model_row(ui, "Modell:", if override_model.is_some() || pd.model.is_empty() { &m.product_owner } else { &pd.model });
             model_row(ui, "Zeitfenster:", &format!("wöchentlich {} ab {:02}:00, Budget {:.0} USD (nominell)", pd.weekday, pd.hour, pd.weekly_budget_usd));
             let d = &s.discovery;
             let last = d.state.as_ref().map(|st| format!("Woche {} · {}", st.week, crate::core::discovery::result_label(&st.last_result))).unwrap_or_else(|| "Noch kein Discovery-Lauf".into());

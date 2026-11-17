@@ -19,6 +19,7 @@ pub use parse::{parse_events, usage_limit_reset, Outcome, Usage};
 /// The commit-comment hook shipped with the agent (passed via `--settings`).
 pub const HOOK_SETTINGS: &str = include_str!("../assets/claude-settings.json");
 
+#[derive(Clone)]
 pub struct Session<'a> {
     pub prompt: String,
     pub cwd: PathBuf,
@@ -120,8 +121,12 @@ pub fn over_deadline(started: Instant, deadline: Option<Duration>) -> bool {
 
 pub fn run(s: &Session) -> Result<Outcome, Error> {
     let cli = find_cli().ok_or(Error::NotInstalled)?;
+    run_cli(s, cli, args(s), |line| vec![line.to_string()])
+}
+
+pub(crate) fn run_cli(s: &Session, cli: PathBuf, args: Vec<String>, mut normalize: impl FnMut(&str) -> Vec<String>) -> Result<Outcome, Error> {
     let mut cmd = command(&cli);
-    cmd.args(args(s)).current_dir(&s.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    cmd.args(args).current_dir(&s.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     s.env.apply(&mut cmd);
     cmd.env("GIT_TERMINAL_PROMPT", "0").env_remove("CLAUDE_CODE_ENTRYPOINT");
     // prompts call `lunima-team-agent chat …` by name (chat::CLI): a quoted absolute path
@@ -177,13 +182,15 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
         // short wait: the memory guard below has to react within about a second
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(Line::Out(l)) => {
-                if let Some(f) = log.as_mut() {
-                    let _ = writeln!(f, "{l}");
+                for event in normalize(&l) {
+                    if let Some(f) = log.as_mut() {
+                        let _ = writeln!(f, "{event}");
+                    }
+                    if result_at.is_none() && is_result_event(&event) {
+                        result_at = Some(Instant::now());
+                    }
+                    lines.push(event);
                 }
-                if result_at.is_none() && is_result_event(&l) {
-                    result_at = Some(Instant::now());
-                }
-                lines.push(l);
                 last_activity = Instant::now();
             }
             Ok(Line::Done) | Err(mpsc::RecvTimeoutError::Disconnected) => break,

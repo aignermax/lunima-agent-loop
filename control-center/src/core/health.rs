@@ -56,8 +56,8 @@ pub fn evaluate(s: &Snapshot, now: DateTime<Local>) -> Health {
     }
     po_check(s, now, &mut checks);
     if let Some(f) = &s.log {
-        let login_confirmed = s.setup.as_ref().is_some_and(|c| c.iter().any(|c| c.title == "Claude-Anmeldung" && c.ok));
-        log_checks(f, now, login_confirmed, &mut checks);
+        let login_confirmed = s.setup.as_ref().is_some_and(|c| c.iter().any(|c| (c.title == "Claude-Anmeldung" || c.title == "Codex-Anmeldung") && c.ok));
+        log_checks(f, now, login_confirmed, s.cfg().map(|c| c.runner.backend.label()).unwrap_or("Claude"), &mut checks);
     }
     let overall = checks.iter().map(|c| c.level).max().unwrap_or(Level::Pending);
     let (headline, subline) = headline(s, &checks, overall, now);
@@ -135,13 +135,13 @@ fn po_check(s: &Snapshot, now: DateTime<Local>, out: &mut Vec<Check>) {
     }
 }
 
-fn log_checks(f: &LogFindings, now: DateTime<Local>, login_confirmed: bool, out: &mut Vec<Check>) {
+fn log_checks(f: &LogFindings, now: DateTime<Local>, login_confirmed: bool, backend: &str, out: &mut Vec<Check>) {
     if let Some(at) = f.not_logged_in.filter(|t| !login_confirmed && now - *t < Duration::hours(2)) {
-        out.push(check(Level::Error, "Claude nicht angemeldet", format!("{}: Claude meldet „not logged in“.", relative(at, now)), Some(("Einrichten", Fix::OpenSetup))));
+        out.push(check(Level::Error, format!("{backend} nicht angemeldet"), format!("{}: {backend} meldet „not logged in“.", relative(at, now)), Some(("Einrichten", Fix::OpenSetup))));
     }
     let failures = LogFindings::count_since(&f.claude_failures, now, 2);
     if failures >= 3 {
-        out.push(check(Level::Warn, "Claude-Läufe scheitern", format!("{failures} abgebrochene oder hängende Claude-Läufe in 2 Std. — siehe Protokolle."), None));
+        out.push(check(Level::Warn, format!("{backend}-Läufe scheitern"), format!("{failures} abgebrochene oder hängende {backend}-Läufe in 2 Std. — siehe Protokolle."), None));
     }
     let panics = LogFindings::count_since(&f.panics, now, 24);
     if panics > 0 {

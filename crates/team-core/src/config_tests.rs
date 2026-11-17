@@ -107,3 +107,15 @@ fn one_setting_by_path() {
     assert!(c.with_setting("poll_seconds", "0").is_err(), "validated");
     assert!(c.with_setting("repos", "x").is_err(), "the repository list is not a single value");
 }
+
+#[test]
+fn runner_defaults_and_settings_round_trip() {
+    let c: TeamConfig = toml::from_str("").unwrap();
+    let value = toml::Value::try_from(&c).unwrap();
+    assert_eq!(value.get("runner").and_then(|r| r.get("backend")).and_then(|v| v.as_str()), Some("claude"));
+    let c = c.with_setting("runner.backend", "codex").unwrap().with_setting("runner.model", "gpt-test").unwrap();
+    let t = tempfile::tempdir().unwrap();
+    c.save(&t.path().join("team.toml")).unwrap();
+    assert_eq!(TeamConfig::load(&t.path().join("team.toml")).unwrap(), c);
+    assert!(c.with_setting("runner.backend", "unknown").is_err());
+}

@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use team_core::chat::{self, Kind, Message, MAX};
-use team_core::config::TeamConfig;
+use team_core::config::{Backend, TeamConfig};
 use team_core::paths::Paths;
 use team_core::provider::ChildEnv;
 
@@ -39,6 +39,13 @@ fn describe(role: &str) -> &'static str {
 }
 
 fn model(cfg: &TeamConfig, role: &str) -> String {
+    match cfg.runner.backend {
+        Backend::Codex => return cfg.runner.model.clone(),
+        Backend::OpenAi => return cfg.providers.openai.model.clone(),
+        Backend::Openrouter => return cfg.providers.openrouter.model.clone(),
+        Backend::Eco => return cfg.providers.eco.model.clone(),
+        Backend::Claude => {}
+    }
     let m = &cfg.models;
     match role {
         "coder" => m.coder.clone(),
@@ -113,12 +120,12 @@ Your job in the team: {job}\n\n\
 - team configuration: {config} (change it only with `config set`, which validates)\n\
 - your memory (standing instructions, part of every prompt you get): {memory}{memory_note}\n\
 - your chat: {chat_file}\n\
-- logs: {logs} (agent.log; raw Claude sessions of your work in {logs}{sep}{role})\n\
+- logs: {logs} (agent.log; normalized runner sessions of your work in {logs}{sep}{role})\n\
 - state: {state}\n\n\
 ## Commands (shell tool; texts in single quotes)\n\
 - {CLI} config set <dotted.path> <value>   e.g. `roles.product_owner true`, `product_owner.repo aignermax/Lunima`, `budgets.max_turns_regular 200`\n\
 - {CLI} config add-repo <owner/name>   /   config remove-repo <owner/name>   (repositories the coder works on)\n\
-- {CLI} config show   /   {CLI} status   (configuration, Claude CLI, gh login, repositories)\n\
+- {CLI} config show   /   {CLI} status   (configuration, runner CLI, gh login, repositories)\n\
 - {CLI} chat remember --role {role} '<text>'   (only when Max asks you to keep something in mind)\n\
 - gh is logged in as the team's GitHub user; git and the usual tools are available.\n\
 {howto}\n\n\
@@ -158,7 +165,11 @@ pub fn answer(paths: &Paths, role: &str, incoming: &Message) -> Result<String, S
     let mut history = chat::tail(paths, role, HISTORY + 1);
     history.retain(|m| m.id != incoming.id);
     let prompt = persona_prompt(paths, &cfg, role, &history, incoming);
-    let mut env = ChildEnv::subscription();
+    let choice = team_core::provider::runner_choice(&cfg.runner, &cfg.providers)?;
+    let mut env = if cfg.runner.backend == Backend::Codex { ChildEnv::codex_subscription() } else { ChildEnv::subscription() };
+    if let Some(c) = &choice {
+        env = c.env.clone();
+    }
     env.set.insert(ENV_ROLE.into(), role.into());
     env.set.insert(ENV_HOPS.into(), incoming.hops.to_string());
     if incoming.from == MAX {
@@ -166,21 +177,8 @@ pub fn answer(paths: &Paths, role: &str, incoming: &Message) -> Result<String, S
     }
     let logs = paths.logs().join("chat");
     let _ = std::fs::create_dir_all(&logs);
-    let session = team_core::claude::Session {
-        prompt,
-        cwd: paths.root.clone(),
-        model: model(&cfg, role),
-        max_turns: 60,
-        env,
-        settings_file: None,
-        log_file: Some(logs.join(format!("{}_{role}.jsonl", Local::now().format("%Y-%m-%d_%H%M%S")))),
-        inactivity: Duration::from_secs(300),
-        deadline: Some(Duration::from_secs(20 * 60)),
-        on_tick: None,
-        tools: None,
-        memory_guard: false,
-    };
-    let out = team_core::claude::run(&session).map_err(|e| e.to_string())?;
+    let session = team_core::claude::Session { prompt, cwd: paths.root.clone(), model: choice.map(|c| c.model).unwrap_or_else(|| model(&cfg, role)), max_turns: 60, env, settings_file: None, log_file: Some(logs.join(format!("{}_{role}.jsonl", Local::now().format("%Y-%m-%d_%H%M%S")))), inactivity: Duration::from_secs(300), deadline: Some(Duration::from_secs(20 * 60)), on_tick: None, tools: None, memory_guard: false };
+    let out = crate::llm::run_session(cfg.runner.backend, &session).map_err(|e| e.to_string())?;
     if let Some(until) = out.usage_limit_until {
         return Err(format!("Claude-Nutzungslimit erreicht — ich antworte ab {} wieder", until.format("%H:%M")));
     }
@@ -226,7 +224,9 @@ pub fn spawn_worker(paths: Paths) {
                         continue;
                     }
                 }
-                let Some(msg) = chat::pending(&chat::read(&paths, role), role) else { continue };
+                let Some(msg) = chat::pending(&chat::read(&paths, role), role) else {
+                    continue;
+                };
                 if given_up.contains(&msg.id) {
                     continue;
                 }
@@ -313,7 +313,13 @@ pub fn cli(paths: &Paths, args: &[String]) -> Result<String, String> {
     let sub = args.first().map(String::as_str).unwrap_or("");
     let a = parse(args.get(1..).unwrap_or_default());
     let text = a.text();
-    let need_text = || if text.trim().is_empty() { Err("Text fehlt".to_string()) } else { Ok(()) };
+    let need_text = || {
+        if text.trim().is_empty() {
+            Err("Text fehlt".to_string())
+        } else {
+            Ok(())
+        }
+    };
     match sub {
         "say" => {
             need_text()?;
@@ -415,6 +421,19 @@ mod tests {
         p.ensure().unwrap();
         TeamConfig::default().save(&p.config()).unwrap();
         (t, p)
+    }
+
+    #[test]
+    fn codex_chat_model_overrides_every_role_including_discovery_and_ux() {
+        let mut cfg = TeamConfig::default();
+        cfg.runner.backend = Backend::Codex;
+        cfg.product_discovery.model = "claude-discovery".into();
+        for name in ["", "gpt-test"] {
+            cfg.runner.model = name.into();
+            for (role, _) in chat::ROLES {
+                assert_eq!(model(&cfg, role), name, "{role}");
+            }
+        }
     }
 
     #[test]

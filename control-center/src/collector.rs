@@ -224,7 +224,7 @@ impl SlowWorker {
     fn refresh_slow(&self) {
         let snap = self.snap();
         let service = Some(agent_service::query());
-        let setup = crate::core::setup::evaluate(&probes::System, !snap.config_missing);
+        let setup = crate::core::setup::evaluate(&probes::System, !snap.config_missing, snap.cfg().map(|c| c.runner.backend).unwrap_or_default(), snap.cfg().map(|c| team_core::provider::runner_choice(&c.runner, &c.providers).map(|_| ())).unwrap_or(Ok(())));
         let repo = snap.github_repo();
         let gh = if repo.is_empty() { Err("kein Repository konfiguriert".into()) } else { github::fetch(&repo) };
         let (mut tomls, mut toml_at) = (snap.agent_tomls.clone(), snap.agent_toml_at.clone());

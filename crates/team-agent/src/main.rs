@@ -125,17 +125,45 @@ fn status() -> i32 {
             None
         }
     };
-    match team_core::claude::find_cli() {
-        Some(cli) => check(true, "Claude-CLI", &cli.display().to_string()),
-        None => check(false, "Claude-CLI", "nicht gefunden"),
+    let backend = cfg.as_ref().map(|c| c.runner.backend).unwrap_or_default();
+    let cli = match backend {
+        team_core::config::Backend::Claude | team_core::config::Backend::Openrouter | team_core::config::Backend::Eco => team_core::claude::find_cli(),
+        team_core::config::Backend::Codex | team_core::config::Backend::OpenAi => team_core::codex::find_cli(),
+    };
+    let title = format!("{}-CLI", backend.label());
+    match cli {
+        Some(cli) => {
+            check(true, &title, &cli.display().to_string());
+            if backend == team_core::config::Backend::Codex {
+                let mut cmd = team_core::proc::command(cli);
+                cmd.args(["login", "status"]);
+                team_core::provider::ChildEnv::codex_subscription().apply(&mut cmd);
+                match team_core::proc::run(cmd, None, std::time::Duration::from_secs(20)) {
+                    Ok(out) => {
+                        let chatgpt = out.ok() && format!("{} {}", out.stdout, out.stderr).to_ascii_lowercase().contains("chatgpt");
+                        check(chatgpt, "Codex-Anmeldung", if chatgpt { "ChatGPT" } else { "ChatGPT-Login erforderlich: `codex login`" });
+                    }
+                    Err(e) => check(false, "Codex-Anmeldung", &e.to_string()),
+                }
+            }
+        }
+        None => check(false, &title, "nicht gefunden"),
     }
     match team_core::gh::current_user() {
         Ok(login) => check(true, "GitHub (gh)", &format!("angemeldet als {login}")),
         Err(e) => check(false, "GitHub (gh)", &format!("{e} → `gh auth login`")),
     }
     if let Some(c) = cfg {
+        if matches!(backend, team_core::config::Backend::Openrouter | team_core::config::Backend::Eco | team_core::config::Backend::OpenAi) {
+            match team_core::provider::runner_choice(&c.runner, &c.providers) {
+                Ok(Some(choice)) => check(true, "API-Provider", &format!("{} / {} (Key konfiguriert)", backend.label(), choice.model)),
+                Err(e) => check(false, "API-Provider", &e),
+                _ => {}
+            }
+        }
         for r in &c.repos {
-            println!("  Repo {} · Coder {} · {:?}", r.name, if r.coder { "an" } else { "aus" }, r.routing);
+            let routing = if backend == team_core::config::Backend::Claude { format!("{:?}", r.routing) } else { format!("{} (global)", backend.label()) };
+            println!("  Repo {} · Coder {} · {}", r.name, if r.coder { "an" } else { "aus" }, routing);
         }
     }
     0
