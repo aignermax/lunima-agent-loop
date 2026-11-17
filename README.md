@@ -80,7 +80,7 @@ Without the UI: `lunima-team-agent init`, then `lunima-team-agent status`, then
 Debian/Ubuntu:
 
 ```sh
-sudo apt install ./lunima-team_<version>-1_amd64.deb    # or _arm64.deb
+sudo apt install ./lunima-team_<version>_amd64.deb      # or _arm64.deb
 lunima-team-agent init                                  # writes ~/.local/share/lunima-team/team.toml
 systemctl --user enable --now lunima-team-agent         # agent in the background (user unit)
 lunima-po                                               # Control Center
@@ -93,6 +93,28 @@ To keep the agent running while you are logged out: `loginctl enable-linger $USE
 
 The Control Center's tray icon needs a desktop with StatusNotifier/AppIndicator support
 (GNOME: the *AppIndicator* extension).
+
+### Automatic updates
+
+The Control Center checks the latest stable GitHub release at startup and every hour.
+It automatically downloads the MSI (Windows) or `.deb` (Ubuntu/Debian) matching the
+machine's architecture, verifies its size and SHA-256 against GitHub's release metadata,
+and shows **Update bereit → Jetzt aktualisieren** in the top bar. Leaving it prepared
+installs it at the next full Control Center launch; hiding/showing the tray window does
+not count as a restart. The background agent and Control Center update together.
+
+Before installation, the daemon stops accepting new tasks/chat answers and finishes
+current work. A waiting update can be postponed. Windows UAC or Linux PolicyKit asks for
+permission to install the package; Linux requires `pkexec` (the `pkexec` package on Ubuntu).
+An unsuccessful or cancelled installation retains the download, recovers the previous
+agent and requires a manual retry instead of prompting on every launch. Details are in
+`updates/install.log` beneath the data folder.
+
+Automatic installation requires a registered Windows MSI in `Program Files/Lunima Team`
+or the Ubuntu/Debian package at `/usr/bin/lunima-po`. Portable/source builds download
+updates but offer the package for manual installation. Existing releases without this
+updater need one manual installation of a release containing it. Configuration, login
+credentials, worktrees and logs remain in the existing data folder.
 
 ### Cutting a release
 

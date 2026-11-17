@@ -10,12 +10,17 @@ use crate::core::team::{role_label, ROLES};
 use crate::sys::agent_service::{self, Verb};
 use crate::sys::{autostart, github, probes};
 use chrono::Local;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use team_core::config::TeamConfig;
 use team_core::paths::Paths;
+
+#[cfg(test)]
+#[path = "collector_tests.rs"]
+mod tests;
 
 const FAST: Duration = Duration::from_secs(5);
 const SLOW: Duration = Duration::from_secs(90);
@@ -26,6 +31,8 @@ const CHAT_SHOWN: usize = 60;
 
 #[derive(Debug, Clone)]
 pub enum Action {
+    /// Completion barrier for queued settings before the updater exits the UI.
+    Barrier(Sender<Result<(), String>>, Arc<std::sync::atomic::AtomicBool>),
     RefreshAll,
     /// projects page: only the repository list
     SaveRepos(Vec<team_core::config::RepoConfig>),
@@ -50,7 +57,38 @@ pub enum Action {
     RequestDiscoveryRun,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum PersistenceKey {
+    Setting(String),
+    Repos,
+    Config,
+    Prompt(PathBuf),
+    RolePause(String),
+    PauseAll,
+    Chat(String),
+    AgentAutostart,
+    Autostart,
+    DiscoveryRun,
+}
+
 impl Action {
+    /// Identify the saved target, rather than the value being retried.
+    fn persistence_key(&self) -> Option<PersistenceKey> {
+        Some(match self {
+            Self::SetSetting(path, _) => PersistenceKey::Setting(path.clone()),
+            Self::SaveRepos(_) => PersistenceKey::Repos,
+            Self::CreateConfig => PersistenceKey::Config,
+            Self::SavePrompt(path, _) | Self::DeletePrompt(path) => PersistenceKey::Prompt(path.clone()),
+            Self::SetRolePaused(role, _) => PersistenceKey::RolePause(role.clone()),
+            Self::PauseAll(_) => PersistenceKey::PauseAll,
+            Self::SendChat(role, _) => PersistenceKey::Chat(role.clone()),
+            Self::SetAgentAutostart(_) => PersistenceKey::AgentAutostart,
+            Self::SetAutostart(_) => PersistenceKey::Autostart,
+            Self::RequestDiscoveryRun => PersistenceKey::DiscoveryRun,
+            Self::Barrier(..) | Self::RefreshAll | Self::Agent(_) | Self::Terminal(_) | Self::RunOnce(_) => return None,
+        })
+    }
+
     /// Short German label for the "busy" toast.
     fn label(&self) -> String {
         match self {
@@ -73,6 +111,7 @@ pub struct Notice {
 }
 
 pub struct Shared {
+    pub update_preparing: std::sync::atomic::AtomicBool,
     pub snapshot: Mutex<Snapshot>,
     pub notice: Mutex<Option<Notice>>,
     pub busy: Mutex<Option<String>>,
@@ -101,12 +140,12 @@ impl Handle {
 
 /// Starts the worker thread. `on_change` is called after every update (repaint + tray).
 pub fn start(paths: Paths, on_change: Arc<dyn Fn() + Send + Sync>) -> Handle {
-    let shared = Arc::new(Shared { snapshot: Mutex::new(Snapshot::empty(paths.clone())), notice: Mutex::new(None), busy: Mutex::new(None) });
+    let shared = Arc::new(Shared { update_preparing: std::sync::atomic::AtomicBool::new(false), snapshot: Mutex::new(Snapshot::empty(paths.clone())), notice: Mutex::new(None), busy: Mutex::new(None) });
     let (tx, rx) = mpsc::channel();
     let (slow_tx, slow_rx) = mpsc::channel();
     let slow = SlowWorker { shared: shared.clone(), paths: paths.clone(), on_change: on_change.clone() };
     std::thread::Builder::new().name("collector-slow".into()).spawn(move || slow.run(slow_rx)).expect("spawn slow collector");
-    let worker = Worker { shared: shared.clone(), paths, cache: PassCache::default(), on_change, slow: slow_tx };
+    let worker = Worker { shared: shared.clone(), paths, cache: PassCache::default(), on_change, slow: slow_tx, persistence_errors: BTreeMap::new() };
     std::thread::Builder::new().name("collector".into()).spawn(move || worker.run(rx)).expect("spawn collector");
     Handle { shared, tx }
 }
@@ -118,6 +157,8 @@ struct Worker {
     on_change: Arc<dyn Fn() + Send + Sync>,
     /// asks the slow worker for a fresh round (after an action)
     slow: Sender<()>,
+    /// A successful action clears only the failure for its own saved target.
+    persistence_errors: BTreeMap<PersistenceKey, String>,
 }
 
 impl Worker {
@@ -258,6 +299,14 @@ impl Worker {
         *self.shared.busy.lock().expect("busy lock") = Some(action.label());
         (self.on_change)();
         let result = self.perform(&action);
+        if let Some(key) = action.persistence_key() {
+            match &result {
+                Ok(_) => { self.persistence_errors.remove(&key); }
+                Err(error) => { self.persistence_errors.insert(key, error.clone()); }
+            }
+        }
+        // An unrelated successful action must not hide an unsaved change.
+        let result = result.and_then(|text| self.persistence_result().map(|()| text));
         *self.shared.busy.lock().expect("busy lock") = None;
         let (ok, text) = match result {
             Ok(t) => (true, t),
@@ -267,10 +316,36 @@ impl Worker {
         self.refresh_fast();
     }
 
+    fn persistence_result(&self) -> Result<(), String> {
+        if self.persistence_errors.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("Nicht gespeichert: {}", self.persistence_errors.iter()
+                .map(|(key, error)| format!("{key:?}: {error}"))
+                .collect::<Vec<_>>().join("; ")))
+        }
+    }
+
     fn perform(&mut self, action: &Action) -> Result<String, String> {
+        if self.shared.update_preparing.load(std::sync::atomic::Ordering::SeqCst) && matches!(action,Action::Agent(_)|Action::RunOnce(_)|Action::SetAgentAutostart(_)) {
+            return Err("Update wird vorbereitet; Agent-Aufgaben werden erst fertiggestellt".into());
+        }
         let state = self.paths.state();
         let exe = || agent_service::find_exe().ok_or_else(|| "lunima-team-agent nicht gefunden".to_string());
         match action {
+            Action::Barrier(done,active) => {
+                let result = self.persistence_result().and_then(|()| {
+                    if !active.load(std::sync::atomic::Ordering::SeqCst) {return Err("Update-Anforderung wurde abgebrochen".into());}
+                    self.shared.update_preparing.store(true,std::sync::atomic::Ordering::SeqCst);
+                    if !active.load(std::sync::atomic::Ordering::SeqCst) {
+                        self.shared.update_preparing.store(false,std::sync::atomic::Ordering::SeqCst);
+                        return Err("Update-Anforderung wurde abgebrochen".into());
+                    }
+                    Ok(())
+                });
+                let _ = done.send(result.clone());
+                result.map(|()| "Einstellungen gespeichert".into())
+            },
             Action::RefreshAll => Ok("Aktualisiert".into()),
             Action::SaveRepos(repos) => {
                 let mut cfg = TeamConfig::load(&self.paths.config())?;

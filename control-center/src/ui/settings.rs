@@ -108,6 +108,9 @@ impl SettingsPage {
         }
     }
 
+    /// Update handoff must not discard invalid text which has not been saved.
+    pub fn can_update(&self) -> bool { self.edits.is_empty() && self.error.is_none() }
+
     /// Saves one field; a rejected value stays in the field with the reason above the form.
     fn save(&mut self, cfg: &TeamConfig, path: &'static str, handle: &Handle) {
         let Some(text) = self.edits.get(path).cloned() else {
@@ -118,6 +121,7 @@ impl SettingsPage {
         let shown = self.sent.get(path).map(|(v, _)| v.clone()).unwrap_or_else(|| settings_model::get(cfg, path));
         if text == shown {
             self.edits.remove(path);
+            self.error = None;
             return;
         }
         // checked here for an immediate message, then saved as this one change onto the

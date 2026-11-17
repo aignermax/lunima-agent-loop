@@ -79,6 +79,7 @@ pub struct App {
     screenshot: Option<crate::screenshot::Screenshot>,
     /// the restored window size was checked (`fix_tiny_window`)
     window_checked: bool,
+    updater: Option<crate::updater::Worker>,
 }
 
 impl App {
@@ -88,11 +89,13 @@ impl App {
         if screenshot.is_none() {
             tray::install(handle.clone());
         }
-        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default(), screenshot, window_checked: false }
+        let updater = screenshot.is_none().then(|| crate::updater::Worker::start(handle.snapshot().paths.root.clone(),handle.clone()));
+        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default(), screenshot, window_checked: false, updater }
     }
 
     fn sidebar(&mut self, ctx: &egui::Context, s: &Snapshot, h: &Health) {
         egui::SidePanel::left("nav").exact_width(220.0).resizable(false).frame(egui::Frame::new().fill(theme::SIDEBAR).inner_margin(egui::Margin::same(16))).show(ctx, |ui| {
+            if self.updater.as_ref().is_some_and(|u|u.blocking()) {ui.disable();}
             ui.horizontal(|ui| {
                 level_dot(ui, h.overall, 7.0);
                 ui.vertical(|ui| {
@@ -163,9 +166,16 @@ impl eframe::App for App {
         }
         let s = self.handle.snapshot();
         let h = health::evaluate(&s, Local::now());
+        if let Some(updater)=&self.updater {
+            if updater.banner(ctx) {
+                self.settings.flush(&s,&self.handle);
+                if self.settings.can_update() {updater.install();} else {updater.save_error();}
+            }
+        }
         tray::sync(&self.handle);
         self.sidebar(ctx, &s, &h);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::symmetric(28, 22))).show(ctx, |ui| {
+            if self.updater.as_ref().is_some_and(|u|u.blocking()) {ui.disable();}
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 // forms and lists read best at a limited width; the Team page's two columns of
                 // role cards with chats use whatever the window offers

@@ -7,6 +7,7 @@
 //! so a long build never makes Max wait and a chat never disturbs a build.
 
 use crate::daemon::role_enabled;
+use crate::daemon::update_drain::Drain;
 use chrono::Local;
 use std::collections::HashSet;
 use std::path::Path;
@@ -205,7 +206,12 @@ impl Drop for Busy {
 
 /// Answers Max's messages and teammates' asks: one conversation per role at a time, up to
 /// `MAX_PARALLEL` roles at once. Only this worker writes the busy markers.
-pub fn spawn_worker(paths: Paths) {
+pub(crate) fn spawn_worker(paths: Paths, drain: Arc<Drain>) -> std::thread::JoinHandle<()> {
+    spawn_worker_with_answer(paths, drain, answer)
+}
+
+fn spawn_worker_with_answer(paths: Paths, drain: Arc<Drain>, answer: impl Fn(&Paths, &str, &Message) -> Result<String, String> + Send + Sync + 'static) -> std::thread::JoinHandle<()> {
+    let answer = Arc::new(answer);
     for (role, _) in chat::ROLES {
         chat::set_busy(&paths, role, false);
     }
@@ -215,46 +221,69 @@ pub fn spawn_worker(paths: Paths) {
     let (failed_tx, failed_rx) = std::sync::mpsc::channel::<String>();
     std::thread::Builder::new()
         .name("chat".into())
-        .spawn(move || loop {
-            given_up.extend(failed_rx.try_iter());
-            for (role, _) in chat::ROLES {
-                {
-                    let set = busy.lock().unwrap_or_else(|p| p.into_inner());
-                    if set.contains(role) || set.len() >= MAX_PARALLEL {
+        .spawn(move || {
+            let mut answers = Vec::<std::thread::JoinHandle<()>>::new();
+            loop {
+                if drain.draining() {
+                    break;
+                }
+                // Reap completed replies during normal operation, retaining every live handle.
+                let mut i = 0;
+                while i < answers.len() {
+                    if answers[i].is_finished() {
+                        let _ = answers.swap_remove(i).join();
+                    } else {
+                        i += 1;
+                    }
+                }
+                given_up.extend(failed_rx.try_iter());
+                for (role, _) in chat::ROLES {
+                    {
+                        let set = busy.lock().unwrap_or_else(|p| p.into_inner());
+                        if set.contains(role) || set.len() >= MAX_PARALLEL {
+                            continue;
+                        }
+                    }
+                    let Some(msg) = chat::pending(&chat::read(&paths, role), role) else {
+                        continue;
+                    };
+                    if given_up.contains(&msg.id) {
                         continue;
                     }
-                }
-                let Some(msg) = chat::pending(&chat::read(&paths, role), role) else {
-                    continue;
-                };
-                if given_up.contains(&msg.id) {
-                    continue;
-                }
-                busy.lock().unwrap_or_else(|p| p.into_inner()).insert(role);
-                chat::set_busy(&paths, role, true);
-                let guard = Busy { paths: paths.clone(), role, set: busy.clone() };
-                let failed = failed_tx.clone();
-                std::thread::spawn(move || {
-                    let _guard = guard;
-                    crate::log::set_role("chat");
-                    let paths = &_guard.paths;
-                    let to = if msg.from == MAX { MAX.to_string() } else { msg.from.clone() };
-                    let reply = match answer(paths, role, &msg) {
-                        Ok(text) => Message::new(role, &to, Kind::Chat, &text),
-                        Err(e) => {
-                            crate::log::warn(&format!("Chat {role}: {e}"));
-                            Message::new(role, &to, Kind::Error, &format!("Ich konnte gerade nicht antworten: {e}"))
+                    let Some(work) = drain.try_start() else { break };
+                    busy.lock().unwrap_or_else(|p| p.into_inner()).insert(role);
+                    chat::set_busy(&paths, role, true);
+                    let guard = Busy { paths: paths.clone(), role, set: busy.clone() };
+                    let failed = failed_tx.clone();
+                    let answer = answer.clone();
+                    answers.push(std::thread::spawn(move || {
+                        let _work = work;
+                        let _guard = guard;
+                        crate::log::set_role("chat");
+                        let paths = &_guard.paths;
+                        let to = if msg.from == MAX { MAX.to_string() } else { msg.from.clone() };
+                        let reply = match answer(paths, role, &msg) {
+                            Ok(text) => Message::new(role, &to, Kind::Chat, &text),
+                            Err(e) => {
+                                crate::log::warn(&format!("Chat {role}: {e}"));
+                                Message::new(role, &to, Kind::Error, &format!("Ich konnte gerade nicht antworten: {e}"))
+                            }
+                        };
+                        if let Err(e) = chat::post(paths, &reply.reply(&msg)) {
+                            crate::log::error(&format!("Chat {role}: Antwort nicht gespeichert ({e})"));
+                            let _ = failed.send(msg.id.clone());
                         }
-                    };
-                    if let Err(e) = chat::post(paths, &reply.reply(&msg)) {
-                        crate::log::error(&format!("Chat {role}: Antwort nicht gespeichert ({e})"));
-                        let _ = failed.send(msg.id.clone());
-                    }
-                });
+                    }));
+                }
+                if drain.wait(Duration::from_secs(2)) {
+                    break;
+                }
             }
-            std::thread::sleep(Duration::from_secs(2));
+            for answer in answers {
+                let _ = answer.join();
+            }
         })
-        .expect("spawn chat worker");
+        .expect("spawn chat worker")
 }
 
 /// `--flag value` pairs, `--switch`es and the remaining words (the text).
@@ -421,6 +450,54 @@ mod tests {
         p.ensure().unwrap();
         TeamConfig::default().save(&p.config()).unwrap();
         (t, p)
+    }
+
+    fn request_drain(paths: &Paths) {
+        let request = serde_json::json!({"token": "chat-test", "requested_at": Local::now().timestamp()});
+        std::fs::write(paths.state().join("update-drain.json"), request.to_string()).unwrap();
+    }
+
+    #[test]
+    fn draining_chat_joins_current_answer_and_leaves_new_messages_pending() {
+        let (_dir, paths) = home();
+        let drain = Drain::new(paths.state());
+        let incoming = Message::new(MAX, "coder", Kind::Chat, "current question");
+        chat::post(&paths, &incoming).unwrap();
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let release_rx = Mutex::new(release_rx);
+        let worker = spawn_worker_with_answer(paths.clone(), drain.clone(), move |_, role, _| {
+            started_tx.send(role.to_string()).unwrap();
+            release_rx.lock().unwrap().recv_timeout(Duration::from_secs(5)).unwrap();
+            Ok("finished answer".into())
+        });
+        assert_eq!(started_rx.recv_timeout(Duration::from_secs(2)).unwrap(), "coder");
+        request_drain(&paths);
+        chat::post(&paths, &Message::new(MAX, "qa", Kind::Chat, "leave pending")).unwrap();
+        assert!(drain.draining());
+        assert!(drain.acknowledge().is_err(), "an active chat answer must block ack");
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let joiner = std::thread::spawn(move || { worker.join().unwrap(); done_tx.send(()).unwrap(); });
+        assert!(done_rx.recv_timeout(Duration::from_millis(300)).is_err(), "worker must join its answer thread");
+        release_tx.send(()).unwrap();
+        done_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        joiner.join().unwrap();
+        assert!(started_rx.try_recv().is_err(), "no new answers after drain");
+        assert!(chat::read(&paths, "coder").iter().any(|msg| msg.reply_to.as_deref() == Some(incoming.id.as_str()) && msg.text == "finished answer"));
+        assert!(chat::pending(&chat::read(&paths, "qa"), "qa").is_some());
+        drain.acknowledge().unwrap();
+    }
+
+    #[test]
+    fn idle_chat_worker_exits_promptly_on_drain() {
+        let (_dir, paths) = home();
+        request_drain(&paths);
+        let drain = Drain::new(paths.state());
+        let worker = spawn_worker_with_answer(paths, drain, |_, _, _| panic!("no chat should be accepted"));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let joiner = std::thread::spawn(move || { worker.join().unwrap(); tx.send(()).unwrap(); });
+        rx.recv_timeout(Duration::from_secs(1)).unwrap();
+        joiner.join().unwrap();
     }
 
     #[test]

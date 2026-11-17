@@ -206,6 +206,10 @@ fn once(role: &str) -> i32 {
         eprintln!("Der Team-Agent läuft bereits — `once` würde mit ihm konkurrieren.");
         return 3;
     };
+    if team_agent::daemon::update_requested(&p) {
+        eprintln!("Ein Team-Agent-Update wird vorbereitet — `once` wartet bis nach dem Update.");
+        return 3;
+    }
     let Some(mut r) = team_agent::daemon::all_roles().into_iter().find(|r| r.name() == role) else {
         eprintln!("Unbekannte Rolle „{role}“ (coder | qa | pr-feedback | product-owner | ux-review | product-discovery)");
         return 2;
@@ -234,6 +238,36 @@ fn once(role: &str) -> i32 {
         }
     }
     0
+}
+
+#[cfg(test)]
+mod update_drain_tests {
+    use super::*;
+
+    #[test]
+    fn once_rejects_fresh_drain_before_role_startup() {
+        let dir = tempfile::tempdir().unwrap();
+        let paths = Paths::new(dir.path());
+        paths.ensure().unwrap();
+        TeamConfig::default().save(&paths.config()).unwrap();
+        std::fs::write(paths.state().join("update-drain.json"), serde_json::json!({"token": "once-test", "requested_at": chrono::Local::now().timestamp()}).to_string()).unwrap();
+        let previous = std::env::var_os(team_core::paths::ENV_HOME);
+        std::env::set_var(team_core::paths::ENV_HOME, dir.path());
+        // Unknown role prevents any external work if the guard regresses.
+        let code = once("unknown-test-role");
+        std::fs::write(paths.state().join("update-drain.json"), serde_json::json!({"token": "expired", "requested_at": chrono::Local::now().timestamp() - 121}).to_string()).unwrap();
+        let stale_code = once("unknown-test-role");
+        std::fs::write(paths.state().join("update-drain.json"), "{").unwrap();
+        let malformed_code = once("unknown-test-role");
+        match previous {
+            Some(value) => std::env::set_var(team_core::paths::ENV_HOME, value),
+            None => std::env::remove_var(team_core::paths::ENV_HOME),
+        }
+        assert_eq!(code, 3);
+        assert_eq!(stale_code, 2, "expired requests must not block manual startup");
+        assert_eq!(malformed_code, 2, "malformed requests must not block manual startup");
+        assert!(!paths.state().join("update-drained.json").exists(), "manual commands must not acknowledge daemon draining");
+    }
 }
 
 /// `experiment publish|preview`: runs on the maintainer's machine, never inside the daemon.
