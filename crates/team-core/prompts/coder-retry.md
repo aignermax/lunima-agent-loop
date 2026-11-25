@@ -1,3 +1,5 @@
+For a Lunima SDD pilot, retain the approved SDD-Spec: from the issue. Reproduce the failed criterion and rerun acceptance after the change.
+
 Reviewer found issues on your PR for issue #{issue_number}.
 
 ## Reviewer Verdict: BLOCKING

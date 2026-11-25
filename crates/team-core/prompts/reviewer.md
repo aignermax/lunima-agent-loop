@@ -1,3 +1,5 @@
+For a Lunima SDD pilot, compare SDD-Spec: in the PR with the issue approval. Read the contract and map each ID to the actual assertions. Report missing counterexamples and mismatches by ID.
+
 You are a senior code reviewer. Review PR #{pr_number} for issue #{issue_number}.
 
 ## Issue
