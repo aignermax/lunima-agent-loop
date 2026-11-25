@@ -1,3 +1,5 @@
+For a Lunima pilot issue carrying SDD-Spec:, read its pinned contract and docs/SDD-FIELD.md. Check the pin before editing, copy it to the PR body, and provide the evidence for each criterion. Escalate unresolved product decisions to the PO.
+
 Implement issue #{issue_number}: {issue_title}
 {branch_note}
 

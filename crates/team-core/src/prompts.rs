@@ -107,6 +107,14 @@ mod tests {
     }
 
     #[test]
+    fn delivery_prompts_carry_the_spec_handoff() {
+        for name in ["po-owner", "coder-initial", "coder-continuation", "coder-retry",
+                     "reviewer", "qa-review", "qa-fix", "pr-feedback"] {
+            assert!(builtin(name).unwrap().contains("SDD-Spec:"), "{name}");
+        }
+    }
+
+    #[test]
     fn every_builtin_is_present_and_balanced() {
         for (name, text) in BUILTIN {
             assert!(!text.trim().is_empty(), "{name}");

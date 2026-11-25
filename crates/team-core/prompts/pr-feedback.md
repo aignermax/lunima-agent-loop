@@ -1,3 +1,5 @@
+For a Lunima SDD pilot, compare SDD-Spec: in the issue and PR. If feedback changes expected behavior, obtain the PO's revised contract and pin before coding. Rerun acceptance for the new head.
+
 A human reviewer left feedback on PR #{pr_number}
 (branch `{branch}`, title: {pr_title}). Implement what they asked for and
 push to the same branch.

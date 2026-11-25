@@ -1,3 +1,5 @@
+For a Lunima SDD pilot, retrieve SDD-Spec: from the linked issue before repairing the PR. Preserve the approved behavior, identify failed IDs and rerun acceptance on the repaired head.
+
 A previous QA pass on PR #{pr_number} (branch
 `{branch}`) FAILED. Fix the issues described below and push to the same
 branch — QA will rerun automatically.

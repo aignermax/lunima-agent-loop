@@ -1,3 +1,5 @@
+For a Lunima SDD pilot, reload SDD-Spec: from the issue on GitHub. Compare the approved pin to the working contract and PR before resuming. Refresh evidence for the new head.
+
 Continuing work on issue #{issue_number}: {issue_title}
 
 ## Progress So Far
