@@ -10,9 +10,8 @@ Reviewer found issues on your PR for issue #{issue_number}.
 
 Address every BLOCKING finding above. NIT findings are optional but
 appreciated. Use the same tools as before:
-- `{tools_python} {tools_dir}/semantic_search.py "..."` to locate code
-- `{tools_python} {tools_dir}/build_errors.py --suggest-fixes` for build issues
-- `{tools_python} {tools_dir}/smart_test.py` to run tests
+- the CodeGraph tools (`codegraph_explore`, `codegraph_search`, `codegraph_callers`) to locate code
+- the build and test commands from `AGENTS.md` / `CLAUDE.md`, the tests of the area you changed
 
 After fixing, commit and push to the same branch (`{branch}`). The reviewer
 will re-run automatically.

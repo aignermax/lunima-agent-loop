@@ -12,11 +12,9 @@ have already passed mechanically. Verify the PR diff is actually shippable.
    ```bash
    git diff origin/{base_branch}...origin/{branch}
    ```
-3. Optional deeper inspection:
-   ```bash
-   {tools_python} {tools_dir}/semantic_search.py "your query"
-   {tools_python} {tools_dir}/find_symbol.py SymbolName
-   ```
+3. Optional deeper inspection: the CodeGraph tools when the worktree has an index:
+   `codegraph_explore` (the code around the changed symbols, many files in one call),
+   `codegraph_callers` / `codegraph_impact` (who else depends on a changed function).
 4. Check for, in order:
    - Correctness bugs (off-by-one, null deref, unhandled error paths,
      resource leaks)
