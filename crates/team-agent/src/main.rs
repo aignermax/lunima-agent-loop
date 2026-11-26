@@ -28,6 +28,7 @@ fn main() {
         Some("init") => init(&args[1..]),
         Some("status") => status(),
         Some("run") => run(),
+        Some("hook") if args.get(1).map(String::as_str) == Some("bash-guard") => team_agent::bash_guard::run(),
         Some("once") => once(args.get(1).map(String::as_str).unwrap_or("")),
         Some("experiment") => experiment(&args[1..]),
         Some("chat") => team_cmd(|p| team_agent::chat::cli(p, &args[1..])),

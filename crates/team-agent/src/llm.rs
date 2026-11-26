@@ -263,7 +263,8 @@ impl ClaudeCli {
         let backend = decision.backend;
         let mut choice = decision.choice;
         if let Some(effort) = decision.effort {
-            choice.env.set.insert("LUNIMA_CODEX_REASONING_EFFORT".into(), effort.as_str().into());
+            let key = if matches!(backend, Backend::Codex | Backend::OpenAi) { "LUNIMA_CODEX_REASONING_EFFORT" } else { "CLAUDE_CODE_EFFORT_LEVEL" };
+            choice.env.set.insert(key.into(), effort.as_str().into());
         }
         crate::log::info(&format!("{} · Modell {}", choice.why, if choice.model.is_empty() { "CLI-Standard" } else { &choice.model }));
         let settings_file = self.settings(&choice)?;

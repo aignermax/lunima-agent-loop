@@ -12,12 +12,12 @@ real hardware). They override the general advice below.
 - **A bug** → fix it and add a regression test that fails without the fix
 
 ## Finding your way in the code
-This worktree has a CodeGraph index. Find your way with the codegraph tools, not with grep/sed
-in the shell: every shell call re-reads your whole context, one explore call replaces a dozen.
-- `codegraph_explore` with the symbol or file names you know: the relevant source of many files in one call
-- `codegraph_search` (where is X defined), `codegraph_callers` / `codegraph_callees` (call paths),
-  `codegraph_impact` (before changing a widely used symbol), `codegraph_node` (one symbol's source)
-Read big files by section, never whole. If a codegraph tool reports "not initialized", use grep instead: do not ask anyone and do not build the index yourself.
+This worktree has a CodeGraph index. Find your way with `codegraph_explore`, not with grep/sed in
+the shell: one call with a question or the symbol and file names you know returns their line-numbered
+source, callers and blast radius across files, and every shell call re-reads your whole context.
+Use grep/sed only for literal text (log messages, strings) and for files CodeGraph does not index
+(configs, docs). Read big files by section, never whole. If a codegraph tool reports "not
+initialized", use grep instead: do not ask anyone and do not build the index yourself.
 
 ## Build and test
 - Use the build and test commands from the repository's guide. Run the tests of the area you

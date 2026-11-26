@@ -49,6 +49,8 @@ fn args_for(s: &Session, api_url: Option<&str>) -> Vec<String> {
         "features.multi_agent=false",
         "features.multi_agent_v2=false",
         "web_search=\"live\"",
+        "model_auto_compact_token_limit=200000",
+        "tool_output_token_limit=12000",
     ] {
         a.extend(["-c".into(), setting.into()]);
     }
@@ -117,7 +119,7 @@ const CODEGRAPH_TOOLS: [&str; 9] = [
 /// over the worktree's own index. Personal connectors stay off. Without the approvals,
 /// `approval_policy="never"` would refuse every call.
 fn codegraph_mcp() -> Vec<String> {
-    let mut settings = vec!["mcp_servers.codegraph.command=\"codegraph\"".to_string(), "mcp_servers.codegraph.args=[\"serve\", \"--mcp\"]".to_string()];
+    let mut settings = vec!["mcp_servers.codegraph.command=\"codegraph\"".to_string(), "mcp_servers.codegraph.args=[\"serve\", \"--mcp\", \"--no-telemetry\"]".to_string()];
     settings.extend(CODEGRAPH_TOOLS.iter().map(|t| format!("mcp_servers.codegraph.tools.{t}.approval_mode=\"approve\"")));
     settings
 }

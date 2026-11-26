@@ -16,6 +16,14 @@ use std::time::{Duration, Instant};
 mod parse;
 pub use parse::{parse_events, usage_limit_reset, Outcome, Usage};
 
+/// Auto-compact window of agent sessions: Opus 5.5 compacts only near 967K tokens by default,
+/// and every tool call re-reads the whole context, so a smaller window caps what each call costs.
+pub const AUTOCOMPACT_TOKENS: u32 = 200_000;
+
+/// Inline ceiling for one shell command's output (Claude Code's default is 30 000 characters);
+/// longer output goes to a file with a short preview, so a test log is not re-read on every call.
+pub const BASH_OUTPUT_CHARS: &str = "12000";
+
 /// The commit-comment hook shipped with the agent (passed via `--settings`).
 pub const HOOK_SETTINGS: &str = include_str!("../assets/claude-settings.json");
 
@@ -97,6 +105,7 @@ pub fn args(s: &Session) -> Vec<String> {
     }
     a.push("--max-turns".into());
     a.push(s.max_turns.to_string());
+    a.extend(["--autocompact".to_string(), AUTOCOMPACT_TOKENS.to_string()]);
     if !s.model.is_empty() {
         a.extend(["--model".to_string(), s.model.clone()]);
     }
@@ -137,6 +146,8 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
 pub(crate) fn run_cli(s: &Session, cli: PathBuf, args: Vec<String>, mut normalize: impl FnMut(&str) -> Vec<String>) -> Result<Outcome, Error> {
     let mut cmd = command(&cli);
     cmd.args(args).current_dir(&s.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // defaults a session's own env may override; no usage telemetry from the CodeGraph server
+    cmd.env("BASH_MAX_OUTPUT_LENGTH", BASH_OUTPUT_CHARS).env("CODEGRAPH_TELEMETRY", "0");
     s.env.apply(&mut cmd);
     cmd.env("GIT_TERMINAL_PROMPT", "0").env_remove("CLAUDE_CODE_ENTRYPOINT");
     // prompts call `lunima-team-agent chat …` by name (chat::CLI): a quoted absolute path
@@ -320,6 +331,7 @@ mod tests {
         let a = args(&s);
         assert_eq!(&a[..4], ["-p", "--output-format", "stream-json", "--verbose"]);
         assert!(a.windows(2).any(|w| w == ["--max-turns", "150"]));
+        assert!(a.windows(2).any(|w| w == ["--autocompact", "200000"]), "context capped per request");
         assert!(a.windows(2).any(|w| w == ["--model", "claude-opus-5-5"]));
         assert!(a.windows(2).any(|w| w == ["--settings", "hooks.json"]));
         assert!(!a.iter().any(|x| x == "x"), "prompt goes to stdin, not argv");

@@ -7,7 +7,7 @@ push to the same branch.
 
 ## Your Task
 1. Read AGENTS.md / CLAUDE.md for project conventions, build and test commands. Locate code
-   with the CodeGraph tools (`codegraph_explore`, `codegraph_search`), not grep/sed.
+   with `codegraph_explore`, not grep/sed (grep only literal text).
    If a codegraph tool reports "not initialized", use grep instead: do not ask anyone and do not build the index yourself.
 2. Implement the requested change. Stay focused — only what the feedback
    asks for (plus tests). Do not refactor unrelated code.

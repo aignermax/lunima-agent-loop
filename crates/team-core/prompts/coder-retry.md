@@ -10,7 +10,7 @@ Reviewer found issues on your PR for issue #{issue_number}.
 
 Address every BLOCKING finding above. NIT findings are optional but
 appreciated. Use the same tools as before:
-- the CodeGraph tools (`codegraph_explore`, `codegraph_search`, `codegraph_callers`) to locate code
+- `codegraph_explore` to locate code (grep only for literal text)
   (If a codegraph tool reports "not initialized", use grep instead: do not ask anyone and do not build the index yourself.)
 - the build and test commands from `AGENTS.md` / `CLAUDE.md`, the tests of the area you changed
 

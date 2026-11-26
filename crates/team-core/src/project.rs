@@ -211,10 +211,19 @@ pub fn validate(cfg: &TeamConfig, repo: &str, p: &ProjectProfile) -> Result<(), 
                 backend.label()
             ));
         }
-        if spec.effort.is_some() && !matches!(backend, Backend::Codex | Backend::OpenAi) {
-            return Err(format!(
-                "{repo}: Denkaufwand ist nur für Codex/Responses einstellbar"
-            ));
+        if let Some(effort) = spec.effort {
+            let supported = match backend {
+                Backend::Codex | Backend::OpenAi => true,
+                Backend::Claude => effort != ReasoningEffort::Ultra,
+                _ => false,
+            };
+            if !supported {
+                return Err(format!(
+                    "{repo}: Denkaufwand „{}“ ist für {} nicht einstellbar",
+                    effort.as_str(),
+                    backend.label()
+                ));
+            }
         }
         Ok(())
     };
