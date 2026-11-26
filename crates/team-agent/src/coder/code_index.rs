@@ -17,22 +17,30 @@ const ARTIFACTS: [&str; 2] = ["/.codegraph/", "/.cursor/rules/codegraph.mdc"];
 /// Indexes `wt` unless it already has an index or the CLI is missing. Best effort: a
 /// failure is logged and the session runs without the index.
 pub fn ensure(wt: &Path) {
-    if wt.join(".codegraph").is_dir() {
-        return;
-    }
-    let Some(cli) = which("codegraph") else { return };
+    // also for an index made some other way (a session may run `codegraph init` itself):
+    // its config files must never reach a commit
     if let Err(e) = exclude_artifacts(wt) {
         crate::log::warn(&format!("CodeGraph-Index übersprungen ({e})"));
         return;
     }
+    if wt.join(".codegraph").is_dir() {
+        return;
+    }
+    let Some(cli) = which("codegraph") else { return };
     let mut cmd = command(&cli);
     cmd.args(["init", "-i"]).arg(wt);
-    match run(cmd, Some(wt), INDEX_TIMEOUT) {
-        Ok(out) if out.ok() => crate::log::info(&format!("CodeGraph-Index für {} erstellt", wt.display())),
-        Ok(out) if out.timed_out => crate::log::warn(&format!("CodeGraph-Index nach {} s abgebrochen", INDEX_TIMEOUT.as_secs())),
-        Ok(out) => crate::log::warn(&format!("CodeGraph-Index fehlgeschlagen: {}", out.stderr.trim().chars().take(300).collect::<String>())),
-        Err(e) => crate::log::warn(&format!("CodeGraph nicht gestartet: {e}")),
-    }
+    let failure = match run(cmd, Some(wt), INDEX_TIMEOUT) {
+        Ok(out) if out.ok() => {
+            crate::log::info(&format!("CodeGraph-Index für {} erstellt", wt.display()));
+            return;
+        }
+        Ok(out) if out.timed_out => format!("nach {} s abgebrochen", INDEX_TIMEOUT.as_secs()),
+        Ok(out) => format!("fehlgeschlagen: {}", out.stderr.trim().chars().take(300).collect::<String>()),
+        Err(e) => format!("nicht gestartet: {e}"),
+    };
+    crate::log::warn(&format!("CodeGraph-Index {failure}"));
+    // a half-built index would block the next attempt (the check above) and answer wrongly
+    let _ = std::fs::remove_dir_all(wt.join(".codegraph"));
 }
 
 /// Adds the index files to the repository's own `info/exclude` (shared by all worktrees,

@@ -209,10 +209,28 @@ fn budgets(ui: &mut Ui, p: &mut ProjectBudgets, cfg: &TeamConfig, typing: &mut b
                     ui.end_row();
                 }};
             }
+            // a budget of 0 would hand every unfinished session to a human at once
+            macro_rules! usd {
+                ($field:ident, $label:literal) => {{
+                    ui.label($label);
+                    let mut own = p.$field.is_some();
+                    if ui.checkbox(&mut own, "Eigener Wert").changed() {
+                        p.$field = own.then_some(base.$field);
+                    }
+                    if let Some(value) = &mut p.$field {
+                        if ui.add(egui::DragValue::new(value).range(1.0..=10_000.0).speed(1.0).prefix("$")).changed() {
+                            *typing = true;
+                        }
+                    } else {
+                        ui.label(format!("${:.0} (global)", base.$field));
+                    }
+                    ui.end_row();
+                }};
+            }
             number!(timeout_minutes_regular, "Zeitlimit normal (Min.)");
             number!(timeout_minutes_complex, "Zeitlimit complex (Min.)");
-            number!(max_cost_usd_regular, "Kostenbudget normal je Issue (USD)");
-            number!(max_cost_usd_complex, "Kostenbudget complex je Issue (USD)");
+            usd!(max_cost_usd_regular, "Kostenbudget normal je Issue (USD)");
+            usd!(max_cost_usd_complex, "Kostenbudget complex je Issue (USD)");
             number!(max_review_rounds_regular, "Review-Runden normal");
             number!(max_review_rounds_complex, "Review-Runden complex");
             number!(max_sessions, "Sitzungen je Issue");

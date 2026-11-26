@@ -272,6 +272,9 @@ pub fn validate(cfg: &TeamConfig, repo: &str, p: &ProjectProfile) -> Result<(), 
             "{repo}: Zeitlimit, Sitzungen und Versuche müssen größer als null sein"
         ));
     }
+    if [budgets.max_cost_usd_regular, budgets.max_cost_usd_complex].iter().any(|usd| !usd.is_finite() || *usd <= 0.0) {
+        return Err(format!("{repo}: Kostenbudgets müssen positive Beträge (USD) sein"));
+    }
     Ok(())
 }
 

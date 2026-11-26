@@ -240,7 +240,7 @@ mod tests {
 === END ===";
 
     fn comment(id: u64, body: &str) -> Comment {
-        Comment { id, body: body.into(), user: Some(User { login: "x".into() }), created_at: "2026-10-14T10:00:00Z".into() }
+        Comment { id, body: body.into(), user: Some(User { login: "x".into() }), created_at: "2026-10-14T10:00:00Z".into(), author_association: String::new() }
     }
     
     #[test]
@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn python_agent_replies_count_as_handled() {
-        let c = |id: u64, t: &str, body: &str| Comment { id, body: body.into(), user: None, created_at: t.into() };
+        let c = |id: u64, t: &str, body: &str| Comment { id, body: body.into(), user: None, created_at: t.into(), author_association: String::new() };
         let comments = vec![
             c(1, "2026-10-01T10:00:00Z", "@agent rename"),
             c(2, "2026-10-01T10:05:00Z", "<!-- pr-feedback-agent -->

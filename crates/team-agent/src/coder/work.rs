@@ -5,7 +5,7 @@
 use super::finish;
 use super::pickup::{self, Release};
 use super::prompt;
-use super::watch::Watch;
+use super::watch::{self, Watch};
 use crate::ctx::{Ctx, RoleError, RoleResult};
 use crate::directives;
 use crate::llm::{Job, LlmError};
@@ -15,7 +15,7 @@ use crate::workspace::RepoSetup;
 use std::path::PathBuf;
 use team_core::detail;
 use team_core::gh::Issue;
-use team_core::git::{commit_and_push, Pushed};
+use team_core::git::{commit_and_push, run_git, Pushed};
 
 const FAILED_MARK: &str = "<!-- team-agent:attempt-failed -->";
 const GAVE_UP_MARK: &str = "<!-- team-agent:gave-up -->";
@@ -38,6 +38,10 @@ impl IssueRun<'_> {
         let branch = pickup::branch_for(setup.forge.as_ref(), &setup.clone, &issue, state.as_ref());
         let mut state = state.unwrap_or_else(|| SessionState::new(&setup.repo, n, &branch));
         state.branch_name = branch.clone();
+        if state.claim_assignees.is_none() {
+            let own = ctx.login.to_lowercase();
+            state.claim_assignees = Some(issue.assignees.iter().map(|u| u.login.to_lowercase()).filter(|l| *l != own).collect());
+        }
         if !state.in_review && matches!(pickup::agent_pr(setup.forge.as_ref(), n), Ok(Some(_))) {
             // the PR exists already (e.g. made by the other machine): continue with the review
             state.in_review = true;
@@ -56,7 +60,7 @@ impl IssueRun<'_> {
             Err(e) => return self.fail(&issue, &mut state, &format!("worktree setup failed: {e}")),
         };
         if !state.in_review {
-            match self.sessions(&issue, &mut state, &worktree)? {
+            match self.sessions(&issue, &mut state, &worktree, &base)? {
                 Flow::Continue => {}
                 Flow::Stop => return Ok(()),
                 Flow::Fail(e) => return self.fail(&issue, &mut state, &e),
@@ -115,21 +119,22 @@ impl IssueRun<'_> {
         }
     }
 
-    fn sessions(&self, issue: &Issue, state: &mut SessionState, worktree: &std::path::Path) -> RoleResult<Flow> {
+    fn sessions(&self, issue: &Issue, state: &mut SessionState, worktree: &std::path::Path, base: &str) -> RoleResult<Flow> {
         let (ctx, setup) = (self.ctx, self.setup);
         let forge = setup.forge.as_ref();
         let n = issue.number;
         let complex = prompt::is_complex(ctx, issue);
         let b = &ctx.cfg.budgets;
         let (max_turns, max_cost) = if complex { (b.max_turns_complex, b.max_cost_usd_complex) } else { (b.max_turns_regular, b.max_cost_usd_regular) };
-        let watch = Watch::new(forge, issue, &ctx.cfg.labels.running, &ctx.login, &state.branch_name);
+        let claimed_at = pickup::claimed_at(forge, n);
+        let watch = Watch::new(forge, n, &ctx.cfg.labels.running, &ctx.login, &state.branch_name, claimed_at.as_deref(), state.claim_assignees.as_deref().unwrap_or_default());
         loop {
             let current = match forge.issue(n) {
                 Ok(i) => i,
                 Err(e) => return Ok(Flow::Fail(e)),
             };
             if let Some(reason) = watch.check_now() {
-                return Ok(self.stopped(n, state, worktree, &reason));
+                return Ok(self.stopped(n, state, worktree, base, &reason));
             }
             if state.session_count >= b.max_sessions {
                 return Ok(Flow::Human(format!("{} Claude sessions did not finish this issue", state.session_count)));
@@ -143,7 +148,7 @@ impl IssueRun<'_> {
             let text = prompt::session(ctx, &setup.repo, &current, state)?;
             let job = Job { policy: crate::llm::PolicyRequest { role: team_core::project::SessionRole::Coder, labels: labels.clone() }, repo: setup.repo.clone(), prompt: text, cwd: worktree.to_path_buf(), model: choice.model, max_turns, env: choice.env, label: label(&setup.repo, "issue", n), max_duration: None, tools: None };
             crate::log::info(&format!("#{n}: Sitzung {} ({})", state.session_count + 1, choice.why));
-            let out = match ctx.llm.run_watched(&job, &|| watch.throttled()) {
+            let out = match watch.beside(|stop| ctx.llm.run_watched(&job, stop)) {
                 Ok(o) => o,
                 Err(LlmError::UsageLimit(backend, t)) => {
                     self.store.save(state);
@@ -151,7 +156,7 @@ impl IssueRun<'_> {
                 }
                 Err(LlmError::Unavailable(e)) => { self.store.save(state); return Err(RoleError::Unavailable(e)); }
                 Err(LlmError::Failed(e)) => match stop_reason(&e) {
-                    Some(reason) => return Ok(self.stopped(n, state, worktree, reason)),
+                    Some(reason) => return Ok(self.stopped(n, state, worktree, base, reason)),
                     None => return Ok(Flow::Fail(e)),
                 },
             };
@@ -161,7 +166,7 @@ impl IssueRun<'_> {
             // the in-session check runs every few minutes; a stop in the last ones must
             // still keep the PR from being opened
             if let Some(reason) = watch.check_now() {
-                return Ok(self.stopped(n, state, worktree, &reason));
+                return Ok(self.stopped(n, state, worktree, base, &reason));
             }
             if !out.reached_max_turns {
                 // finished work goes to review even past the budget: the budget limits
@@ -173,7 +178,7 @@ impl IssueRun<'_> {
                 return Ok(Flow::Continue);
             }
             if state.total_cost_usd > max_cost {
-                self.budget_stop(n, state, max_cost, worktree);
+                self.budget_stop(n, state, max_cost, worktree, base);
                 return Ok(Flow::Stop);
             }
             self.continuation(n, state, worktree);
@@ -194,8 +199,8 @@ impl IssueRun<'_> {
     }
 
     /// Unfinished and over budget: the work so far goes to origin first, then a human decides.
-    fn budget_stop(&self, n: u64, state: &mut SessionState, limit: f64, worktree: &std::path::Path) {
-        let wip = self.push_wip(n, state, worktree, "budget reached");
+    fn budget_stop(&self, n: u64, state: &mut SessionState, limit: f64, worktree: &std::path::Path, base: &str) {
+        let wip = self.push_wip(n, state, worktree, base, "budget reached");
         let l = &self.ctx.cfg.labels;
         let body = format!(
             "⚠️ **Budget reached**\n\nThis issue has used ${:.2} of its ${limit:.2} budget ({} sessions, {} tokens, mostly cached context) without finishing.{wip}\n\nRe-add the `{}` label (and remove `{}`) to continue with a fresh budget, or raise `budgets.max_cost_usd_*`.",
@@ -212,15 +217,16 @@ impl IssueRun<'_> {
         pickup::release(self.ctx, self.setup.forge.as_ref(), n, Release::Human);
     }
 
-    /// A human took the issue over (or closed it): keep what the agent did, step aside.
-    fn stopped(&self, n: u64, state: &mut SessionState, worktree: &std::path::Path, reason: &str) -> Flow {
+    /// A human took the issue over: keep what the agent did, step aside. A closed issue
+    /// ends silently, as it always did — nobody continues its work.
+    fn stopped(&self, n: u64, state: &mut SessionState, worktree: &std::path::Path, base: &str, reason: &str) -> Flow {
         let (ctx, forge) = (self.ctx, self.setup.forge.as_ref());
         crate::log::info(&format!("{}#{n}: Arbeit beendet — {reason}", self.setup.repo));
-        let wip = self.push_wip(n, state, worktree, "stopped");
-        let _ = forge.comment(n, &format!("🛑 The agent stopped working on this issue: {reason}.{wip}"));
-        if forge.issue(n).is_ok_and(|i| i.state != "open") {
+        if reason == watch::CLOSED {
             self.store.delete(&self.setup.repo, n);
         } else {
+            let wip = self.push_wip(n, state, worktree, base, "stopped");
+            let _ = forge.comment(n, &format!("🛑 The agent stopped working on this issue: {reason}.{wip}"));
             state.note(&format!("Stopped: {reason}"));
             state.handed_to_human = true;
             self.store.save(state);
@@ -229,8 +235,13 @@ impl IssueRun<'_> {
         Flow::Stop
     }
 
-    /// Commits and pushes unfinished work; returns a sentence for the issue comment.
-    fn push_wip(&self, n: u64, state: &SessionState, worktree: &std::path::Path, why: &str) -> String {
+    /// Commits and pushes unfinished work; returns a sentence for the issue comment. A
+    /// worktree without changes or commits pushes nothing (no empty branch on origin).
+    fn push_wip(&self, n: u64, state: &SessionState, worktree: &std::path::Path, base: &str, why: &str) -> String {
+        let dirty = run_git(Some(worktree), &["status", "--porcelain"], false).map(|s| !s.trim().is_empty()).unwrap_or(true);
+        if !dirty && finish::commits_ahead(worktree, base).is_ok_and(|ahead| ahead == 0) {
+            return String::new();
+        }
         match commit_and_push(worktree, &state.branch_name, &format!("Agent: work in progress on #{n} ({why})")) {
             Ok(Pushed::Yes) => format!(" Work in progress is on branch `{}`.", state.branch_name),
             Ok(Pushed::Nothing) => String::new(),

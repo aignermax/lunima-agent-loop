@@ -47,6 +47,7 @@ pub fn pr(number: u64, title: &str, branch: &str, labels: &[&str]) -> PullReques
         title: title.into(),
         body: Some(String::new()),
         html_url: format!("https://github.com/o/r/pull/{number}"),
+        author_association: "MEMBER".into(),
         head: Ref { name: branch.into(), sha: String::new(), repo: None },
         base: Ref { name: "main".into(), sha: String::new(), repo: None },
         labels: labels.iter().map(|l| Label { name: l.to_string() }).collect(),
@@ -74,7 +75,7 @@ impl FakeForge {
         let mut s = self.s.lock().unwrap();
         s.next_id += 1;
         let id = s.next_id;
-        let c = Comment { id, body: body.into(), user: Some(User { login: "someone".into() }), created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true) };
+        let c = Comment { id, body: body.into(), user: Some(User { login: "someone".into() }), created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true), author_association: "OWNER".into() };
         s.comments.entry(number).or_default().push(c);
         id
     }
@@ -269,7 +270,7 @@ impl Forge for FakeForge {
     }
 }
 
-type Step = Box<dyn Fn(&Job) -> Result<Outcome, LlmError> + Send + Sync>;
+type Step = Box<dyn Fn(&Job, Option<crate::llm::StopCheck<'_>>) -> Result<Outcome, LlmError> + Send + Sync>;
 
 /// Scripted Claude: each call pops the next step (the last one repeats); records every job.
 pub struct FakeLlm {
@@ -282,7 +283,12 @@ impl FakeLlm {
         Self { steps: Mutex::new(vec![]), jobs: Mutex::new(vec![]) }
     }
     pub fn then(self, step: impl Fn(&Job) -> Result<Outcome, LlmError> + Send + Sync + 'static) -> Self {
-        self.steps.lock().unwrap().push(Box::new(step));
+        self.steps.lock().unwrap().push(Box::new(move |job, _| step(job)));
+        self
+    }
+    /// A step that sees the session's stop check, as the real session loop does.
+    pub fn then_watched(self, step: impl Fn(&Job, crate::llm::StopCheck<'_>) -> Result<Outcome, LlmError> + Send + Sync + 'static) -> Self {
+        self.steps.lock().unwrap().push(Box::new(move |job, stop| step(job, stop.expect("a watched step runs through run_watched"))));
         self
     }
     /// replies with `text`, optionally writing `file` into the job's cwd first
@@ -314,21 +320,24 @@ fn write(dir: &Path, name: &str) {
 
 impl Llm for FakeLlm {
     fn run(&self, job: &Job) -> Result<Outcome, LlmError> {
-        self.jobs.lock().unwrap().push(job.clone());
-        let mut steps = self.steps.lock().unwrap();
-        let step = if steps.len() > 1 { steps.remove(0) } else { return steps.first().map(|s| s(job)).unwrap_or_else(|| Err(LlmError::Failed("no script".into()))) };
-        drop(steps);
-        step(job)
+        self.step(job, None)
     }
 
-    /// The step runs first (it may play a human acting on GitHub), then the stop check is
-    /// asked once — as a real session would notice it a few minutes in.
     fn run_watched(&self, job: &Job, stop: crate::llm::StopCheck<'_>) -> Result<Outcome, LlmError> {
-        let out = self.run(job);
-        match stop() {
-            Some(reason) => Err(LlmError::Failed(format!("{}: {reason}", team_core::claude::STOPPED_TEXT))),
-            None => out,
+        self.step(job, Some(stop))
+    }
+}
+
+impl FakeLlm {
+    fn step(&self, job: &Job, stop: Option<crate::llm::StopCheck<'_>>) -> Result<Outcome, LlmError> {
+        self.jobs.lock().unwrap().push(job.clone());
+        let mut steps = self.steps.lock().unwrap();
+        if steps.len() > 1 {
+            let step = steps.remove(0);
+            drop(steps);
+            return step(job, stop);
         }
+        steps.first().map(|s| s(job, stop)).unwrap_or_else(|| Err(LlmError::Failed("no script".into())))
     }
 }
 

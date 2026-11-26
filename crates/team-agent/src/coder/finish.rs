@@ -54,7 +54,7 @@ pub fn finish(ctx: &Ctx, setup: &RepoSetup, store: &Store, issue: &Issue, state:
     Ok(())
 }
 
-fn commits_ahead(wt: &Path, base: &str) -> Result<u32, String> {
+pub(super) fn commits_ahead(wt: &Path, base: &str) -> Result<u32, String> {
     let out = run_git(Some(wt), &["rev-list", "--count", &format!("origin/{base}..HEAD")], false)?;
     out.trim().parse().map_err(|_| format!("rev-list: {out}"))
 }

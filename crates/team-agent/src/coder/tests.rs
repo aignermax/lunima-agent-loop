@@ -418,7 +418,8 @@ fn an_unfinished_session_over_budget_pushes_its_work_and_hands_over() {
 }
 
 #[test]
-fn a_stop_command_during_the_session_ends_it_and_keeps_the_work() {
+fn a_stop_posted_late_in_a_session_is_caught_before_the_pr() {
+    // the session ends before the next background check: the check after it still sees it
     let forge = Arc::new(FakeForge::new("o/r").with_issue(task(23, "x", &[])));
     let human = forge.clone();
     let llm = FakeLlm::new().then(move |job| {
@@ -445,8 +446,11 @@ fn a_human_pr_fixing_the_issue_keeps_the_agent_from_starting() {
     let w = world(FakeForge::new("o/r").with_issue(task(24, "x", &[])).with_pr(theirs), FakeLlm::new().reply(SUMMARY, Some("f.txt")));
     assert!(coder().cycle(&w.ctx).unwrap());
     assert_eq!(w.llm.calls(), 0, "no session for duplicate work");
-    assert!(w.forge.comment_bodies(24).last().unwrap().contains("PR #60 already fixes this issue"));
+    let last = w.forge.comment_bodies(24).last().unwrap().clone();
+    assert!(last.contains("PR #60 already fixes this issue") && !last.contains("Work in progress"), "{last}");
     assert!(!w.forge.labels(24).iter().any(|l| l == "agent-running" || l == "needs-human"));
+    let branches = team_core::git::run_git(None, &["--git-dir", &w.origin.display().to_string(), "branch", "--list", "agent/*"], false).unwrap();
+    assert!(branches.trim().is_empty(), "no empty agent branch on origin: {branches}");
 }
 
 #[test]
@@ -458,4 +462,61 @@ fn a_session_ended_by_the_watch_is_a_stop_not_a_failed_attempt() {
     assert!(comments.last().unwrap().starts_with("🛑 The agent stopped working on this issue: the issue was assigned to `maddnik`."));
     assert!(!comments.iter().any(|c| c.contains("failed")), "not counted as an attempt: {comments:?}");
     assert!(!w.forge.labels(25).iter().any(|l| l == "agent-task" || l == "needs-human"));
+}
+
+#[test]
+fn a_stop_command_during_the_session_ends_it_and_keeps_the_work() {
+    let forge = Arc::new(FakeForge::new("o/r").with_issue(task(26, "x", &[])));
+    let human = forge.clone();
+    // the session runs on, as a real one does, until its stop check fires
+    let llm = FakeLlm::new().then_watched(move |job, stop| {
+        std::fs::write(job.cwd.join("half.txt"), "half").unwrap();
+        human.add_comment(26, "/agent stop");
+        let start = std::time::Instant::now();
+        while start.elapsed() < std::time::Duration::from_secs(5) {
+            if let Some(reason) = stop() {
+                return Err(LlmError::Failed(format!("{}: {reason}", team_core::claude::STOPPED_TEXT)));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        Ok(Outcome { text: "still running".into(), num_turns: 30, ..Default::default() })
+    });
+    let w = world_arc(forge, llm);
+    assert!(coder().cycle(&w.ctx).unwrap());
+    let last = w.forge.comment_bodies(26).last().unwrap().clone();
+    assert!(last.starts_with("🛑 The agent stopped working on this issue: `someone` asked the agent to stop."), "{last}");
+    let branch = Store::new(&w.ctx.paths.sessions()).load("o/r", 26).unwrap().branch_name;
+    assert!(fake::pushed_file(&w.origin, &branch, "half.txt").is_some());
+    assert!(w.forge.s.lock().unwrap().prs.is_empty());
+}
+
+#[test]
+fn an_issue_closed_during_the_session_ends_it_silently() {
+    let forge = Arc::new(FakeForge::new("o/r").with_issue(task(27, "x", &[])));
+    let human = forge.clone();
+    let llm = FakeLlm::new().then(move |job| {
+        std::fs::write(job.cwd.join("late.txt"), "x").unwrap();
+        human.s.lock().unwrap().issues.get_mut(&27).unwrap().state = "closed".into();
+        Ok(Outcome { text: SUMMARY.into(), num_turns: 30, ..Default::default() })
+    });
+    let w = world_arc(forge, llm);
+    assert!(coder().cycle(&w.ctx).unwrap());
+    assert!(w.forge.s.lock().unwrap().prs.is_empty());
+    assert!(!w.forge.comment_bodies(27).iter().any(|c| c.contains("🛑")), "nobody needs a note on a closed issue");
+    assert!(Store::new(&w.ctx.paths.sessions()).load("o/r", 27).is_none());
+    assert!(!w.forge.labels(27).iter().any(|l| l == "agent-running" || l == "needs-human"));
+}
+
+#[test]
+fn a_takeover_while_paused_by_the_usage_limit_is_seen_on_resume() {
+    let limit = chrono::Local::now() + chrono::Duration::hours(1);
+    let llm = FakeLlm::new().then(move |_| Err(LlmError::UsageLimit(team_core::config::Backend::Claude, limit))).reply(SUMMARY, Some("f.txt"));
+    let w = world(FakeForge::new("o/r").with_issue(task(28, "x", &[])), llm);
+    let mut c = coder();
+    assert!(matches!(c.cycle(&w.ctx), Err(crate::ctx::RoleError::UsageLimit(_, _))));
+    // during the pause Nik takes the issue
+    w.forge.s.lock().unwrap().issues.get_mut(&28).unwrap().assignees.push(team_core::gh::User { login: "MaddNik".into() });
+    assert!(c.cycle(&w.ctx).unwrap());
+    assert_eq!(w.llm.calls(), 1, "no second session");
+    assert!(w.forge.comment_bodies(28).last().unwrap().contains("the issue was assigned to `maddnik`"));
 }
