@@ -20,9 +20,14 @@ struct World {
 }
 
 fn world(forge: FakeForge, llm: FakeLlm) -> World {
+    world_arc(Arc::new(forge), llm)
+}
+
+/// `world` with a forge the scripted sessions can also reach (a human acting meanwhile).
+fn world_arc(forge: Arc<FakeForge>, llm: FakeLlm) -> World {
     let tmp = tempfile::tempdir().unwrap();
     let origin = fake::origin(tmp.path(), &[]);
-    let (forge, llm) = (Arc::new(forge), Arc::new(llm));
+    let llm = Arc::new(llm);
     let ctx = fake::ctx(tmp.path(), &origin, forge.clone(), llm.clone());
     World { _tmp: tmp, origin, forge, llm, ctx }
 }
@@ -363,4 +368,94 @@ fn git_flow_dev_stays_the_target_after_a_release_merge() {
     on_origin(&w, "dev", "dev", "released.txt", Some("main"));
     assert!(coder().cycle(&w.ctx).unwrap());
     assert_eq!(the_pr(&w).base.name, "dev");
+}
+
+/// A session that writes `file`, reports `cost` (60 M cache-read tokens, as on TestConsole)
+/// and either finishes or runs out of turns.
+fn costing(file: &'static str, cost: f64, done: bool) -> impl Fn(&crate::llm::Job) -> Result<Outcome, LlmError> + Send + Sync {
+    move |job| {
+        std::fs::write(job.cwd.join(file), "work").unwrap();
+        let usage = team_core::claude::Usage { cache_read: 60_000_000, ..Default::default() };
+        Ok(Outcome { text: if done { SUMMARY } else { "not done" }.into(), reached_max_turns: !done, num_turns: if done { 40 } else { 150 }, cost_usd: cost, usage, ..Default::default() })
+    }
+}
+
+#[test]
+fn a_finished_session_over_budget_still_becomes_a_pr() {
+    // TestConsole#26 (2026-11-25) finished, was then stopped by the token count and its
+    // commit never left the worktree
+    let w = world(FakeForge::new("o/r").with_issue(task(20, "x", &[])), FakeLlm::new().then(costing("quick.txt", 55.0, true)).reply(REVIEW_OK, None));
+    assert!(coder().cycle(&w.ctx).unwrap());
+    let pr = the_pr(&w);
+    assert!(fake::pushed_file(&w.origin, &pr.head.name, "quick.txt").is_some());
+    assert!(w.forge.log().contains(&"close 20".to_string()));
+    assert!(!w.forge.labels(20).contains(&"needs-human".to_string()));
+}
+
+#[test]
+fn cached_context_does_not_exhaust_the_budget() {
+    // two sessions of 60 M cache-read tokens each: 120 M tokens, but 24 USD of a 40 USD budget
+    let llm = FakeLlm::new().then(costing("part1.txt", 12.0, false)).then(costing("part2.txt", 12.0, true)).reply(REVIEW_OK, None);
+    let w = world(FakeForge::new("o/r").with_issue(task(21, "x", &[])), llm);
+    assert!(coder().cycle(&w.ctx).unwrap());
+    let pr = the_pr(&w);
+    assert!(fake::pushed_file(&w.origin, &pr.head.name, "part1.txt").is_some());
+    assert!(fake::pushed_file(&w.origin, &pr.head.name, "part2.txt").is_some());
+}
+
+#[test]
+fn an_unfinished_session_over_budget_pushes_its_work_and_hands_over() {
+    let w = world(FakeForge::new("o/r").with_issue(task(22, "x", &[])), FakeLlm::new().then(costing("wip.txt", 45.0, false)));
+    assert!(coder().cycle(&w.ctx).unwrap());
+    assert!(w.forge.s.lock().unwrap().prs.is_empty());
+    let last = w.forge.comment_bodies(22).last().unwrap().clone();
+    assert!(last.contains("**Budget reached**") && last.contains("$45.00 of its $40.00 budget"), "{last}");
+    let branch = Store::new(&w.ctx.paths.sessions()).load("o/r", 22).unwrap().branch_name;
+    assert!(last.contains(&format!("Work in progress is on branch `{branch}`")), "{last}");
+    assert!(fake::pushed_file(&w.origin, &branch, "wip.txt").is_some(), "the work survives on origin");
+    assert!(w.forge.labels(22).contains(&"needs-human".to_string()));
+    assert_eq!(w.llm.calls(), 1);
+}
+
+#[test]
+fn a_stop_command_during_the_session_ends_it_and_keeps_the_work() {
+    let forge = Arc::new(FakeForge::new("o/r").with_issue(task(23, "x", &[])));
+    let human = forge.clone();
+    let llm = FakeLlm::new().then(move |job| {
+        std::fs::write(job.cwd.join("half.txt"), "half").unwrap();
+        human.add_comment(23, "/agent stop — Nik takes this one over");
+        Ok(Outcome { text: SUMMARY.into(), num_turns: 30, ..Default::default() })
+    });
+    let w = world_arc(forge, llm);
+    assert!(coder().cycle(&w.ctx).unwrap());
+    assert!(w.forge.s.lock().unwrap().prs.is_empty(), "no PR for an issue a human took over");
+    let last = w.forge.comment_bodies(23).last().unwrap().clone();
+    assert!(last.starts_with("🛑 The agent stopped working on this issue: `someone` asked the agent to stop."), "{last}");
+    let branch = Store::new(&w.ctx.paths.sessions()).load("o/r", 23).unwrap().branch_name;
+    assert!(fake::pushed_file(&w.origin, &branch, "half.txt").is_some());
+    let labels = w.forge.labels(23);
+    assert!(!labels.iter().any(|l| l == "agent-running" || l == "needs-human"), "{labels:?}");
+    assert!(!coder().cycle(&w.ctx).unwrap(), "a stopped issue is not picked up again");
+}
+
+#[test]
+fn a_human_pr_fixing_the_issue_keeps_the_agent_from_starting() {
+    let mut theirs = fake::pr(60, "Lab fixes batch 5", "fix/lab-batch-5", &[]);
+    theirs.body = Some("Fixes #24".into());
+    let w = world(FakeForge::new("o/r").with_issue(task(24, "x", &[])).with_pr(theirs), FakeLlm::new().reply(SUMMARY, Some("f.txt")));
+    assert!(coder().cycle(&w.ctx).unwrap());
+    assert_eq!(w.llm.calls(), 0, "no session for duplicate work");
+    assert!(w.forge.comment_bodies(24).last().unwrap().contains("PR #60 already fixes this issue"));
+    assert!(!w.forge.labels(24).iter().any(|l| l == "agent-running" || l == "needs-human"));
+}
+
+#[test]
+fn a_session_ended_by_the_watch_is_a_stop_not_a_failed_attempt() {
+    let stopped = |_: &crate::llm::Job| Err(LlmError::Failed(format!("{}: the issue was assigned to `maddnik`", team_core::claude::STOPPED_TEXT)));
+    let w = world(FakeForge::new("o/r").with_issue(task(25, "x", &[])), FakeLlm::new().then(stopped));
+    assert!(coder().cycle(&w.ctx).unwrap());
+    let comments = w.forge.comment_bodies(25);
+    assert!(comments.last().unwrap().starts_with("🛑 The agent stopped working on this issue: the issue was assigned to `maddnik`."));
+    assert!(!comments.iter().any(|c| c.contains("failed")), "not counted as an attempt: {comments:?}");
+    assert!(!w.forge.labels(25).iter().any(|l| l == "agent-task" || l == "needs-human"));
 }

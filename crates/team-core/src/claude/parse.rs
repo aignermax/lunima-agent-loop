@@ -3,8 +3,15 @@
 use chrono::{DateTime, Duration, Local, NaiveTime, TimeZone};
 use regex::Regex;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::sync::OnceLock;
+
+/// List prices of the default model, Claude Opus 5.5, in USD per million tokens: the
+/// reference for backends that report no cost of their own (Codex, some endpoints).
+const USD_PER_MTOK_INPUT: f64 = 4.0;
+const USD_PER_MTOK_OUTPUT: f64 = 20.0;
+const USD_PER_MTOK_CACHE_WRITE: f64 = 5.0;
+const USD_PER_MTOK_CACHE_READ: f64 = 0.20;
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Usage {
@@ -19,11 +26,32 @@ impl Usage {
         self.input + self.output + self.cache_read + self.cache_creation
     }
     fn add(&mut self, u: &Value) {
+        let one = Self::from_json(u);
+        self.input += one.input;
+        self.output += one.output;
+        self.cache_read += one.cache_read;
+        self.cache_creation += one.cache_creation;
+    }
+    fn from_json(u: &Value) -> Self {
         let n = |k: &str| u.get(k).and_then(Value::as_u64).unwrap_or(0);
-        self.input += n("input_tokens");
-        self.output += n("output_tokens");
-        self.cache_read += n("cache_read_input_tokens");
-        self.cache_creation += n("cache_creation_input_tokens");
+        Self { input: n("input_tokens"), output: n("output_tokens"), cache_read: n("cache_read_input_tokens"), cache_creation: n("cache_creation_input_tokens") }
+    }
+    /// Field-wise maximum: the events of one streamed message repeat its usage, the later
+    /// ones with the final output count.
+    fn max_with(&mut self, other: &Usage) {
+        self.input = self.input.max(other.input);
+        self.output = self.output.max(other.output);
+        self.cache_read = self.cache_read.max(other.cache_read);
+        self.cache_creation = self.cache_creation.max(other.cache_creation);
+    }
+    /// What these tokens cost at the reference list prices, cache reads at their real
+    /// (low) price instead of the full input price.
+    pub fn list_price_usd(&self) -> f64 {
+        (self.input as f64 * USD_PER_MTOK_INPUT
+            + self.output as f64 * USD_PER_MTOK_OUTPUT
+            + self.cache_creation as f64 * USD_PER_MTOK_CACHE_WRITE
+            + self.cache_read as f64 * USD_PER_MTOK_CACHE_READ)
+            / 1_000_000.0
     }
 }
 
@@ -38,7 +66,7 @@ pub struct Outcome {
     pub reached_max_turns: bool,
     pub num_turns: u32,
     pub usage: Usage,
-    /// the CLI's own figure (informational under a subscription)
+    /// the CLI's own figure at API list prices (also reported under a subscription)
     pub cost_usd: f64,
     pub session_id: String,
     /// the subscription's usage limit hit; resume at this time
@@ -48,9 +76,14 @@ pub struct Outcome {
 }
 
 impl Outcome {
-    /// Python-compatible cost estimate (tokens × 5.6e-7) for budgets and PR stats.
+    /// Cost of the session in USD for budgets and PR stats: the CLI's own figure (it covers
+    /// subagents and the real model prices), else the cache-aware list-price estimate.
     pub fn estimated_cost(&self) -> f64 {
-        self.usage.total() as f64 * 0.000_000_56
+        if self.cost_usd > 0.0 {
+            self.cost_usd
+        } else {
+            self.usage.list_price_usd()
+        }
     }
 }
 
@@ -93,19 +126,17 @@ pub fn usage_limit_reset(text: &str, now: DateTime<Local>) -> Option<DateTime<Lo
 /// Folds the event lines into an outcome; `None` if no `result` event arrived.
 pub fn parse_events(lines: &[String], max_turns: u32) -> Option<Outcome> {
     let mut out = Outcome::default();
-    let mut seen_messages = HashSet::new();
+    let mut per_message: HashMap<String, Usage> = HashMap::new();
     let mut result: Option<Value> = None;
     for line in lines {
         let Ok(ev) = serde_json::from_str::<Value>(line) else { continue };
         match ev.get("type").and_then(Value::as_str) {
             Some("assistant") => {
                 let msg = &ev["message"];
-                // one API message can be split over several events carrying the same usage
-                let id = msg.get("id").and_then(Value::as_str).unwrap_or("").to_string();
-                if seen_messages.insert(id) {
-                    if let Some(u) = msg.get("usage") {
-                        out.usage.add(u);
-                    }
+                // one API message can be split over several events repeating its usage
+                if let Some(u) = msg.get("usage") {
+                    let id = msg.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+                    per_message.entry(id).or_default().max_with(&Usage::from_json(u));
                 }
                 for item in msg.get("content").and_then(Value::as_array).into_iter().flatten() {
                     if item.get("type").and_then(Value::as_str) == Some("tool_use") {
@@ -121,6 +152,12 @@ pub fn parse_events(lines: &[String], max_turns: u32) -> Option<Outcome> {
             Some("result") => result = Some(ev),
             _ => {}
         }
+    }
+    for u in per_message.values() {
+        out.usage.input += u.input;
+        out.usage.output += u.output;
+        out.usage.cache_read += u.cache_read;
+        out.usage.cache_creation += u.cache_creation;
     }
     let r = result?;
     out.text = r.get("result").and_then(Value::as_str).unwrap_or("").to_string();

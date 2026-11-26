@@ -211,8 +211,8 @@ fn budgets(ui: &mut Ui, p: &mut ProjectBudgets, cfg: &TeamConfig, typing: &mut b
             }
             number!(timeout_minutes_regular, "Zeitlimit normal (Min.)");
             number!(timeout_minutes_complex, "Zeitlimit complex (Min.)");
-            number!(max_tokens_regular, "Tokenbudget normal je Issue");
-            number!(max_tokens_complex, "Tokenbudget complex je Issue");
+            number!(max_cost_usd_regular, "Kostenbudget normal je Issue (USD)");
+            number!(max_cost_usd_complex, "Kostenbudget complex je Issue (USD)");
             number!(max_review_rounds_regular, "Review-Runden normal");
             number!(max_review_rounds_complex, "Review-Runden complex");
             number!(max_sessions, "Sitzungen je Issue");

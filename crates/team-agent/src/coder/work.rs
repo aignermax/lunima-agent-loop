@@ -5,6 +5,7 @@
 use super::finish;
 use super::pickup::{self, Release};
 use super::prompt;
+use super::watch::Watch;
 use crate::ctx::{Ctx, RoleError, RoleResult};
 use crate::directives;
 use crate::llm::{Job, LlmError};
@@ -14,7 +15,7 @@ use crate::workspace::RepoSetup;
 use std::path::PathBuf;
 use team_core::detail;
 use team_core::gh::Issue;
-use team_core::git::commit_and_push;
+use team_core::git::{commit_and_push, Pushed};
 
 const FAILED_MARK: &str = "<!-- team-agent:attempt-failed -->";
 const GAVE_UP_MARK: &str = "<!-- team-agent:gave-up -->";
@@ -88,6 +89,7 @@ impl IssueRun<'_> {
         }
         let base = team.unwrap_or_else(|| setup.working_branch.clone());
         let wt = setup.clone.worktree(&self.ctx.paths.worktree(&setup.repo, branch), branch, &base)?;
+        super::code_index::ensure(&wt);
         Ok(Some((wt, base)))
     }
 
@@ -119,17 +121,15 @@ impl IssueRun<'_> {
         let n = issue.number;
         let complex = prompt::is_complex(ctx, issue);
         let b = &ctx.cfg.budgets;
-        let (max_turns, max_tokens) = if complex { (b.max_turns_complex, b.max_tokens_complex) } else { (b.max_turns_regular, b.max_tokens_regular) };
+        let (max_turns, max_cost) = if complex { (b.max_turns_complex, b.max_cost_usd_complex) } else { (b.max_turns_regular, b.max_cost_usd_regular) };
+        let watch = Watch::new(forge, issue, &ctx.cfg.labels.running, &ctx.login, &state.branch_name);
         loop {
             let current = match forge.issue(n) {
                 Ok(i) => i,
                 Err(e) => return Ok(Flow::Fail(e)),
             };
-            if current.state != "open" {
-                crate::log::info(&format!("#{n} wurde geschlossen — Arbeit beendet"));
-                self.store.delete(&setup.repo, n);
-                pickup::release(ctx, forge, n, Release::Done);
-                return Ok(Flow::Stop);
+            if let Some(reason) = watch.check_now() {
+                return Ok(self.stopped(n, state, worktree, &reason));
             }
             if state.session_count >= b.max_sessions {
                 return Ok(Flow::Human(format!("{} Claude sessions did not finish this issue", state.session_count)));
@@ -143,25 +143,38 @@ impl IssueRun<'_> {
             let text = prompt::session(ctx, &setup.repo, &current, state)?;
             let job = Job { policy: crate::llm::PolicyRequest { role: team_core::project::SessionRole::Coder, labels: labels.clone() }, repo: setup.repo.clone(), prompt: text, cwd: worktree.to_path_buf(), model: choice.model, max_turns, env: choice.env, label: label(&setup.repo, "issue", n), max_duration: None, tools: None };
             crate::log::info(&format!("#{n}: Sitzung {} ({})", state.session_count + 1, choice.why));
-            let out = match ctx.llm.run(&job) {
+            let out = match ctx.llm.run_watched(&job, &|| watch.throttled()) {
                 Ok(o) => o,
                 Err(LlmError::UsageLimit(backend, t)) => {
                     self.store.save(state);
                     return Err(RoleError::UsageLimit(backend, t));
                 }
                 Err(LlmError::Unavailable(e)) => { self.store.save(state); return Err(RoleError::Unavailable(e)); }
-                Err(LlmError::Failed(e)) => return Ok(Flow::Fail(e)),
+                Err(LlmError::Failed(e)) => match stop_reason(&e) {
+                    Some(reason) => return Ok(self.stopped(n, state, worktree, reason)),
+                    None => return Ok(Flow::Fail(e)),
+                },
             };
             state.add_session(out.num_turns, out.usage.total(), out.estimated_cost());
             state.count_tools(&out.bash_commands);
             state.last_output = out.text.chars().take(5000).collect();
-            if state.total_tokens > max_tokens {
-                self.budget_stop(n, state, max_tokens);
-                return Ok(Flow::Stop);
+            // the in-session check runs every few minutes; a stop in the last ones must
+            // still keep the PR from being opened
+            if let Some(reason) = watch.check_now() {
+                return Ok(self.stopped(n, state, worktree, &reason));
             }
             if !out.reached_max_turns {
+                // finished work goes to review even past the budget: the budget limits
+                // further sessions, it must not throw away a session that is already paid for
+                if state.total_cost_usd > max_cost {
+                    state.note(&format!("Budget exceeded (${:.2} of ${max_cost:.2}) by a finished session — opening the PR anyway", state.total_cost_usd));
+                }
                 self.store.save(state);
                 return Ok(Flow::Continue);
+            }
+            if state.total_cost_usd > max_cost {
+                self.budget_stop(n, state, max_cost, worktree);
+                return Ok(Flow::Stop);
             }
             self.continuation(n, state, worktree);
         }
@@ -180,13 +193,52 @@ impl IssueRun<'_> {
         let _ = self.setup.forge.comment(n, &body);
     }
 
-    fn budget_stop(&self, n: u64, state: &mut SessionState, limit: u64) {
-        let body = format!("⚠️ **Token budget exceeded**\n\nThis issue has consumed {} tokens (limit: {}).\n\nCost so far: ${:.2}\n\nThe agent is stopping to prevent excessive costs. Please review the issue complexity or increase the budget limit if needed.", thousands(state.total_tokens), thousands(limit), state.total_cost_usd);
+    /// Unfinished and over budget: the work so far goes to origin first, then a human decides.
+    fn budget_stop(&self, n: u64, state: &mut SessionState, limit: f64, worktree: &std::path::Path) {
+        let wip = self.push_wip(n, state, worktree, "budget reached");
+        let l = &self.ctx.cfg.labels;
+        let body = format!(
+            "⚠️ **Budget reached**\n\nThis issue has used ${:.2} of its ${limit:.2} budget ({} sessions, {} tokens, mostly cached context) without finishing.{wip}\n\nRe-add the `{}` label (and remove `{}`) to continue with a fresh budget, or raise `budgets.max_cost_usd_*`.",
+            state.total_cost_usd,
+            state.session_count,
+            thousands(state.total_tokens),
+            l.task,
+            l.needs_human
+        );
         let _ = self.setup.forge.comment(n, &body);
-        state.note(&format!("Stopped: Token budget exceeded ({} tokens)", thousands(state.total_tokens)));
+        state.note(&format!("Stopped: budget reached (${:.2} of ${limit:.2})", state.total_cost_usd));
         state.handed_to_human = true;
         self.store.save(state);
         pickup::release(self.ctx, self.setup.forge.as_ref(), n, Release::Human);
+    }
+
+    /// A human took the issue over (or closed it): keep what the agent did, step aside.
+    fn stopped(&self, n: u64, state: &mut SessionState, worktree: &std::path::Path, reason: &str) -> Flow {
+        let (ctx, forge) = (self.ctx, self.setup.forge.as_ref());
+        crate::log::info(&format!("{}#{n}: Arbeit beendet — {reason}", self.setup.repo));
+        let wip = self.push_wip(n, state, worktree, "stopped");
+        let _ = forge.comment(n, &format!("🛑 The agent stopped working on this issue: {reason}.{wip}"));
+        if forge.issue(n).is_ok_and(|i| i.state != "open") {
+            self.store.delete(&self.setup.repo, n);
+        } else {
+            state.note(&format!("Stopped: {reason}"));
+            state.handed_to_human = true;
+            self.store.save(state);
+        }
+        pickup::release(ctx, forge, n, Release::Done);
+        Flow::Stop
+    }
+
+    /// Commits and pushes unfinished work; returns a sentence for the issue comment.
+    fn push_wip(&self, n: u64, state: &SessionState, worktree: &std::path::Path, why: &str) -> String {
+        match commit_and_push(worktree, &state.branch_name, &format!("Agent: work in progress on #{n} ({why})")) {
+            Ok(Pushed::Yes) => format!(" Work in progress is on branch `{}`.", state.branch_name),
+            Ok(Pushed::Nothing) => String::new(),
+            Err(e) => {
+                crate::log::warn(&format!("#{n}: Zwischenstand nicht gepusht: {e}"));
+                format!(" Pushing the work in progress failed (`{}`); it is still in the agent's worktree.", e.chars().take(200).collect::<String>())
+            }
+        }
     }
 
     /// Not an error but nothing more the agent can do: a human takes over.
@@ -235,6 +287,11 @@ impl IssueRun<'_> {
         self.store.save(state);
         Ok(())
     }
+}
+
+/// The reason behind a session error, if the issue watch ended the session.
+fn stop_reason(err: &str) -> Option<&str> {
+    err.strip_prefix(team_core::claude::STOPPED_TEXT)?.strip_prefix(": ")
 }
 
 /// Failed attempts since the last give-up (a human re-queue starts a fresh count).

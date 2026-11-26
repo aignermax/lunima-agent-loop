@@ -266,6 +266,7 @@ mod tests {
             on_tick: None,
             tools: None,
             memory_guard: false,
+            stop: None,
         }
     }
 

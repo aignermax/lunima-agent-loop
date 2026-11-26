@@ -320,6 +320,16 @@ impl Llm for FakeLlm {
         drop(steps);
         step(job)
     }
+
+    /// The step runs first (it may play a human acting on GitHub), then the stop check is
+    /// asked once — as a real session would notice it a few minutes in.
+    fn run_watched(&self, job: &Job, stop: crate::llm::StopCheck<'_>) -> Result<Outcome, LlmError> {
+        let out = self.run(job);
+        match stop() {
+            Some(reason) => Err(LlmError::Failed(format!("{}: {reason}", team_core::claude::STOPPED_TEXT))),
+            None => out,
+        }
+    }
 }
 
 /// A local bare "origin" with `main` + `dev` (seeded with `files`), usable as clone URL.

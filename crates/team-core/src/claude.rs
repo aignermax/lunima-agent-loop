@@ -41,6 +41,10 @@ pub struct Session<'a> {
     /// sessions that start no builds or tests: a chat answer needs a few hundred MB, and
     /// killing it frees nothing worth having while Max waits for a reply.
     pub memory_guard: bool,
+    /// asked about once a second until the result is in; `Some(reason)` ends the session
+    /// with its process tree (e.g. a human took the issue over). Must be cheap — the
+    /// caller throttles any network check behind it.
+    pub stop: Option<&'a (dyn Fn() -> Option<String> + Sync)>,
 }
 
 #[derive(Debug)]
@@ -55,6 +59,8 @@ pub enum Error {
     TimedOut(u64),
     /// free memory fell below the guard's floor (`crate::mem`) — killed with its children
     Memory(String),
+    /// the session's `stop` check fired — killed with its children
+    Stopped(String),
 }
 
 impl std::fmt::Display for Error {
@@ -66,6 +72,7 @@ impl std::fmt::Display for Error {
             Error::Crashed { code, stderr_tail } => write!(f, "Claude beendet ohne Ergebnis (Exit {code:?}): {stderr_tail}"),
             Error::TimedOut(s) => write!(f, "{TIMED_OUT_TEXT} ({s} s) — Claude wurde beendet"),
             Error::Memory(m) => write!(f, "{m} — Claude-Sitzung samt Builds/Tests beendet, damit das System nicht einfriert"),
+            Error::Stopped(reason) => write!(f, "{STOPPED_TEXT}: {reason}"),
         }
     }
 }
@@ -113,6 +120,9 @@ fn is_result_event(line: &str) -> bool {
 
 /// Start of `Error::TimedOut`'s message (callers classify failures by it).
 pub const TIMED_OUT_TEXT: &str = "Zeitlimit der Sitzung überschritten";
+
+/// Start of `Error::Stopped`'s message, followed by `: <reason>` (callers classify by it).
+pub const STOPPED_TEXT: &str = "Sitzung von außen beendet";
 
 /// `true` once a session started at `started` has used up its `deadline`.
 pub fn over_deadline(started: Instant, deadline: Option<Duration>) -> bool {
@@ -225,6 +235,13 @@ pub(crate) fn run_cli(s: &Session, cli: PathBuf, args: Vec<String>, mut normaliz
             let _ = child.wait();
             return Err(Error::TimedOut(s.deadline.map(|d| d.as_secs()).unwrap_or(0)));
         }
+        if result_at.is_none() {
+            if let Some(reason) = s.stop.and_then(|stop| stop()) {
+                kill_tree(&mut child);
+                let _ = child.wait();
+                return Err(Error::Stopped(reason));
+            }
+        }
     }
     let status = child.wait().map_err(|e| Error::Spawn(e.to_string()))?;
     let stderr_tail = stderr_reader.join().unwrap_or_default();
@@ -248,6 +265,36 @@ mod tests {
     }
 
     #[test]
+    fn stop_check_ends_a_running_session_with_its_reason() {
+        // a long-running stand-in for the CLI; the check fires on its first call
+        let (cli, args): (PathBuf, Vec<String>) = if cfg!(windows) {
+            ("ping".into(), vec!["-n".into(), "30".into(), "127.0.0.1".into()])
+        } else {
+            ("sleep".into(), vec!["30".into()])
+        };
+        let stop = || Some("the issue was closed".to_string());
+        let s = Session {
+            prompt: String::new(),
+            cwd: std::env::temp_dir(),
+            model: String::new(),
+            max_turns: 1,
+            env: ChildEnv::subscription(),
+            settings_file: None,
+            log_file: None,
+            inactivity: Duration::from_secs(60),
+            deadline: None,
+            on_tick: None,
+            tools: None,
+            memory_guard: false,
+            stop: Some(&stop),
+        };
+        let started = Instant::now();
+        let err = run_cli(&s, cli, args, |l| vec![l.to_string()]).unwrap_err().to_string();
+        assert!(started.elapsed() < Duration::from_secs(15), "killed at once, not after the 30 s run");
+        assert_eq!(err, format!("{STOPPED_TEXT}: the issue was closed"));
+    }
+
+    #[test]
     fn recognises_the_result_event() {
         assert!(is_result_event(r#"{"type":"result","subtype":"success","result":"x"}"#));
         assert!(!is_result_event(r#"{"type":"assistant","message":{"content":"result"}}"#));
@@ -268,6 +315,7 @@ mod tests {
             on_tick: None,
             tools: None,
             memory_guard: true,
+            stop: None,
         };
         let a = args(&s);
         assert_eq!(&a[..4], ["-p", "--output-format", "stream-json", "--verbose"]);
@@ -293,6 +341,7 @@ mod tests {
             on_tick: None,
             tools: Some(vec!["Read".into(), "Write".into(), "WebSearch".into()]),
             memory_guard: true,
+            stop: None,
         };
         let a = args(&s);
         assert!(!a.iter().any(|x| x == "--dangerously-skip-permissions"));
@@ -332,6 +381,7 @@ mod live {
             on_tick: None,
             tools: None,
             memory_guard: true,
+            stop: None,
         };
         let o = run(&s).expect("session");
         println!("text={:?} turns={} tokens={} cost={} subtype={}", o.text, o.num_turns, o.usage.total(), o.cost_usd, o.subtype);
