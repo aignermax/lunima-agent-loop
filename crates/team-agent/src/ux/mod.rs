@@ -49,6 +49,12 @@ impl UxReviewer {
     fn target(ctx: &Ctx) -> Result<String, &'static str> {
         let ux = &ctx.cfg.ux_review;
         let repo = if ux.repo.trim().is_empty() { ctx.cfg.product_owner.repo.clone() } else { ux.repo.clone() };
+        if ctx.cfg.repo(&repo).and_then(|r| r.profile.as_ref()).is_some_and(|p| !p.allowed_backends.contains(&team_core::config::Backend::Claude)) {
+            return Err("Desktop-Tester benötigt Anthropic; dieser Anbieter ist im Projekt nicht freigegeben");
+        }
+        if matches!(team_core::provider::repo_runner(&ctx.cfg, &repo).backend, team_core::config::Backend::Codex | team_core::config::Backend::OpenAi) {
+            return Err("Desktop-Tester benötigt Anthropic; für Codex/OpenAI-Projekte deaktiviert");
+        }
         if repo.is_empty() {
             return Err("kein Repo (ux_review.repo / product_owner.repo)");
         }

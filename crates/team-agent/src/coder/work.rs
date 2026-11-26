@@ -67,10 +67,11 @@ impl IssueRun<'_> {
         }
         match finish::finish(ctx, setup, self.store, &issue, &mut state, &worktree, &base) {
             Ok(()) => Ok(()),
-            Err(RoleError::UsageLimit(t)) => {
+            Err(RoleError::UsageLimit(backend, t)) => {
                 self.store.save(&state);
-                Err(RoleError::UsageLimit(t))
+                Err(RoleError::UsageLimit(backend, t))
             }
+            Err(RoleError::Unavailable(e)) => { self.store.save(&state); Err(RoleError::Unavailable(e)) },
             Err(RoleError::Failed(e)) => self.fail(&issue, &mut state, &e),
         }
     }
@@ -136,17 +137,19 @@ impl IssueRun<'_> {
             let labels = crate::forge::label_names(&current.labels);
             let choice = match team_core::provider::choose(&ctx.cfg, &setup.repo, &labels) {
                 Ok(c) => c,
+                Err(e) if ctx.cfg.repo(&setup.repo).is_some_and(|r| r.profile.is_some()) => return Err(RoleError::Unavailable(e)),
                 Err(e) => return Ok(Flow::Fail(e)),
             };
             let text = prompt::session(ctx, &setup.repo, &current, state)?;
-            let job = Job { prompt: text, cwd: worktree.to_path_buf(), model: choice.model, max_turns, env: choice.env, label: label(&setup.repo, "issue", n), max_duration: None, tools: None };
+            let job = Job { policy: crate::llm::PolicyRequest { role: team_core::project::SessionRole::Coder, labels: labels.clone() }, repo: setup.repo.clone(), prompt: text, cwd: worktree.to_path_buf(), model: choice.model, max_turns, env: choice.env, label: label(&setup.repo, "issue", n), max_duration: None, tools: None };
             crate::log::info(&format!("#{n}: Sitzung {} ({})", state.session_count + 1, choice.why));
             let out = match ctx.llm.run(&job) {
                 Ok(o) => o,
-                Err(LlmError::UsageLimit(t)) => {
+                Err(LlmError::UsageLimit(backend, t)) => {
                     self.store.save(state);
-                    return Err(RoleError::UsageLimit(t));
+                    return Err(RoleError::UsageLimit(backend, t));
                 }
+                Err(LlmError::Unavailable(e)) => { self.store.save(state); return Err(RoleError::Unavailable(e)); }
                 Err(LlmError::Failed(e)) => return Ok(Flow::Fail(e)),
             };
             state.add_session(out.num_turns, out.usage.total(), out.estimated_cost());

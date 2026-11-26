@@ -35,6 +35,7 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then v="${GITHUB_REF#refs/tags/v}"; else v="0.0.${GITHUB_RUN_NUMBER}"; fi
           echo "VERSION=$v" >> "$GITHUB_ENV"
+          echo "LUNIMA_TEAM_VERSION=$v" >> "$GITHUB_ENV"
 
       - name: Rust toolchain
         uses: dtolnay/rust-toolchain@stable

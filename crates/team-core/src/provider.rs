@@ -1,5 +1,7 @@
 //! Which model / endpoint a coder session uses (port of provider_policy.py):
 //!
+//! Project routing is authoritative; the team chat runner never overrides it.
+//!
 //! 0. `claudeapi` label → premium Claude model, in every repo
 //! 1. repo routing `kimi-only` → OpenRouter; never falls back to Claude
 //! 2. `eco` label → Moonshot/Kimi, only in repos cleared for third-party providers
@@ -10,7 +12,7 @@
 //! Claude sessions run on the user's subscription: no API key is passed; any inherited
 //! `ANTHROPIC_*` variable is removed from the child environment.
 
-use crate::config::{Endpoint, Routing, TeamConfig};
+use crate::config::{Backend, Endpoint, Providers, Routing, Runner, TeamConfig};
 use std::collections::BTreeMap;
 
 /// Environment changes for the Claude CLI child process.
@@ -27,6 +29,13 @@ impl ChildEnv {
     /// Subscription login: strip anything that would override it.
     pub fn subscription() -> Self {
         Self { set: BTreeMap::new(), remove: CLAUDE_AUTH_VARS.iter().map(|s| s.to_string()).collect() }
+    }
+
+    /// ChatGPT login: do not inherit API credentials or third-party routing.
+    pub fn codex_subscription() -> Self {
+        let mut env = Self::subscription();
+        env.remove.extend(["OPENAI_API_KEY", "OPENAI_BASE_URL", "CODEX_API_KEY"].iter().map(|s| s.to_string()));
+        env
     }
 
     /// An Anthropic-compatible third-party endpoint.
@@ -67,8 +76,72 @@ fn third_party(endpoint: &Endpoint, why: String) -> Option<Choice> {
     Some(Choice { model: endpoint.model.clone(), env: ChildEnv::endpoint(&endpoint.base_url, &key, &endpoint.model), why })
 }
 
-/// Errors only when a `kimi-only` repo has no OpenRouter key (never silently use Claude).
+/// Resolve one explicitly selected runner (project policy is applied by the caller).
+pub fn runner_choice(runner: &Runner, providers: &Providers) -> Result<Option<Choice>, String> {
+    match runner.backend {
+        Backend::Claude => Ok(None),
+        Backend::Codex => Ok(Some(Choice { model: runner.model.clone(), env: ChildEnv::codex_subscription(), why: "Codex (ChatGPT) - runner override".into() })),
+        Backend::OpenAi => {
+            let endpoint = &providers.openai;
+            if endpoint.base_url.trim().is_empty() {
+                return Err("OpenAI API: Endpoint fehlt".into());
+            }
+            if endpoint.model.trim().is_empty() {
+                return Err("OpenAI API: Modell fehlt".into());
+            }
+            let key = endpoint.api_key().ok_or("OpenAI API: API-Key fehlt; kein Ausweichen auf ein Abo")?;
+            let mut env = ChildEnv::codex_subscription();
+            env.set.insert("LUNIMA_CODEX_API_BASE_URL".into(), endpoint.base_url.clone());
+            env.set.insert("LUNIMA_CODEX_API_KEY".into(), key);
+            Ok(Some(Choice { model: endpoint.model.clone(), env, why: "OpenAI Responses API - runner override".into() }))
+        }
+        Backend::Openrouter | Backend::Eco => {
+            let endpoint = if runner.backend == Backend::Openrouter { &providers.openrouter } else { &providers.eco };
+            if endpoint.base_url.trim().is_empty() || endpoint.model.trim().is_empty() {
+                return Err(format!("{}: Endpoint und Modell fehlen", runner.backend.label()));
+            }
+            third_party(endpoint, format!("{} - runner override", runner.backend.label())).map(Some).ok_or_else(|| format!("{}: API-Key fehlt; kein Ausweichen auf ein Abo", runner.backend.label()))
+        }
+    }
+}
+
+/// The transport for a project. Unknown/discovered projects stay on Claude until
+/// explicitly configured; global API choices never grant third-party access.
+pub fn repo_runner(cfg: &TeamConfig, repo: &str) -> Runner {
+    if let Some(profile) = cfg.repo(repo).and_then(|r| r.profile.as_ref()) {
+        let backend = profile.standard.backend.unwrap_or_else(|| crate::project::routing_backend(cfg.repo(repo).map(|r| r.routing).unwrap_or_default()));
+        let model = profile.standard.model.clone().unwrap_or_else(|| match backend {
+            Backend::Claude => cfg.models.coder.clone(), Backend::Codex => cfg.runner.model.clone(),
+            Backend::Openrouter => cfg.providers.openrouter.model.clone(), Backend::Eco => cfg.providers.eco.model.clone(), Backend::OpenAi => cfg.providers.openai.model.clone(),
+        });
+        return Runner { backend, model };
+    }
+    let backend = match cfg.repo(repo).map(|r| r.routing).unwrap_or_default() {
+        Routing::Claude | Routing::Kimi | Routing::KimiOnly => Backend::Claude,
+        Routing::Codex => Backend::Codex,
+        Routing::OpenAi => Backend::OpenAi,
+        Routing::Eco => Backend::Eco,
+    };
+    Runner { backend, model: cfg.runner.model.clone() }
+}
+
+/// Mixed-project team chat may see private project logs and memory. Never route
+/// it through a third party based on a legacy global API override.
+pub fn chat_runner(cfg: &TeamConfig) -> Result<Runner, String> {
+    match cfg.runner.backend {
+        Backend::Claude | Backend::Codex => Ok(cfg.runner.clone()),
+        _ => Err("Team-Chat enthält projektübergreifenden Kontext: bitte Claude oder Codex für den Chat wählen; API-Provider pro Projekt unter Projekte einstellen".into()),
+    }
+}
+
+/// Missing API credentials never cause an explicit API-only choice to use a subscription.
 pub fn choose(cfg: &TeamConfig, repo: &str, labels: &[String]) -> Result<Choice, String> {
+    if cfg.repo(repo).is_some_and(|r| r.profile.is_some()) {
+        return crate::project::resolve(cfg, repo, crate::project::SessionRole::Coder, labels).map(|d| d.choice);
+    }
+    if let Some(choice) = runner_choice(&repo_runner(cfg, repo), &cfg.providers)? {
+        return Ok(choice);
+    }
     let claude = |model: &str, why: String| Choice { model: model.to_string(), env: ChildEnv::subscription(), why };
     let routing = cfg.repo(repo).map(|r| r.routing).unwrap_or_default();
     let (l, p) = (&cfg.labels, &cfg.providers);

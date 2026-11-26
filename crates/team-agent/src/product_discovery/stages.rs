@@ -316,6 +316,8 @@ fn session(run: &Run, stage: Stage, repair: &[Problem]) -> RoleResult<()> {
     let prompt = ctx.render(stage.prompt(), &values(run, repair))?;
     let label = format!("discovery_{}_{}{}", run.week, stage.name(), if repair.is_empty() { "" } else { "-repair" });
     let job = Job {
+        policy: crate::llm::PolicyRequest { role: team_core::project::SessionRole::Discovery, labels: Vec::new() },
+        repo: run.repo_name.into(),
         prompt,
         cwd: run.repo.to_path_buf(),
         model: run.model.clone(),
@@ -331,7 +333,8 @@ fn session(run: &Run, stage: Stage, repair: &[Problem]) -> RoleResult<()> {
     let (outcome, tag) = match &result {
         Ok(o) if o.is_error => (Some(o), "error"),
         Ok(o) => (Some(o), "ok"),
-        Err(LlmError::UsageLimit(_)) => (None, "usage-limit"),
+        Err(LlmError::UsageLimit(_, _)) => (None, "usage-limit"),
+        Err(LlmError::Unavailable(_)) => (None, "waiting"),
         Err(LlmError::Failed(e)) if e.contains(team_core::claude::TIMED_OUT_TEXT) => (None, "timeout"),
         Err(_) => (None, "error"),
     };

@@ -38,6 +38,11 @@ memory (part of every later prompt), leave each other notes, ask each other
 (`chat ask`, coder → product owner first) and put questions for you into the chat; the
 sidebar and the tray show how many wait. Details: [`docs/TEAM-AGENT.md`](docs/TEAM-AGENT.md#team-chat-and-memory).
 
+Chat messages preserve paragraph/line breaks and support clickable HTTP(S) URLs,
+`[label](https://...)` links, simple `**emphasis**` and code formatting. Existing
+messages gain the same display without rewriting stored text. Rendering fetches no
+remote content; links open in the system browser only when clicked.
+
 Configuration is a single `team.toml` in the data folder (`%LOCALAPPDATA%\lunima-team`,
 `~/.local/share/lunima-team`); the Control Center edits it. The Product Owner's settings live in
 `[product_owner]` (`repo`, `integration_branch`, `base_branch`, `interval_minutes`,
@@ -80,7 +85,7 @@ Without the UI: `lunima-team-agent init`, then `lunima-team-agent status`, then
 Debian/Ubuntu:
 
 ```sh
-sudo apt install ./lunima-team_<version>-1_amd64.deb    # or _arm64.deb
+sudo apt install ./lunima-team_<version>_amd64.deb      # or _arm64.deb
 lunima-team-agent init                                  # writes ~/.local/share/lunima-team/team.toml
 systemctl --user enable --now lunima-team-agent         # agent in the background (user unit)
 lunima-po                                               # Control Center
@@ -93,6 +98,28 @@ To keep the agent running while you are logged out: `loginctl enable-linger $USE
 
 The Control Center's tray icon needs a desktop with StatusNotifier/AppIndicator support
 (GNOME: the *AppIndicator* extension).
+
+### Automatic updates
+
+The Control Center checks the latest stable GitHub release at startup and every hour.
+It automatically downloads the MSI (Windows) or `.deb` (Ubuntu/Debian) matching the
+machine's architecture, verifies its size and SHA-256 against GitHub's release metadata,
+and shows **Update bereit → Jetzt aktualisieren** in the top bar. Leaving it prepared
+installs it at the next full Control Center launch; hiding/showing the tray window does
+not count as a restart. The background agent and Control Center update together.
+
+Before installation, the daemon stops accepting new tasks/chat answers and finishes
+current work. A waiting update can be postponed. Windows UAC or Linux PolicyKit asks for
+permission to install the package; Linux requires `pkexec` (the `pkexec` package on Ubuntu).
+An unsuccessful or cancelled installation retains the download, recovers the previous
+agent and requires a manual retry instead of prompting on every launch. Details are in
+`updates/install.log` beneath the data folder.
+
+Automatic installation requires a registered Windows MSI in `Program Files/Lunima Team`
+or the Ubuntu/Debian package at `/usr/bin/lunima-po`. Portable/source builds download
+updates but offer the package for manual installation. Existing releases without this
+updater need one manual installation of a release containing it. Configuration, login
+credentials, worktrees and logs remain in the existing data folder.
 
 ### Cutting a release
 
@@ -304,3 +331,145 @@ substitute for a live customer run after setup.
   folder's `prompts/` overrides one (the Control Center's rules editor writes those).
 - A crashed worker can leave a stale `agent-running` claim behind; the Product-Owner pass
   removes claims older than ~6 h so the issue is retried.
+
+
+### Codex with ChatGPT
+
+#### Project model and budget profiles
+
+Project changes save automatically: switches and selections immediately, text and
+numeric edits after a 450 ms typing pause (or when leaving the page). There is no
+Save button. A fixed status above the scroll area reports saving or invalid input.
+Invalid edits remain visible without replacing the valid configuration; file errors
+retain the edits and retry automatically. Page changes, hiding and tray quit flush
+pending valid changes. Autosave merges changed fields into the latest file so
+unrelated external project/global settings are preserved.
+
+Under **Projekte → Eigenes Modell- und Budgetprofil**, enable a profile to configure
+the project's provider allowlist, standard model, label rules (`complex`, `eco`,
+premium/legacy `claudeapi`), reviewer/critical/QA/feedback/PO/discovery models,
+an explicit fallback and separate budget overrides. Existing projects without a
+profile retain the prior routing. Enabling starts from the prior provider policy.
+
+Unchecked model/budget overrides inherit the project/role setting and then the
+global provider/role defaults. An explicitly empty model means the CLI default;
+API providers require a model ID. Changing provider resets inherited model and
+reasoning effort to that provider's defaults. The effective model preview includes
+role and label selection. Credentials stay in the global provider settings.
+
+```toml
+[[repos]]
+name = "company/private-project"
+routing = "codex"
+
+[repos.profile]
+allowed_backends = ["codex", "claude"]
+
+[repos.profile.standard]
+backend = "codex"
+model = "" # explicit CLI default; omit to inherit the global Codex model
+effort = "medium"
+
+[repos.profile.complex]
+effort = "high" # same model, more reasoning; optionally set a different model ID
+
+[repos.profile.reviewer]
+backend = "claude" # uses the global Claude reviewer model when no model is set
+
+[repos.profile.budgets]
+timeout_minutes_regular = 30
+timeout_minutes_complex = 90
+max_review_rounds_complex = 3
+max_attempts = 2
+```
+
+Provider restrictions apply to every role, label and fallback, including inactive
+rules; invalid configurations cannot be saved. Premium takes precedence over
+`complex`, then `eco`; `critical` changes review/QA only. An absent label override
+keeps the role's normal model. Budget escalation is independent of model escalation.
+The standalone Anthropic desktop tester also requires Claude in the allowlist.
+
+Fallback is optional and only considered before executing a session: missing API
+credentials, an absent CLI or a known backend cooldown. Failed/partially executed
+sessions are never replayed on another provider. With no usable provider, the task
+waits without consuming an attempt or publishing a blocking QA/review verdict.
+
+Project budgets include hard session deadlines, issue token totals, sessions,
+attempts, review/QA/feedback rounds, inactivity, test gate and PO/discovery role
+step/time limits. Shorter role deadlines still cap the common session deadline.
+Token totals are checked after sessions, not as a hard in-call spending cap.
+Claude step limits do not limit Codex; use hard deadlines there. Codex reasoning
+levels depend on model/client support; see the
+[Codex configuration reference](https://developers.openai.com/codex/config-reference).
+Team chat and machine RAM limits remain global. Unsaved project drafts prevent an
+updater handoff from discarding them.
+
+#### Runner and legacy routing
+
+Choose the runner **per repository on the Control Center's Projekte page**.
+For example, keep a company project on Claude or Codex and a separate project
+on Kimi:
+
+```toml
+[runner]
+backend = "codex" # team chat only: Claude or Codex (mixed-project context)
+model = "" # default model for Codex projects and Codex team chat; empty = CLI default
+
+[[repos]]
+name = "company/private-project"
+routing = "codex" # ChatGPT subscription; no Kimi/Moonshot endpoint
+
+[[repos]]
+name = "owner/public-project"
+routing = "kimi-only"
+```
+
+Run `codex login` interactively first. Existing repositories keep their saved
+routing. New/discovered repositories default to Claude. `runner.backend` never
+overrides project routing or permits a company project to use third-party APIs.
+The project choices are:
+
+- **Claude**: subscription and Claude role models; `eco` cannot enable Kimi.
+- **Codex (ChatGPT-Abo)**: Codex for coder, reviewer, QA review, PR feedback,
+  Product Owner and discovery; labels cannot switch it to another provider.
+- **Kimi (OpenRouter)** and **nur Kimi**: existing coder routing, including the
+  existing `claudeapi`/`complex` label rules and subscription reviewers. Only
+  the optional Kimi mode falls back to Claude when its key is missing.
+- **Moonshot / eco (API-Key)**: explicitly use `providers.eco` for this project.
+- **OpenAI / Responses (API-Key)**: explicitly use `providers.openai`, through
+  the Codex CLI's Responses API runner, for this project.
+
+Explicit API choices fail when credentials are missing; they never silently
+switch subscriptions. Provider endpoints/keys and the Codex model default live
+in Settings. Changing them does not grant a project access to that provider.
+The separate team chat contains logs/memory from multiple projects, so its
+selector offers Claude and Codex only. Legacy global third-party chat selections
+are rejected with a message directing you to Projects.
+
+API keys and endpoint overrides are removed from subscription child environments.
+Codex loads no personal apps/plugins or user configuration. Changes apply on the
+next cycle/new session; already running sessions finish on their original runner.
+Quota errors carry the actual session backend. Mixed-project roles keep rotating
+while sessions on an exhausted backend wait; the other subscription can continue.
+
+Codex has no equivalent to Claude's `max-turns`. Existing hard deadlines still
+apply; sessions without one have a two-hour deadline, and chat has 20 minutes.
+Inactivity/memory guards and discovery tool boundaries remain active.
+The Anthropic-based nightly desktop tester is disabled for Codex/OpenAI projects;
+its team chat uses the separately configured chat runner. External commands such
+as `product_owner.customer_command` retain their own provider configuration.
+
+The bundled commit-comment check also runs under Codex: a native PostToolUse
+hook starts an independent read-only review using the selected model/provider.
+It requires Node.js and Codex CLI 0.169.0; it does not call Claude or modify
+global hook settings. Findings ask the worker to remove unnecessary comments
+and amend the commit. See [hook behavior and validation](crates/team-core/assets/codex-hooks.md).
+
+Restricted discovery sessions have no shell or personal connectors. Existing
+discovery Markdown/JSON/TOML/text files and prepared `.discovery` context are
+supplied in a bounded local snapshot; editing uses `apply_patch`. Context above
+1 MB is rejected explicitly. Codex sessions also receive an instruction to
+honor the repository's `CLAUDE.md` alongside `AGENTS.md`.
+The global Claude SessionStart memory behavior is retained by loading the current
+user's `~/.claude/memory/*.md` notes directly (up to 256 KB). The wmux terminal
+telemetry hooks are not installed in the background runner.

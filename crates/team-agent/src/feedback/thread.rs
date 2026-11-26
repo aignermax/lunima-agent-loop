@@ -39,7 +39,7 @@ const LEGACY_MARKER: &str = "@agent";
 
 fn marker_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| Regex::new(r"<!-- pr-feedback:(claim|failed|done) (\d+)").expect("regex"))
+    R.get_or_init(|| Regex::new(r"<!-- pr-feedback:(claim|failed|done|waiting) (\d+)").expect("regex"))
 }
 
 /// `created_at` of a comment; unreadable → long ago (an unreadable claim never blocks).
@@ -60,6 +60,7 @@ impl Thread {
                 match &m[1] {
                     "claim" => t.claims.entry(id).or_default().push(created(c)),
                     "failed" => *t.failed.entry(id).or_default() += 1,
+                    "waiting" => { if let Some(claims) = t.claims.get_mut(&id) { claims.pop(); } },
                     _ => {
                         t.done.insert(id);
                     }
@@ -172,6 +173,11 @@ pub fn claim_comment(id: u64, machine: &str) -> String {
     with_marker(&format!("[pr-feedback] On it — working on comment [above](#issuecomment-{id}) (machine `{machine}`)."), &format!("<!-- pr-feedback:claim {id} machine={machine} -->"))
 }
 
+/// Admission did not start a session: release its claim without spending an attempt.
+pub fn waiting_comment(id: u64) -> String {
+    with_marker("[pr-feedback] Waiting for the configured model/provider; this did not consume an attempt.", &format!("<!-- pr-feedback:waiting {id} -->"))
+}
+
 pub fn failed_comment(id: u64, attempt: usize, error: &str) -> String {
     with_marker(&format!("[pr-feedback] Attempt {attempt} on comment [above](#issuecomment-{id}) failed (`{}`) — I'll retry.", short_error(error)), &format!("<!-- pr-feedback:failed {id} -->"))
 }
@@ -217,6 +223,16 @@ pub fn success_comment(id: u64, report: &str, pushed: bool, walkthrough: &str) -
 mod tests {
     use super::*;
     use team_core::gh::User;
+
+    #[test]
+    fn waiting_releases_an_unstarted_claim_without_spending_an_attempt() {
+        let comments = [comment(1, &claim_comment(7, "A")), comment(2, &waiting_comment(7))];
+        let thread = Thread::parse(&comments);
+        assert_eq!(thread.attempts(7), 0);
+        assert!(!thread.live_claim(7, Utc::now()));
+        assert!(!thread.is_done(7));
+        assert_eq!(thread.rounds(), 0);
+    }
 
     const REPORT: &str = "Done.
 === FEEDBACK REPORT ===

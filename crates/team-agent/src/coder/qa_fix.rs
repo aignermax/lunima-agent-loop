@@ -65,10 +65,11 @@ pub fn run(ctx: &Ctx, setup: &RepoSetup, locks: &mut Locks) -> RoleResult<bool> 
             finish::remove_worktree(setup, &ctx.paths.worktree(&setup.repo, &pr.head.name));
             Ok(true)
         }
-        Err(RoleError::UsageLimit(t)) => {
+        Err(RoleError::UsageLimit(backend, t)) => {
             unclaim(ctx, setup, n);
-            Err(RoleError::UsageLimit(t))
+            Err(RoleError::UsageLimit(backend, t))
         }
+        Err(RoleError::Unavailable(e)) => { unclaim(ctx, setup, n); Err(RoleError::Unavailable(e)) },
         Err(RoleError::Failed(e)) => {
             crate::log::error(&format!("QA-Fix PR #{n}: {e}"));
             let short: String = e.chars().take(300).collect();
@@ -131,12 +132,15 @@ fn fix(ctx: &Ctx, setup: &RepoSetup, pr: &PullRequest, comments: &[Comment]) -> 
         labels.extend(label_names(&i.labels));
     }
     let complex = labels.iter().any(|l| l.eq_ignore_ascii_case(&ctx.cfg.labels.complex));
-    let choice = team_core::provider::choose(&ctx.cfg, &setup.repo, &labels)?;
+    let choice = team_core::provider::choose(&ctx.cfg, &setup.repo, &labels).map_err(|e| {
+        if ctx.cfg.repo(&setup.repo).is_some_and(|r| r.profile.is_some()) { RoleError::Unavailable(e) } else { RoleError::Failed(e) }
+    })?;
     let b = &ctx.cfg.budgets;
-    let job = Job { prompt: ctx.render("qa-fix", &v)?, cwd: wt.clone(), model: choice.model, max_turns: if complex { b.max_turns_complex } else { b.max_turns_regular }, env: choice.env, label: label(&setup.repo, "qafix", pr.number), max_duration: None, tools: None };
+    let job = Job { policy: crate::llm::PolicyRequest { role: team_core::project::SessionRole::Coder, labels: labels.clone() }, repo: setup.repo.clone(), prompt: ctx.render("qa-fix", &v)?, cwd: wt.clone(), model: choice.model, max_turns: if complex { b.max_turns_complex } else { b.max_turns_regular }, env: choice.env, label: label(&setup.repo, "qafix", pr.number), max_duration: None, tools: None };
     crate::log::info(&format!("QA-Fix für PR #{} ({})", pr.number, choice.why));
     ctx.llm.run(&job).map_err(|e| match e {
-        LlmError::UsageLimit(t) => RoleError::UsageLimit(t),
+        LlmError::Unavailable(e) => RoleError::Unavailable(e),
+        LlmError::UsageLimit(backend, t) => RoleError::UsageLimit(backend, t),
         LlmError::Failed(m) => RoleError::Failed(m),
     })?;
     commit_and_push(&wt, &branch, &format!("QA fix: address verdict on PR #{}", pr.number))?;

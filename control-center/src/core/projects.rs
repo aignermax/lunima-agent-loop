@@ -10,10 +10,13 @@ pub fn routing_label(r: Routing) -> &'static str {
         Routing::Claude => "Claude",
         Routing::Kimi => "Kimi (OpenRouter)",
         Routing::KimiOnly => "nur Kimi",
+        Routing::Codex => "Codex (ChatGPT-Abo)",
+        Routing::OpenAi => "OpenAI / Responses (API-Key)",
+        Routing::Eco => "Moonshot / eco (API-Key)",
     }
 }
 
-pub const ROUTINGS: [Routing; 3] = [Routing::Claude, Routing::Kimi, Routing::KimiOnly];
+pub const ROUTINGS: [Routing; 6] = [Routing::Claude, Routing::Codex, Routing::Kimi, Routing::KimiOnly, Routing::OpenAi, Routing::Eco];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Project {
@@ -71,6 +74,10 @@ pub fn set_routing(cfg: &mut TeamConfig, repo: &str, routing: Routing) {
     entry(cfg, repo).routing = routing;
 }
 
+pub fn set_profile(cfg: &mut TeamConfig, repo: &str, profile: Option<team_core::project::ProjectProfile>) {
+    entry(cfg, repo).profile = profile;
+}
+
 /// Adds a repo (coder on). Err for anything that is not `owner/name`.
 pub fn add(cfg: &mut TeamConfig, repo: &str) -> Result<(), String> {
     let repo = repo.trim();
@@ -118,7 +125,7 @@ mod tests {
     use super::*;
 
     fn cfg() -> TeamConfig {
-        let mut c = TeamConfig { repos: vec![RepoConfig { name: "aignermax/Lunima".into(), coder: true, routing: Routing::KimiOnly }], ..Default::default() };
+        let mut c = TeamConfig { repos: vec![RepoConfig { name: "aignermax/Lunima".into(), coder: true, routing: Routing::KimiOnly, ..Default::default() }], ..Default::default() };
         c.product_owner.repo = "aignermax/Lunima".into();
         c
     }
@@ -157,5 +164,19 @@ mod tests {
         assert_eq!(parse_agents_enabled("agents_enabled = [\"coder\", \"qa\"] # x"), ["coder", "qa"]);
         assert_eq!(parse_agents_enabled("agents_enabled = [\n  'qa', # c\n  'pr-feedback'\n]"), ["qa", "pr-feedback"]);
         assert_eq!(parse_agents_enabled(""), ["coder"]);
+    }
+
+    #[test]
+    fn mixed_project_choices_survive_save_without_global_override() {
+        let mut c = cfg();
+        set_routing(&mut c, "Akhetonics/khepri", Routing::Codex);
+        c.runner.backend = team_core::config::Backend::Eco;
+        let t = tempfile::tempdir().unwrap();
+        c.save(&t.path().join("team.toml")).unwrap();
+        let back = TeamConfig::load(&t.path().join("team.toml")).unwrap();
+        assert_eq!(back.repo("Akhetonics/khepri").unwrap().routing, Routing::Codex);
+        assert_eq!(back.repo("aignermax/Lunima").unwrap().routing, Routing::KimiOnly);
+        assert!(ROUTINGS.contains(&Routing::Codex));
+        assert_eq!(team_core::provider::repo_runner(&back, "Akhetonics/khepri").backend, team_core::config::Backend::Codex);
     }
 }

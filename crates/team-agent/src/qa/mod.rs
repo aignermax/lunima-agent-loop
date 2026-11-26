@@ -66,6 +66,8 @@ impl Role for Qa {
             crate::log::warn("Keine Repos konfiguriert");
             return Ok(false);
         };
+        let project_ctx = ctx.for_project(&repo);
+        let ctx = &project_ctx;
         let setup = match workspace::setup(ctx, "qa", &repo) {
             Ok(s) => s,
             Err(e) if ctx.cfg.repo(&repo).is_none() => {

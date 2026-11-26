@@ -29,6 +29,19 @@ impl Probes for System {
         team_core::claude::find_cli().map(|p| p.display().to_string())
     }
 
+    fn codex_cli(&self) -> Option<String> {
+        team_core::codex::find_cli().map(|p| p.display().to_string())
+    }
+
+    fn codex_login(&self) -> Result<bool, String> {
+        let cli = team_core::codex::find_cli().ok_or("codex nicht gefunden")?;
+        let mut cmd = hidden(cli);
+        cmd.args(["login", "status"]);
+        team_core::provider::ChildEnv::codex_subscription().apply(&mut cmd);
+        let out = run_output_timeout(cmd, TIMEOUT)?;
+        parse_codex_login(out.status.success(), &format!("{}\n{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+    }
+
     /// `claude auth status` prints JSON with `loggedIn`.
     fn claude_login(&self) -> Result<bool, String> {
         let cli = team_core::claude::find_cli().ok_or("claude nicht gefunden")?;
@@ -40,6 +53,17 @@ impl Probes for System {
         let out = run_output_timeout(cmd, TIMEOUT)?;
         parse_auth_status(&String::from_utf8_lossy(&out.stdout))
     }
+}
+
+pub fn parse_codex_login(success: bool, text: &str) -> Result<bool, String> {
+    let text = text.to_ascii_lowercase();
+    if !success || text.contains("not logged in") {
+        return Ok(false);
+    }
+    if text.contains("chatgpt") {
+        return Ok(true);
+    }
+    Err("Codex braucht ChatGPT-Anmeldung: `codex logout` und `codex login` ausführen".into())
 }
 
 pub fn parse_auth_status(text: &str) -> Result<bool, String> {
@@ -70,6 +94,15 @@ pub fn open_terminal(command: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_status_requires_chatgpt_not_an_api_key() {
+        assert_eq!(parse_codex_login(true, "Logged in using ChatGPT"), Ok(true));
+        assert_eq!(parse_codex_login(false, "Not logged in"), Ok(false));
+        assert_eq!(parse_codex_login(false, "ChatGPT unavailable"), Ok(false));
+        assert!(parse_codex_login(true, "Logged in using an API key").is_err());
+        assert!(parse_codex_login(true, "unexpected output").is_err());
+    }
 
     #[test]
     fn auth_status_json() {

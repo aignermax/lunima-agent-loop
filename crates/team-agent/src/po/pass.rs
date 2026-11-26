@@ -166,6 +166,8 @@ pub fn run(ctx: &Ctx, prs: &[PullRequest], issues: &[Issue]) -> RoleResult<Ended
         env.set.insert(k.into(), v.into());
     }
     let job = Job {
+        policy: crate::llm::PolicyRequest { role: team_core::project::SessionRole::ProductOwner, labels: Vec::new() },
+        repo: po.repo.clone(),
         prompt: text,
         cwd: setup.clone.dir.clone(),
         model: ctx.cfg.models.product_owner.clone(),
@@ -183,7 +185,8 @@ pub fn run(ctx: &Ctx, prs: &[PullRequest], issues: &[Issue]) -> RoleResult<Ended
     match result {
         Ok(out) if out.is_error => Ok(Ended::Error(format!("Claude meldet Fehler ({}): {}", out.subtype, out.text.chars().take(300).collect::<String>()))),
         Ok(out) => Ok(Ended::Ok(out.text.chars().rev().take(300).collect::<Vec<_>>().into_iter().rev().collect())),
-        Err(LlmError::UsageLimit(t)) => Err(RoleError::UsageLimit(t)),
+        Err(LlmError::Unavailable(e)) => Err(RoleError::Unavailable(e)),
+        Err(LlmError::UsageLimit(backend, t)) => Err(RoleError::UsageLimit(backend, t)),
         Err(LlmError::Failed(e)) if e.contains(TIMED_OUT_TEXT) => Ok(Ended::Timeout(e)),
         Err(LlmError::Failed(e)) => Ok(Ended::Error(e)),
     }

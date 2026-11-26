@@ -4,6 +4,8 @@
 
 pub mod chat;
 pub mod claude;
+pub mod codex;
+pub mod codex_hooks;
 pub mod config;
 pub mod gh;
 pub mod git;
@@ -13,4 +15,5 @@ pub mod paths;
 pub mod proc;
 pub mod prompts;
 pub mod provider;
+pub mod project;
 pub mod state;

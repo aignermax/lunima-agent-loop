@@ -79,6 +79,9 @@ pub struct App {
     screenshot: Option<crate::screenshot::Screenshot>,
     /// the restored window size was checked (`fix_tiny_window`)
     window_checked: bool,
+    updater: Option<crate::updater::Worker>,
+    hide_requested: bool,
+    quit_flush: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
 }
 
 impl App {
@@ -88,11 +91,13 @@ impl App {
         if screenshot.is_none() {
             tray::install(handle.clone());
         }
-        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default(), screenshot, window_checked: false }
+        let updater = screenshot.is_none().then(|| crate::updater::Worker::start(handle.snapshot().paths.root.clone(),handle.clone()));
+        Self { handle, page, activity: ActivityPage::default(), team: TeamPage::default(), projects: ProjectsPage::default(), settings: SettingsPage::default(), rules: RulesPage::default(), logs: LogsPage::default(), screenshot, window_checked: false, updater, hide_requested: false, quit_flush: None }
     }
 
     fn sidebar(&mut self, ctx: &egui::Context, s: &Snapshot, h: &Health) {
         egui::SidePanel::left("nav").exact_width(220.0).resizable(false).frame(egui::Frame::new().fill(theme::SIDEBAR).inner_margin(egui::Margin::same(16))).show(ctx, |ui| {
+            if self.updater.as_ref().is_some_and(|u|u.blocking()) || tray::quit_requested() || self.quit_flush.is_some() {ui.disable();}
             ui.horizontal(|ui| {
                 level_dot(ui, h.overall, 7.0);
                 ui.vertical(|ui| {
@@ -109,6 +114,9 @@ impl App {
                 if ui.add(button).clicked() {
                     if self.page == Page::Settings && *page != Page::Settings {
                         self.settings.flush(s, &self.handle);
+                    }
+                    if self.page == Page::Projects && *page != Page::Projects {
+                        self.projects.flush(ctx, &self.handle);
                     }
                     self.page = *page;
                 }
@@ -153,19 +161,48 @@ fn footer(ui: &mut egui::Ui, s: &Snapshot, handle: &Handle) {
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // closing hides the window into the tray; a screenshot run has no tray, so it quits
-        if self.screenshot.is_none() && ctx.input(|i| i.viewport().close_requested()) {
+        let closing = self.screenshot.is_none() && ctx.input(|i| i.viewport().close_requested());
+        if closing || tray::quit_requested() {
             self.settings.flush(&self.handle.snapshot(), &self.handle);
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            win::hide_main();
+            self.projects.flush(ctx, &self.handle);
+            if closing { ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose); self.hide_requested = true; }
         }
         if !self.window_checked {
             self.window_checked = fix_tiny_window(ctx);
         }
+        self.projects.tick(ctx, &self.handle);
+        if let Some(wait) = &self.quit_flush {
+            match wait.try_recv() {
+                Ok(Ok(())) => std::process::exit(0),
+                Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.quit_flush = None; tray::cancel_quit(); self.hide_requested = false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => { ctx.request_repaint_after(Duration::from_millis(50)); }
+            }
+        }
+        if tray::quit_requested() && self.quit_flush.is_none() {
+            if self.projects.has_save_error() || !self.settings.can_update() {
+                tray::cancel_quit(); self.hide_requested = false;
+            } else if self.projects.can_update() {
+                let (done, wait) = std::sync::mpsc::channel();
+                self.handle.send(Action::Flush(done)); self.quit_flush = Some(wait);
+                ctx.request_repaint_after(Duration::from_millis(50));
+            }
+        }
         let s = self.handle.snapshot();
         let h = health::evaluate(&s, Local::now());
+        if let Some(updater)=&self.updater {
+            if updater.banner(ctx) {
+                self.settings.flush(&s,&self.handle);
+                self.projects.flush(ctx, &self.handle);
+                if self.settings.can_update() && self.projects.can_update() {updater.install();} else {updater.save_error();}
+            }
+        }
         tray::sync(&self.handle);
+        if self.page == Page::Projects || !self.projects.can_update() { self.projects.status(ctx); }
         self.sidebar(ctx, &s, &h);
         egui::CentralPanel::default().frame(egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::symmetric(28, 22))).show(ctx, |ui| {
+            if self.updater.as_ref().is_some_and(|u|u.blocking()) || tray::quit_requested() || self.quit_flush.is_some() {ui.disable();}
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 // forms and lists read best at a limited width; the Team page's two columns of
                 // role cards with chats use whatever the window offers
@@ -193,6 +230,12 @@ impl eframe::App for App {
                 }
             });
         });
+        // Process the final frame's input before hiding; its last keystroke may
+        // have created a new debounced project edit.
+        if self.hide_requested && !tray::quit_requested() {
+            if self.projects.has_save_error() || !self.settings.can_update() { self.hide_requested = false; }
+            else if self.projects.can_update() { self.hide_requested = false; win::hide_main(); }
+        }
         self.notice(ctx);
         if let Some(shot) = &mut self.screenshot {
             shot.tick(ctx);

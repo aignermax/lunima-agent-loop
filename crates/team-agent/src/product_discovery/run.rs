@@ -205,7 +205,9 @@ pub fn week(ctx: &Ctx, repo_name: &str, week: &str, st: &mut DiscoveryState) -> 
         commit(&repo, week, &run, "prepare")?;
     }
 
-    let model = if cfg.model.trim().is_empty() { ctx.cfg.models.product_owner.clone() } else { cfg.model.clone() };
+    let model = if ctx.cfg.repo(repo_name).is_some_and(|r| r.profile.is_some()) {
+        team_core::project::resolve(&ctx.cfg, repo_name, team_core::project::SessionRole::Discovery, &[]).map_err(RoleError::Unavailable)?.choice.model
+    } else if cfg.model.trim().is_empty() { ctx.cfg.models.product_owner.clone() } else { cfg.model.clone() };
     let mut stage_run = Run { ctx, repo: &repo, repo_name, week, base: base.clone(), model, review_items: vec![] };
 
     for stage in Stage::ALL {
@@ -392,7 +394,7 @@ pub fn week(ctx: &Ctx, repo_name: &str, week: &str, st: &mut DiscoveryState) -> 
 
 /// Errors that end a run but are no failure of the week (the daemon handles them).
 pub fn is_usage_limit(e: &RoleError) -> bool {
-    matches!(e, RoleError::UsageLimit(_))
+    matches!(e, RoleError::UsageLimit(_, _) | RoleError::Unavailable(_))
 }
 
 #[cfg(test)]

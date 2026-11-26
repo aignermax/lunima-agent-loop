@@ -43,6 +43,8 @@ impl Role for PrFeedback {
             crate::log::warn("Keine Repos konfiguriert oder entdeckt");
             return Ok(false);
         };
+        let project_ctx = ctx.for_project(&repo);
+        let ctx = &project_ctx;
         let forge = (ctx.forge)(&repo);
         let prs = match forge.open_prs() {
             Ok(p) => p,

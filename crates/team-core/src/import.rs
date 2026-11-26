@@ -83,7 +83,7 @@ pub fn apply_env(c: &mut TeamConfig, env: &BTreeMap<String, String>) {
         } else {
             Routing::Claude
         };
-        c.repos.push(RepoConfig { name: name.clone(), coder: true, routing });
+        c.repos.push(RepoConfig { name: name.clone(), coder: true, routing, ..Default::default() });
     }
     if let Some(org) = env.get("AGENT_DISCOVERY_ORG") {
         c.discovery.org = org.clone(); // explicit empty = discovery off

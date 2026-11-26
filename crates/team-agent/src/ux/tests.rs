@@ -215,3 +215,17 @@ fn po_prompt_says_when_there_is_no_report() {
     let w = world();
     assert!(po_section(&w.ctx("A")).contains("No recent UX report"));
 }
+
+#[test]
+fn codex_backends_do_not_start_the_anthropic_desktop_tester() {
+    let w = world();
+    let mut ctx = w.ctx("test");
+    for routing in [team_core::config::Routing::Codex, team_core::config::Routing::OpenAi] {
+        let repo = if ctx.cfg.ux_review.repo.is_empty() { ctx.cfg.product_owner.repo.clone() } else { ctx.cfg.ux_review.repo.clone() };
+        ctx.cfg.repos.retain(|r| !r.name.eq_ignore_ascii_case(&repo));
+        ctx.cfg.repos.push(team_core::config::RepoConfig { name: repo, routing, ..Default::default() });
+        assert!(UxReviewer::target(&ctx).unwrap_err().contains("Anthropic"));
+        ctx.cfg.repos.pop();
+    }
+    assert!(w.lines.lock().unwrap().is_empty());
+}

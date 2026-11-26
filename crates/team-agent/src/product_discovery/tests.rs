@@ -288,9 +288,9 @@ fn pause_takes_effect_between_stages_and_is_not_a_failed_attempt() {
 #[test]
 fn usage_limit_gives_the_week_back() {
     let until = Local::now() + chrono::Duration::hours(2);
-    let w = world(FakeLlm::new().then(move |_| Err(LlmError::UsageLimit(until))));
+    let w = world(FakeLlm::new().then(move |_| Err(LlmError::UsageLimit(team_core::config::Backend::Claude, until))));
     let ctx = w.ctx("A");
-    assert_eq!(w.role(monday()).cycle(&ctx), Err(RoleError::UsageLimit(until)));
+    assert_eq!(w.role(monday()).cycle(&ctx), Err(RoleError::UsageLimit(team_core::config::Backend::Claude, until)));
     let st = DiscoveryState::load(&ctx.paths.state()).unwrap();
     assert_eq!((st.last_result.as_str(), st.attempts), ("usage-limit", 0));
     assert!(w.forge.lock_info("discovery-2026-w45").unwrap().is_none());

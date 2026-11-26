@@ -7,6 +7,7 @@ pub mod discovery;
 pub mod health;
 pub mod logs;
 pub mod projects;
+pub mod project_autosave;
 pub mod prompts;
 pub mod settings_model;
 pub mod setup;

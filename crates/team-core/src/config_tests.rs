@@ -1,6 +1,33 @@
 use super::*;
 
 #[test]
+fn project_profile_complex_selects_its_model_on_codex() {
+    let cfg: TeamConfig = toml::from_str("[[repos]]\nname='company/private'\nrouting='codex'\n[repos.profile]\nallowed_backends=['codex']\n[repos.profile.standard]\nmodel='codex-normal'\n[repos.profile.complex]\nmodel='codex-complex'\n").unwrap();
+    let normal = crate::provider::choose(&cfg, "company/private", &[]).unwrap();
+    let complex = crate::provider::choose(&cfg, "company/private", &["complex".into()]).unwrap();
+    assert_eq!(normal.model, "codex-normal");
+    assert_eq!(complex.model, "codex-complex");
+}
+
+#[test]
+fn project_profile_rejects_forbidden_label_and_fallback_providers() {
+    for variant in ["complex", "eco", "fallback"] {
+        let text = format!("[[repos]]\nname='company/private'\nrouting='codex'\n[repos.profile]\nallowed_backends=['codex']\n[repos.profile.{variant}]\nbackend='openrouter'\nmodel='kimi'\n");
+        let cfg: TeamConfig = toml::from_str(&text).unwrap();
+        assert!(cfg.validate().is_err(), "forbidden {variant} must be rejected before saving");
+        assert!(crate::provider::choose(&cfg, "company/private", &[variant.into()]).is_err());
+    }
+}
+
+#[test]
+fn project_profile_survives_roundtrip_and_keeps_explicit_cli_default() {
+    let cfg: TeamConfig = toml::from_str("[[repos]]\nname='o/r'\nrouting='codex'\n[repos.profile]\nallowed_backends=['codex']\n[repos.profile.standard]\nmodel=''\n[repos.profile.budgets]\nmax_tokens_complex=12345\n").unwrap();
+    let doc = toml::Value::try_from(&cfg).unwrap();
+    assert_eq!(doc["repos"][0]["profile"]["standard"]["model"].as_str(), Some(""));
+    assert_eq!(doc["repos"][0]["profile"]["budgets"]["max_tokens_complex"].as_integer(), Some(12345));
+}
+
+#[test]
 fn empty_file_gives_working_defaults() {
     let c: TeamConfig = toml::from_str("").unwrap();
     assert_eq!(c.labels.task, "agent-task");
@@ -106,4 +133,16 @@ fn one_setting_by_path() {
     assert!(c.with_setting("roles.nonsense", "true").unwrap_err().contains("unbekannt"));
     assert!(c.with_setting("poll_seconds", "0").is_err(), "validated");
     assert!(c.with_setting("repos", "x").is_err(), "the repository list is not a single value");
+}
+
+#[test]
+fn runner_defaults_and_settings_round_trip() {
+    let c: TeamConfig = toml::from_str("").unwrap();
+    let value = toml::Value::try_from(&c).unwrap();
+    assert_eq!(value.get("runner").and_then(|r| r.get("backend")).and_then(|v| v.as_str()), Some("claude"));
+    let c = c.with_setting("runner.backend", "codex").unwrap().with_setting("runner.model", "gpt-test").unwrap();
+    let t = tempfile::tempdir().unwrap();
+    c.save(&t.path().join("team.toml")).unwrap();
+    assert_eq!(TeamConfig::load(&t.path().join("team.toml")).unwrap(), c);
+    assert!(c.with_setting("runner.backend", "unknown").is_err());
 }

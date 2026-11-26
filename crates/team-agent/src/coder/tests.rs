@@ -73,6 +73,23 @@ fn implements_an_issue_as_a_reviewed_pr() {
 }
 
 #[test]
+fn project_budget_and_policy_reach_coder_and_reviewer_jobs() {
+    let mut w = world(FakeForge::new("o/r").with_issue(task(1, "Please add it", &["complex", "critical"])), FakeLlm::new().reply(SUMMARY, Some("feature.txt")).reply(REVIEW_OK, None));
+    let mut profile = team_core::project::ProjectProfile::from_legacy(&w.ctx.cfg, "o/r");
+    profile.budgets.max_turns_complex = Some(7);
+    profile.budgets.reviewer_max_turns = Some(9);
+    w.ctx.cfg.repos[0].profile = Some(profile);
+    assert!(coder().cycle(&w.ctx).unwrap());
+    let jobs = w.llm.jobs.lock().unwrap();
+    assert_eq!(jobs[0].max_turns, 7);
+    assert_eq!(jobs[0].policy.role, team_core::project::SessionRole::Coder);
+    assert!(jobs[0].policy.labels.contains(&"complex".into()));
+    assert_eq!(jobs[1].max_turns, 9);
+    assert_eq!(jobs[1].policy.role, team_core::project::SessionRole::Reviewer);
+    assert!(jobs[1].policy.labels.contains(&"critical".into()));
+}
+
+#[test]
 fn nothing_to_change_closes_the_issue() {
     let w = world(FakeForge::new("o/r").with_issue(task(2, "", &[])), FakeLlm::new().reply("already there", None));
     assert!(coder().cycle(&w.ctx).unwrap());
@@ -112,14 +129,27 @@ fn failures_requeue_then_give_up() {
 #[test]
 fn usage_limit_keeps_the_claim_and_resumes_later() {
     let limit = chrono::Local::now() + chrono::Duration::hours(1);
-    let llm = FakeLlm::new().then(move |_| Err(LlmError::UsageLimit(limit))).reply(SUMMARY, Some("f.txt")).reply(REVIEW_OK, None);
+    let llm = FakeLlm::new().then(move |_| Err(LlmError::UsageLimit(team_core::config::Backend::Claude, limit))).reply(SUMMARY, Some("f.txt")).reply(REVIEW_OK, None);
     let w = world(FakeForge::new("o/r").with_issue(task(5, "x", &[])), llm);
     let mut c = coder();
-    assert!(matches!(c.cycle(&w.ctx), Err(crate::ctx::RoleError::UsageLimit(_))));
+    assert!(matches!(c.cycle(&w.ctx), Err(crate::ctx::RoleError::UsageLimit(_, _))));
     assert!(w.forge.labels(5).contains(&"agent-running".to_string()));
     assert!(c.cycle(&w.ctx).unwrap());
     assert!(w.forge.log().contains(&"close 5".to_string()));
     assert_eq!(w.forge.comment_bodies(5).iter().filter(|b| b.contains("is now working")).count(), 1);
+}
+
+#[test]
+fn unavailable_provider_waits_without_spending_an_attempt_or_handing_over() {
+    let llm = FakeLlm::new().then(|_| Err(LlmError::Unavailable("CLI fehlt".into())));
+    let w = world(FakeForge::new("o/r").with_issue(task(5, "x", &[])), llm);
+    let mut c = coder();
+    for _ in 0..4 { assert!(matches!(c.cycle(&w.ctx), Err(crate::ctx::RoleError::Unavailable(_)))); }
+    let state = Store::new(&w.ctx.paths.sessions()).load("o/r", 5).unwrap();
+    assert_eq!(state.attempts, 0);
+    assert_eq!(state.session_count, 0);
+    assert!(!state.handed_to_human);
+    assert!(!w.forge.labels(5).contains(&"needs-human".into()));
 }
 
 #[test]
@@ -194,7 +224,7 @@ fn qa_fix_escalates_after_too_many_failures() {
 
 #[test]
 fn second_machine_finds_nothing_to_claim() {
-    let w = world(FakeForge::new("o/r").with_issue(task(12, "x", &[])), FakeLlm::new().then(|_| Err(LlmError::UsageLimit(chrono::Local::now() + chrono::Duration::hours(1)))));
+    let w = world(FakeForge::new("o/r").with_issue(task(12, "x", &[])), FakeLlm::new().then(|_| Err(LlmError::UsageLimit(team_core::config::Backend::Claude, chrono::Local::now() + chrono::Duration::hours(1)))));
     let _ = coder().cycle(&w.ctx);
     let mut other = w.ctx.clone();
     other.machine = "OTHERBOX".into();

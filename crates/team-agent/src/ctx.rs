@@ -30,6 +30,18 @@ pub struct Ctx {
 }
 
 impl Ctx {
+    pub fn for_project(&self, repo: &str) -> Self {
+        let mut ctx = self.clone();
+        ctx.cfg.budgets = team_core::project::budgets_for(&self.cfg, repo);
+        if let Some(p) = self.cfg.repo(repo).and_then(|r| r.profile.as_ref()) {
+            ctx.cfg.product_owner.max_turns = p.budgets.product_owner_max_turns.unwrap_or(self.cfg.product_owner.max_turns);
+            ctx.cfg.product_owner.timeout_minutes = p.budgets.product_owner_timeout_minutes.unwrap_or(self.cfg.product_owner.timeout_minutes);
+            ctx.cfg.product_discovery.max_turns = p.budgets.discovery_max_turns.unwrap_or(self.cfg.product_discovery.max_turns);
+            ctx.cfg.product_discovery.timeout_minutes = p.budgets.discovery_timeout_minutes.unwrap_or(self.cfg.product_discovery.timeout_minutes);
+        }
+        ctx
+    }
+
     pub fn render(&self, name: &str, values: &HashMap<&str, String>) -> Result<String, String> {
         let (text, warning) = team_core::prompts::render(&self.paths.prompts(), name, values)?;
         if let Some(w) = warning {
@@ -108,15 +120,17 @@ impl Tools {
 /// Why a cycle ended early.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoleError {
+    Unavailable(String),
     /// subscription limit — the daemon pauses the role until then
-    UsageLimit(DateTime<Local>),
+    UsageLimit(team_core::config::Backend, DateTime<Local>),
     Failed(String),
 }
 
 impl std::fmt::Display for RoleError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            RoleError::UsageLimit(t) => write!(f, "{}", LlmError::UsageLimit(*t)),
+            RoleError::Unavailable(e) => write!(f, "Sitzung wartet: {e}"),
+            RoleError::UsageLimit(backend, t) => write!(f, "{}", LlmError::UsageLimit(*backend, *t)),
             RoleError::Failed(e) => write!(f, "{e}"),
         }
     }
@@ -131,7 +145,8 @@ impl From<String> for RoleError {
 impl From<LlmError> for RoleError {
     fn from(e: LlmError) -> Self {
         match e {
-            LlmError::UsageLimit(t) => RoleError::UsageLimit(t),
+            LlmError::Unavailable(e) => RoleError::Unavailable(e),
+            LlmError::UsageLimit(backend, t) => RoleError::UsageLimit(backend, t),
             LlmError::Failed(m) => RoleError::Failed(m),
         }
     }

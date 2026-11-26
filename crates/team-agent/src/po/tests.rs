@@ -91,10 +91,10 @@ fn healthy_backlog_skips_without_claude_or_lock() {
 #[test]
 fn usage_limit_gives_the_slot_back() {
     let until = Local::now() + chrono::Duration::hours(1);
-    let w = world(with_agent_pr(), FakeLlm::new().then(move |_| Err(LlmError::UsageLimit(until))).reply("done", None));
+    let w = world(with_agent_pr(), FakeLlm::new().then(move |_| Err(LlmError::UsageLimit(team_core::config::Backend::Claude, until))).reply("done", None));
     let ctx = w.ctx("A");
     let mut po = ProductOwner::default();
-    assert_eq!(po.cycle(&ctx), Err(RoleError::UsageLimit(until)));
+    assert_eq!(po.cycle(&ctx), Err(RoleError::UsageLimit(team_core::config::Backend::Claude, until)));
     let st = state(&ctx);
     assert_eq!((st.last_result.as_str(), st.runs_today), ("usage-limit", 0));
     assert!(w.forge.s.lock().unwrap().locks.is_empty(), "slot released");

@@ -152,8 +152,8 @@ fn review_crash_blocks() {
 #[test]
 fn usage_limit_releases_the_claim_without_verdict() {
     let until = chrono::Local::now() + chrono::Duration::hours(2);
-    let e = env(&one(toml("\"qa\"", "exit 0", "", true)), FakeLlm::new().then(move |_| Err(LlmError::UsageLimit(until))));
-    assert_eq!(Qa::default().cycle(&e.ctx), Err(RoleError::UsageLimit(until)));
+    let e = env(&one(toml("\"qa\"", "exit 0", "", true)), FakeLlm::new().then(move |_| Err(LlmError::UsageLimit(team_core::config::Backend::Claude, until))));
+    assert_eq!(Qa::default().cycle(&e.ctx), Err(RoleError::UsageLimit(team_core::config::Backend::Claude, until)));
     assert!(e.forge.labels(1).is_empty());
     assert!(e.forge.comment_bodies(1).is_empty());
     assert!(claims::load(&e.ctx.paths.state()).is_empty());

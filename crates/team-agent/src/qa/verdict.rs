@@ -15,6 +15,12 @@ use team_core::provider::ChildEnv;
 /// every other problem becomes a BLOCKING verdict.
 pub fn review(ctx: &Ctx, repo: &str, pr: &PullRequest, dir: &Path) -> Result<(Verdict, String), RoleError> {
     let model = if pr.has_label(&ctx.cfg.labels.critical) { ctx.cfg.models.reviewer_critical.clone() } else { ctx.cfg.models.reviewer.clone() };
+    let model = if ctx.cfg.repo(repo).is_some_and(|r| r.profile.is_some()) {
+        match team_core::project::resolve(&ctx.cfg, repo, team_core::project::SessionRole::Qa, &crate::forge::label_names(&pr.labels)) {
+            Ok(d) => d.choice.model,
+            Err(e) => return Err(RoleError::Unavailable(e)),
+        }
+    } else { model };
     let mut values: HashMap<&str, String> = HashMap::new();
     values.insert("pr_number", pr.number.to_string());
     values.insert("pr_title", pr.title.clone());
@@ -27,6 +33,8 @@ pub fn review(ctx: &Ctx, repo: &str, pr: &PullRequest, dir: &Path) -> Result<(Ve
         Err(e) => return Ok((Verdict::blocking(&format!("QA review crashed: {e}")), model)),
     };
     let job = Job {
+        policy: crate::llm::PolicyRequest { role: team_core::project::SessionRole::Qa, labels: crate::forge::label_names(&pr.labels) },
+        repo: repo.into(),
         prompt,
         cwd: dir.to_path_buf(),
         model: model.clone(),
@@ -41,7 +49,8 @@ pub fn review(ctx: &Ctx, repo: &str, pr: &PullRequest, dir: &Path) -> Result<(Ve
             crate::log::info(&format!("QA-Review PR #{}: {} Tokens", pr.number, out.usage.total()));
             Ok((parse(&out.text), model))
         }
-        Err(LlmError::UsageLimit(t)) => Err(RoleError::UsageLimit(t)),
+        Err(LlmError::Unavailable(e)) => Err(RoleError::Unavailable(e)),
+        Err(LlmError::UsageLimit(backend, t)) => Err(RoleError::UsageLimit(backend, t)),
         Err(LlmError::Failed(e)) => Ok((Verdict::blocking(&format!("QA review could not run: {e}")), model)),
     }
 }

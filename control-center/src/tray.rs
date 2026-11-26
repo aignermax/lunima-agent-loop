@@ -26,6 +26,10 @@ const ID_OPEN: &str = "open";
 const ID_PAUSE: &str = "pause";
 const ID_RESTART: &str = "restart";
 const ID_QUIT: &str = "quit";
+static QUIT_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn quit_requested() -> bool { QUIT_REQUESTED.load(std::sync::atomic::Ordering::SeqCst) }
+pub fn cancel_quit() { QUIT_REQUESTED.store(false, std::sync::atomic::Ordering::SeqCst); }
 
 /// RGBA image of a status disc with a soft ring, `size`×`size` pixels.
 pub fn status_icon_rgba(color: [u8; 3], size: u32) -> Vec<u8> {
@@ -78,7 +82,7 @@ fn build(handle: &Handle) {
         ID_OPEN => win::show_main(),
         ID_PAUSE => menu_handle.send(Action::PauseAll(!menu_handle.snapshot().all_paused())),
         ID_RESTART => menu_handle.send(Action::Agent(Verb::Restart)),
-        ID_QUIT => std::process::exit(0),
+        ID_QUIT => { QUIT_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst); win::show_main(); win::request_repaint(); },
         _ => {}
     }));
     TrayIconEvent::set_event_handler(Some(|e: TrayIconEvent| {

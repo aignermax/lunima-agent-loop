@@ -96,6 +96,8 @@ impl Role for ProductDiscovery {
         if repo.is_empty() {
             return Ok(false);
         }
+        let project_ctx = ctx.for_project(&repo);
+        let ctx = &project_ctx;
         let cfg = &ctx.cfg.product_discovery;
         let now = (self.clock)();
         let week = plan::week_key(now);
@@ -154,12 +156,19 @@ impl Role for ProductDiscovery {
                 }
                 Ok(false)
             }
-            Err(RoleError::UsageLimit(t)) => {
+            Err(RoleError::UsageLimit(backend, t)) => {
                 st.last_result = "usage-limit".into();
                 st.last_note = format!("Claude-Nutzungslimit bis {}", t.format("%d.%m. %H:%M"));
                 st.attempts = st.attempts.saturating_sub(1);
                 let _ = forge.unlock(&key);
-                Err(RoleError::UsageLimit(t))
+                Err(RoleError::UsageLimit(backend, t))
+            }
+            Err(RoleError::Unavailable(e)) => {
+                st.last_result = "waiting".into();
+                st.last_note = e.chars().take(500).collect();
+                st.attempts = st.attempts.saturating_sub(1);
+                let _ = forge.unlock(&key);
+                Err(RoleError::Unavailable(e))
             }
             Err(RoleError::Failed(e)) => {
                 st.last_result = "error".into();

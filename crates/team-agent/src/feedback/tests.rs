@@ -76,6 +76,20 @@ fn handles_a_request_end_to_end() {
 }
 
 #[test]
+fn dedicated_feedback_model_does_not_require_the_coder_api_key() {
+    let e = env(ON, Some("o/r"));
+    e.forge.add_comment(7, TRIGGER);
+    let llm = Arc::new(FakeLlm::new().reply(REPORT, None));
+    let mut ctx = e.ctx("a", &llm);
+    ctx.cfg.providers.openai.key_env.clear();
+    let profile: team_core::project::ProjectProfile = toml::from_str("allowed_backends=['openai','claude']\n[standard]\nbackend='openai'\nmodel='no-key'\n[feedback]\nbackend='claude'\nmodel='feedback-model'\n").unwrap();
+    ctx.cfg.repos[0].profile = Some(profile);
+    assert_eq!(PrFeedback::new().cycle(&ctx), Ok(true));
+    assert_eq!(llm.calls(), 1);
+    assert_eq!(llm.jobs.lock().unwrap()[0].model, "feedback-model");
+}
+
+#[test]
 fn no_change_is_reported() {
     let e = env(ON, Some("o/r"));
     e.forge.add_comment(7, TRIGGER);
@@ -186,8 +200,8 @@ fn usage_limit_leaves_the_request_open() {
     let e = env(ON, Some("o/r"));
     e.forge.add_comment(7, TRIGGER);
     let until = chrono::Local::now() + chrono::Duration::hours(1);
-    let llm = Arc::new(FakeLlm::new().then(move |_| Err(LlmError::UsageLimit(until))));
-    assert_eq!(PrFeedback::new().cycle(&e.ctx("a", &llm)), Err(RoleError::UsageLimit(until)));
+    let llm = Arc::new(FakeLlm::new().then(move |_| Err(LlmError::UsageLimit(team_core::config::Backend::Claude, until))));
+    assert_eq!(PrFeedback::new().cycle(&e.ctx("a", &llm)), Err(RoleError::UsageLimit(team_core::config::Backend::Claude, until)));
     assert_eq!(e.count("<!-- pr-feedback:done"), 0);
     assert_eq!(e.count("<!-- pr-feedback:failed"), 0);
     assert_eq!(e.count("<!-- pr-feedback:claim"), 1);

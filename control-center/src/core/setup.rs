@@ -2,6 +2,8 @@
 //! one step that fixes each gap. Never asks for tokens — Claude and GitHub use the
 //! user's own logins.
 
+use team_core::config::Backend;
+
 /// Answers about the machine; `sys::probes::System` asks the real tools.
 pub trait Probes {
     /// `<tool> --version`, first line
@@ -12,6 +14,8 @@ pub trait Probes {
     fn claude_cli(&self) -> Option<String>;
     /// Claude logged in (subscription or key)
     fn claude_login(&self) -> Result<bool, String>;
+    fn codex_cli(&self) -> Option<String>;
+    fn codex_login(&self) -> Result<bool, String>;
 }
 
 /// What the "fix" button of a check does.
@@ -46,33 +50,20 @@ fn check(title: &'static str, result: Result<String, String>, optional: bool, ac
 /// support requests, and the user name doesn't help anyone there.
 pub fn without_home(path: &str, home: Option<&str>) -> String {
     match home.filter(|h| !h.is_empty()) {
-        Some(h) if path.get(..h.len()).is_some_and(|p| p.eq_ignore_ascii_case(h)) && matches!(path.as_bytes().get(h.len()), Some(b'\\' | b'/')) => format!("~{}", &path[h.len()..]),
+        Some(h) if path.get(..h.len()).is_some_and(|p| p.eq_ignore_ascii_case(h)) && matches!(path.as_bytes().get(h.len()), Some(b'\\' | b'/')) => {
+            format!("~{}", &path[h.len()..])
+        }
         _ => path.to_string(),
     }
 }
 
 /// All checks in the order a new machine has to work through them.
-pub fn evaluate(p: &dyn Probes, config_exists: bool) -> Vec<SetupCheck> {
+pub fn evaluate(p: &dyn Probes, config_exists: bool, backend: Backend, api_ready: Result<(), String>) -> Vec<SetupCheck> {
     let git = check("Git", p.version("git"), false, Some(("Herunterladen", SetupAction::Open("https://git-scm.com/downloads"))));
     let gh_installed = p.version("gh");
     let gh_ok = gh_installed.is_ok();
     let gh = check("GitHub CLI (gh)", gh_installed, false, Some(("Herunterladen", SetupAction::Open("https://cli.github.com/"))));
-    let gh_login = if gh_ok {
-        check("GitHub-Anmeldung", p.gh_login().map(|_| "angemeldet".into()), false, Some(("Im Terminal anmelden", SetupAction::Terminal("gh auth login"))))
-    } else {
-        check("GitHub-Anmeldung", Err("erst gh installieren".into()), false, None)
-    };
-    let cli = p.claude_cli();
-    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok();
-    let shown = cli.as_deref().map(|c| without_home(c, home.as_deref()));
-    let claude = check("Claude Code CLI", shown.ok_or_else(|| "claude nicht im PATH".to_string()), false, Some(("Anleitung öffnen", SetupAction::Open("https://docs.claude.com/en/docs/claude-code/setup"))));
-    let login = match (cli.is_some(), p.claude_login()) {
-        (false, _) => Err("erst die Claude-CLI installieren".to_string()),
-        (true, Ok(true)) => Ok("angemeldet (Abo)".to_string()),
-        (true, Ok(false)) => Err("nicht angemeldet".to_string()),
-        (true, Err(e)) => Err(e),
-    };
-    let claude_login = check("Claude-Anmeldung", login, false, Some(("Im Terminal anmelden", SetupAction::Terminal("claude auth login"))));
+    let gh_login = if gh_ok { check("GitHub-Anmeldung", p.gh_login().map(|_| "angemeldet".into()), false, Some(("Im Terminal anmelden", SetupAction::Terminal("gh auth login")))) } else { check("GitHub-Anmeldung", Err("erst gh installieren".into()), false, None) };
     let dotnet = check(".NET SDK (für Lunima-Builds)", p.version("dotnet"), true, Some(("Herunterladen", SetupAction::Open("https://dotnet.microsoft.com/download"))));
     let config = check(
         "Konfiguration (team.toml)",
@@ -80,7 +71,86 @@ pub fn evaluate(p: &dyn Probes, config_exists: bool) -> Vec<SetupCheck> {
         false,
         Some(("Konfiguration anlegen", SetupAction::CreateConfig)),
     );
-    vec![git, gh, gh_login, claude, claude_login, dotnet, config]
+    let mut checks = vec![git, gh, gh_login];
+    checks.extend(runner_checks(p, backend, api_ready));
+    checks.extend([dotnet, config]);
+    checks
+}
+
+/// Runtime requirements shared by chat and independently selected project runners.
+pub fn runner_checks(p: &dyn Probes, backend: Backend, api_ready: Result<(), String>) -> Vec<SetupCheck> {
+    let (cli, title, login_title, install_url, login_command) = match backend {
+        Backend::Claude | Backend::Openrouter | Backend::Eco => (p.claude_cli(), "Claude Code CLI", "Claude-Anmeldung", "https://docs.claude.com/en/docs/claude-code/setup", "claude auth login"),
+        Backend::Codex | Backend::OpenAi => (p.codex_cli(), "Codex CLI", "Codex-Anmeldung", "https://developers.openai.com/codex/cli", "codex login"),
+    };
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).ok();
+    let shown = cli.as_deref().map(|c| without_home(c, home.as_deref()));
+    let claude = check(title, shown.ok_or_else(|| format!("{} nicht im PATH", backend.label())), false, Some(("Anleitung öffnen", SetupAction::Open(install_url))));
+    let login_status = if cli.is_none() {
+        Ok(false)
+    } else {
+        match backend {
+            Backend::Claude => p.claude_login(),
+            Backend::Codex => p.codex_login(),
+            Backend::Openrouter | Backend::Eco | Backend::OpenAi => Ok(true),
+        }
+    };
+    let login = match (cli.is_some(), login_status) {
+        (false, _) => Err(format!("erst die {}-CLI installieren", backend.label())),
+        (true, Ok(true)) => Ok(if backend == Backend::Codex { "angemeldet (ChatGPT)" } else { "angemeldet (Abo)" }.to_string()),
+        (true, Ok(false)) => Err("nicht angemeldet".to_string()),
+        (true, Err(e)) => Err(e),
+    };
+    let claude_login = if matches!(backend, Backend::Openrouter | Backend::Eco | Backend::OpenAi) { check("API-Provider", api_ready.map(|_| format!("{}: API-Key konfiguriert (nicht online geprüft)", backend.label())), false, None) } else { check(login_title, login, false, Some(("Im Terminal anmelden", SetupAction::Terminal(login_command)))) };
+    vec![claude, claude_login]
+}
+
+pub fn evaluate_team(p: &dyn Probes, config_exists: bool, cfg: &team_core::config::TeamConfig) -> Vec<SetupCheck> {
+    let chat = team_core::provider::chat_runner(cfg);
+    let backend = chat.as_ref().map(|r| r.backend).unwrap_or(Backend::Claude);
+    let mut checks = evaluate(p, config_exists, backend, Ok(()));
+    if let Err(e) = chat { checks.push(check("Team-Chat", Err(e), false, None)); }
+    let mut seen = vec![backend];
+    for repo in &cfg.repos {
+        if repo.profile.is_some() {
+            match team_core::project::configured_backends(cfg, &repo.name) {
+                Err(e) => checks.push(check("Projektprofil", Err(e), false, None)),
+                Ok(backends) => {
+                    for backend in backends {
+                        if seen.contains(&backend) { continue; }
+                        let ready = match backend {
+                            Backend::OpenAi => cfg.providers.openai.api_key().map(|_| ()).ok_or_else(|| "OpenAI API-Key fehlt".into()),
+                            Backend::Openrouter => cfg.providers.openrouter.api_key().map(|_| ()).ok_or_else(|| "OpenRouter API-Key fehlt".into()),
+                            Backend::Eco => cfg.providers.eco.api_key().map(|_| ()).ok_or_else(|| "Moonshot API-Key fehlt".into()),
+                            _ => Ok(()),
+                        };
+                        // An optional fallback need not be installed while the primary
+                        // works. Resolution checks below decide project readiness.
+                        let mut runtime = runner_checks(p, backend, ready);
+                        for c in &mut runtime { c.optional = true; }
+                        checks.extend(runtime);
+                        seen.push(backend);
+                    }
+                    for role in [team_core::project::SessionRole::Coder, team_core::project::SessionRole::Reviewer, team_core::project::SessionRole::Qa, team_core::project::SessionRole::Feedback, team_core::project::SessionRole::ProductOwner, team_core::project::SessionRole::Discovery] {
+                        if let Err(e) = team_core::project::resolve(cfg, &repo.name, role, &[]) {
+                            checks.push(check("Projektprofil", Err(format!("{} / {role:?}: {e}", repo.name)), false, None));
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+        let runner = team_core::provider::repo_runner(cfg, &repo.name);
+        if !seen.contains(&runner.backend) {
+            let ready = team_core::provider::choose(cfg, &repo.name, &[]).map(|_| ());
+            checks.extend(runner_checks(p, runner.backend, ready));
+            seen.push(runner.backend);
+        }
+        if matches!(repo.routing, team_core::config::Routing::Kimi | team_core::config::Routing::KimiOnly) {
+            checks.push(check("Projekt-Provider", team_core::provider::choose(cfg, &repo.name, &[]).map(|c| format!("{}: {}", repo.name, c.model)), false, None));
+        }
+    }
+    checks
 }
 
 /// Writes team.toml from the legacy files (Python agent `.env`, PO loop
@@ -126,18 +196,44 @@ mod tests {
         fn claude_login(&self) -> Result<bool, String> {
             Ok(self.claude_login)
         }
+        fn codex_cli(&self) -> Option<String> {
+            Some("codex.exe".into())
+        }
+        fn codex_login(&self) -> Result<bool, String> {
+            Ok(true)
+        }
+    }
+
+    #[test]
+    fn api_setup_checks_keys_instead_of_subscription_login() {
+        for backend in [Backend::Openrouter, Backend::Eco, Backend::OpenAi] {
+            let fake = Fake { missing: &[], gh_login: true, claude: true, claude_login: false };
+            assert!(ready(&evaluate(&fake, true, backend, Ok(()))));
+            let checks = evaluate(&fake, true, backend, Err("API-Key fehlt".into()));
+            assert!(!ready(&checks));
+            assert!(checks.iter().any(|c| c.title == "API-Provider" && !c.ok));
+            assert!(!checks.iter().any(|c| c.title.ends_with("-Anmeldung") && c.title != "GitHub-Anmeldung"));
+        }
+    }
+
+    #[test]
+    fn codex_setup_does_not_require_claude() {
+        let checks = evaluate(&Fake { missing: &[], gh_login: true, claude: false, claude_login: false }, true, Backend::Codex, Ok(()));
+        assert!(ready(&checks));
+        assert!(checks.iter().any(|c| c.title == "Codex-Anmeldung" && c.ok && c.detail.contains("ChatGPT")));
+        assert!(!checks.iter().any(|c| c.title.contains("Claude")));
     }
 
     #[test]
     fn complete_machine_is_ready_even_without_dotnet() {
-        let checks = evaluate(&Fake { missing: &["dotnet"], gh_login: true, claude: true, claude_login: true }, true);
+        let checks = evaluate(&Fake { missing: &["dotnet"], gh_login: true, claude: true, claude_login: true }, true, Backend::Claude, Ok(()));
         assert!(ready(&checks));
         assert!(!checks.iter().find(|c| c.title.starts_with(".NET")).unwrap().ok);
     }
 
     #[test]
     fn each_gap_offers_its_fix() {
-        let checks = evaluate(&Fake { missing: &[], gh_login: false, claude: true, claude_login: false }, false);
+        let checks = evaluate(&Fake { missing: &[], gh_login: false, claude: true, claude_login: false }, false, Backend::Claude, Ok(()));
         assert!(!ready(&checks));
         let fix = |title: &str| checks.iter().find(|c| c.title == title).and_then(|c| c.action.clone()).map(|(_, a)| a);
         assert_eq!(fix("GitHub-Anmeldung"), Some(SetupAction::Terminal("gh auth login")));
@@ -162,7 +258,7 @@ GITHUB_TOKEN=secret
 
     #[test]
     fn missing_tools_block_their_logins() {
-        let checks = evaluate(&Fake { missing: &["gh"], gh_login: true, claude: false, claude_login: true }, true);
+        let checks = evaluate(&Fake { missing: &["gh"], gh_login: true, claude: false, claude_login: true }, true, Backend::Claude, Ok(()));
         let login = checks.iter().find(|c| c.title == "GitHub-Anmeldung").unwrap();
         assert!(!login.ok && login.action.is_none());
         assert!(!checks.iter().find(|c| c.title == "Claude-Anmeldung").unwrap().ok);

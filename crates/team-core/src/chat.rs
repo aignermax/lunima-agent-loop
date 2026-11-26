@@ -238,7 +238,8 @@ pub fn howto(role: &str) -> String {
 - Leave a teammate a note for their next session: {CLI} chat note --from {role} --to <role> '<text>'\n\
 - Ask Max (the human boss); he answers in the Control Center, not right away: {CLI} chat say --from {role} --question '<question>'\n\
 Roles: product-owner (tactical lead: backlog, review, merge), product-discovery (strategy, direction), coder, qa, pr-feedback, ux-review.\n\
-Ask your product owner first; ask Max only when the product owner cannot decide or is switched off. Don't wait for an answer: carry on with the rest of your work."
+Ask your product owner first; ask Max only when the product owner cannot decide or is switched off. Don't wait for an answer: carry on with the rest of your work.\n\
+Control Center chat formatting: use short paragraphs separated by blank lines and real line breaks. For messages to Max, include relevant issue/PR links as HTTP(S) URLs or `[PR #42](https://github.com/owner/repo/pull/42)`. Use `**emphasis**` sparingly and backticks for inline code; triple-backtick code blocks are supported too. Simple lists are fine. Avoid tables, HTML, images and Markdown headings: they are not rendered. These rules apply to chat text only; keep required JSON and other machine-readable output unchanged."
     )
 }
 

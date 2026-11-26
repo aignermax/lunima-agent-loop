@@ -63,6 +63,8 @@ impl Role for ProductOwner {
     }
 
     fn cycle(&mut self, ctx: &Ctx) -> RoleResult<bool> {
+        let project_ctx = ctx.for_project(&ctx.cfg.product_owner.repo);
+        let ctx = &project_ctx;
         let po = &ctx.cfg.product_owner;
         if po.repo.is_empty() {
             return Ok(false);
@@ -114,7 +116,7 @@ impl Role for ProductOwner {
             Ok(Ended::Ok(note)) => Self::finish(ctx, &mut st, "ok", &note, next),
             Ok(Ended::Timeout(note)) => Self::finish(ctx, &mut st, "timeout", &note, next),
             Ok(Ended::Error(note)) => Self::finish(ctx, &mut st, "error", &note, next),
-            Err(RoleError::UsageLimit(t)) => {
+            Err(RoleError::UsageLimit(backend, t)) => {
                 // the pass did not happen: give the slot back so it runs after the limit
                 let _ = forge.unlock(&key);
                 self.settled_slot = None;
@@ -122,7 +124,16 @@ impl Role for ProductOwner {
                 st.runs_today = st.runs_today.saturating_sub(1);
                 st.last_start = None;
                 Self::finish(ctx, &mut st, "usage-limit", "Claude-Nutzungslimit erreicht — Durchlauf folgt danach", t);
-                return Err(RoleError::UsageLimit(t));
+                return Err(RoleError::UsageLimit(backend, t));
+            }
+            Err(RoleError::Unavailable(e)) => {
+                let _ = forge.unlock(&key);
+                self.settled_slot = None;
+                self.last_check = None;
+                st.runs_today = st.runs_today.saturating_sub(1);
+                st.last_start = None;
+                Self::finish(ctx, &mut st, "waiting", &e, now);
+                return Err(RoleError::Unavailable(e));
             }
             Err(RoleError::Failed(e)) => {
                 Self::finish(ctx, &mut st, "error", &e, next);

@@ -27,7 +27,11 @@ enum Decision {
 /// Handles `trigger` on `pr`. `Ok(false)` = repo skipped (provider not usable).
 pub(super) fn run(role: &mut PrFeedback, ctx: &Ctx, forge: &dyn Forge, repo: &str, pr: &PullRequest, trigger: &Comment) -> RoleResult<bool> {
     let issue_number = pr_text::linked_issue(pr.body.as_deref().unwrap_or("")).unwrap_or(pr.number);
-    let choice = match provider::choose(&ctx.cfg, repo, &labels(forge, pr, issue_number)) {
+    let tags = labels(forge, pr, issue_number);
+    let selected = if ctx.cfg.repo(repo).is_some_and(|r| r.profile.is_some()) {
+        team_core::project::resolve(&ctx.cfg, repo, team_core::project::SessionRole::Feedback, &tags).map(|d| d.choice)
+    } else { provider::choose(&ctx.cfg, repo, &tags) };
+    let choice = match selected {
         Ok(c) => c,
         Err(e) => {
             crate::log::error(&format!("{repo}: {e} — Repo in diesem Durchlauf übersprungen"));
@@ -37,6 +41,13 @@ pub(super) fn run(role: &mut PrFeedback, ctx: &Ctx, forge: &dyn Forge, repo: &st
     ctx.heartbeat.report("working", team_core::detail!["repo" => repo, "pr" => pr.number, "title" => pr.title]);
     let setup = workspace::setup(ctx, ROLE, repo)?;
     let policy = load_policy(&setup);
+    if ctx.cfg.repo(repo).is_some_and(|r| r.profile.is_some()) {
+        ctx.llm.admit(&Job {
+            policy: crate::llm::PolicyRequest { role: team_core::project::SessionRole::Feedback, labels: tags },
+            repo: repo.into(), prompt: String::new(), cwd: setup.clone.dir.clone(), model: choice.model.clone(),
+            max_turns: ctx.cfg.budgets.pr_feedback_max_turns, env: choice.env.clone(), label: "feedback-admission".into(), max_duration: None, tools: None,
+        })?;
+    }
     let id = trigger.id;
     let decision = role.locks.with(forge, &format!("fb-pr-{}", pr.number), &ctx.machine, || {
         let (_, th) = fresh_thread(forge, pr.number)?;
@@ -70,7 +81,8 @@ pub(super) fn run(role: &mut PrFeedback, ctx: &Ctx, forge: &dyn Forge, repo: &st
     crate::log::info(&format!("{repo}#{}: Feedback-Kommentar {id}, Versuch {attempt}", pr.number));
     match work(ctx, &setup, forge, pr, trigger, &choice, issue_number) {
         Ok(reply) => safe_comment(forge, pr.number, &reply),
-        Err(RoleError::UsageLimit(t)) => return Err(RoleError::UsageLimit(t)),
+        Err(RoleError::Unavailable(e)) => { safe_comment(forge, pr.number, &thread::waiting_comment(id)); return Err(RoleError::Unavailable(e)); },
+        Err(RoleError::UsageLimit(backend, t)) => return Err(RoleError::UsageLimit(backend, t)),
         Err(RoleError::Failed(e)) => {
             crate::log::error(&format!("{repo}#{}: {e}", pr.number));
             let text = if attempt >= MAX_ATTEMPTS_PER_COMMENT { thread::give_up_comment(id, attempt, &e) } else { thread::failed_comment(id, attempt, &e) };
@@ -125,6 +137,8 @@ fn work(ctx: &Ctx, setup: &RepoSetup, forge: &dyn Forge, pr: &PullRequest, trigg
     values.insert("issue_number", issue_number.to_string());
     ctx.tools.insert(&mut values);
     let job = Job {
+        policy: crate::llm::PolicyRequest { role: team_core::project::SessionRole::Feedback, labels: labels(forge, pr, issue_number) },
+        repo: setup.repo.clone(),
         prompt: ctx.render("pr-feedback", &values)?,
         cwd: setup.clone.dir.clone(),
         model: choice.model.clone(),

@@ -75,7 +75,9 @@ impl Coder {
             run.run(issue, state)?;
             return Ok(true);
         }
-        if let Err(e) = team_core::provider::choose(&ctx.cfg, &setup.repo, &[]) {
+        let ready = if ctx.cfg.repo(&setup.repo).is_some_and(|r| r.profile.is_some()) { ctx.cfg.validate() }
+            else { team_core::provider::choose(&ctx.cfg, &setup.repo, &[]).map(|_| ()) };
+        if let Err(e) = ready {
             crate::log::error(&format!("{}: {e} — Repo übersprungen", setup.repo));
             return Ok(false);
         }
@@ -130,6 +132,8 @@ impl Role for Coder {
             crate::log::warn("Keine Repos konfiguriert oder entdeckt");
             return Ok(false);
         };
+        let project_ctx = ctx.for_project(&repo);
+        let ctx = &project_ctx;
         let setup = match workspace::setup(ctx, "coder", &repo) {
             Ok(s) => s,
             Err(e) if ctx.cfg.repo(&repo).is_none() => {

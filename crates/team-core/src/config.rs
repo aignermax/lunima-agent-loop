@@ -5,6 +5,39 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// Default CLI for team chat. Project sessions use each repository's routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum Backend {
+    #[default]
+    Claude,
+    Codex,
+    Openrouter,
+    #[serde(rename = "openai")]
+    OpenAi,
+    Eco,
+}
+
+impl Backend {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+            Self::Openrouter => "OpenRouter",
+            Self::OpenAi => "OpenAI API",
+            Self::Eco => "Moonshot/eco",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct Runner {
+    pub backend: Backend,
+    /// Codex model for every role; empty = Codex CLI default. Claude uses `models`.
+    pub model: String,
+}
+
 /// How a repo's coder sessions are routed (see `provider`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "kebab-case")]
@@ -16,6 +49,11 @@ pub enum Routing {
     Kimi,
     /// Kimi via OpenRouter mandatory; only the `claudeapi` label escapes it
     KimiOnly,
+    /// ChatGPT subscription; never sends project code to Kimi.
+    Codex,
+    #[serde(rename = "openai")]
+    OpenAi,
+    Eco,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -26,11 +64,13 @@ pub struct RepoConfig {
     /// the coder works on this repo
     pub coder: bool,
     pub routing: Routing,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::project::ProjectProfile>,
 }
 
 impl Default for RepoConfig {
     fn default() -> Self {
-        Self { name: String::new(), coder: true, routing: Routing::Claude }
+        Self { name: String::new(), coder: true, routing: Routing::Claude, profile: None }
     }
 }
 
@@ -156,6 +196,8 @@ impl Endpoint {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Providers {
+    /// OpenAI Responses-compatible endpoint, executed by Codex.
+    pub openai: Endpoint,
     pub openrouter: Endpoint,
     pub eco: Endpoint,
     /// complex issues run the coder on the premium Claude model
@@ -164,17 +206,15 @@ pub struct Providers {
 
 impl Default for Providers {
     fn default() -> Self {
-        Self {
-            openrouter: Endpoint { base_url: "https://openrouter.ai/api".into(), model: "moonshotai/kimi-k3".into(), ..Default::default() },
-            eco: Endpoint { base_url: "https://api.moonshot.ai/anthropic".into(), model: "kimi-k2-thinking".into(), key_env: "MOONSHOT_API_KEY".into(), ..Default::default() },
-            complex_uses_premium: true,
-        }
+        Self { openai: Endpoint { base_url: "https://api.openai.com/v1".into(), key_env: "OPENAI_API_KEY".into(), ..Default::default() }, openrouter: Endpoint { base_url: "https://openrouter.ai/api".into(), model: "moonshotai/kimi-k3".into(), ..Default::default() }, eco: Endpoint { base_url: "https://api.moonshot.ai/anthropic".into(), model: "kimi-k2-thinking".into(), key_env: "MOONSHOT_API_KEY".into(), ..Default::default() }, complex_uses_premium: true }
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Budgets {
+    pub timeout_minutes_regular: u64,
+    pub timeout_minutes_complex: u64,
     pub max_turns_regular: u32,
     pub max_turns_complex: u32,
     pub max_review_rounds_regular: u32,
@@ -199,6 +239,8 @@ pub struct Budgets {
 impl Default for Budgets {
     fn default() -> Self {
         Self {
+            timeout_minutes_regular: 120,
+            timeout_minutes_complex: 120,
             max_turns_regular: 150,
             max_turns_complex: 500,
             max_review_rounds_regular: 1,
@@ -389,6 +431,7 @@ impl Default for ProductDiscovery {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TeamConfig {
+    pub runner: Runner,
     /// shown in claim comments; default: the computer name
     pub machine: String,
     pub poll_seconds: u64,
@@ -409,22 +452,7 @@ pub struct TeamConfig {
 
 impl Default for TeamConfig {
     fn default() -> Self {
-        Self {
-            machine: machine_name(),
-            poll_seconds: 15,
-            roles: Roles::default(),
-            repos: Vec::new(),
-            discovery: Discovery::default(),
-            labels: Labels::default(),
-            models: Models::default(),
-            providers: Providers::default(),
-            budgets: Budgets::default(),
-            product_owner: ProductOwner::default(),
-            ux_review: UxReview::default(),
-            product_discovery: ProductDiscovery::default(),
-            resources: Resources::default(),
-            pr_feedback_marker: "@agent".into(),
-        }
+        Self { runner: Runner::default(), machine: machine_name(), poll_seconds: 15, roles: Roles::default(), repos: Vec::new(), discovery: Discovery::default(), labels: Labels::default(), models: Models::default(), providers: Providers::default(), budgets: Budgets::default(), product_owner: ProductOwner::default(), ux_review: UxReview::default(), product_discovery: ProductDiscovery::default(), resources: Resources::default(), pr_feedback_marker: "@agent".into() }
     }
 }
 
@@ -491,6 +519,7 @@ impl TeamConfig {
 
     pub fn validate(&self) -> Result<(), String> {
         for r in &self.repos {
+            if let Some(profile) = &r.profile { crate::project::validate(self, &r.name, profile)?; }
             if r.name.split('/').filter(|p| !p.is_empty()).count() != 2 {
                 return Err(format!("Repo „{}“ muss die Form owner/name haben.", r.name));
             }

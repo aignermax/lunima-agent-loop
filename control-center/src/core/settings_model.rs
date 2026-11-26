@@ -12,6 +12,7 @@ pub enum Kind {
     Text,
     Number,
     Toggle,
+    Backend,
 }
 
 pub struct Field {
@@ -74,20 +75,28 @@ pub const FIELDS: &[Field] = &[
     f("Product Owner", "product_owner.max_turns", "Max. Schritte pro Lauf", N, ""),
     f("Product Owner", "product_owner.customer_command", "Kunden-Review (Befehl)", T, "Leer = aus"),
     f("Product Owner", "product_owner.customer_max_age_hours", "Kunden-Review gültig (Std.)", N, ""),
-    f("Modelle", "models.product_owner", "Product Owner", T, ""),
-    f("Modelle", "models.coder", "Coder (Standard)", T, "Leer = Standard der Claude-CLI"),
-    f("Modelle", "models.premium", "Coder (complex / claudeapi)", T, ""),
-    f("Modelle", "models.reviewer", "Reviewer & QA-Review", T, ""),
-    f("Modelle", "models.reviewer_critical", "Reviewer (Label critical)", T, ""),
-    f("Modelle", "providers.complex_uses_premium", "complex → Premium-Modell", B, ""),
+    f("OpenAI API", "providers.openai.base_url", "Responses-Endpoint", T, "OpenAI-kompatible Basis-URL, z. B. https://api.openai.com/v1"),
+    f("OpenAI API", "providers.openai.model", "Modell", T, "Erforderlich; muss vom Endpoint unterstützt werden"),
+    f("OpenAI API", "providers.openai.key_file", "Key-Datei", T, "Pfad, niemals den API-Key selbst eingeben"),
+    f("OpenAI API", "providers.openai.key_env", "Key-Umgebungsvariable", T, "Name der Variable, z. B. OPENAI_API_KEY"),
+    f("Runner", "runner.backend", "Backend für den Team-Chat", Kind::Backend, "Claude/Codex: Chat enthält Kontext aus mehreren Projekten. Projekt-Runner auf der Seite Projekte wählen."),
+    f("Runner", "runner.model", "Codex-Modell (Standard)", T, "Leer = CLI-Standard; für Codex-Projekte und den Codex-Team-Chat"),
+    f("Modelle", "models.product_owner", "Claude: Product Owner (Vorgabe)", T, "Projektprofil kann Anbieter und Modell überschreiben"),
+    f("Modelle", "models.coder", "Claude: Coder (Vorgabe)", T, "Leer = Standard der Claude-CLI; Projektprofil kann überschreiben"),
+    f("Modelle", "models.premium", "Claude: complex / Premium (Vorgabe)", T, "Projektprofile haben eigene Label-Regeln; gilt nicht als Codex-Modell"),
+    f("Modelle", "models.reviewer", "Claude: Reviewer & QA (Vorgabe)", T, "Nur bei Claude-Ausführung; Projektprofil kann überschreiben"),
+    f("Modelle", "models.reviewer_critical", "Claude: critical-Review (Vorgabe)", T, "Nur bei Claude-Ausführung; Projektprofil kann überschreiben"),
+    f("Modelle", "providers.complex_uses_premium", "complex → Premium (bisheriges Routing)", B, "Aktivierte Projektprofile verwenden ihre eigene complex-Regel"),
     f("Modelle", "providers.openrouter.model", "Kimi über OpenRouter", T, "Für Repos mit Modell „Kimi“ (Seite Projekte)"),
     f("Modelle", "providers.eco.model", "eco-Label", T, "Nur in für Kimi freigegebenen Repos"),
-    f("Budgets", "budgets.max_turns_regular", "Max. Schritte (normal)", N, ""),
-    f("Budgets", "budgets.max_turns_complex", "Max. Schritte (complex)", N, ""),
+    f("Budgets", "budgets.timeout_minutes_regular", "Zeitlimit normal (Min., Vorgabe)", N, "Für Projektprofile; kürzere Rollen-Zeitlimits bleiben erhalten"),
+    f("Budgets", "budgets.timeout_minutes_complex", "Zeitlimit complex (Min., Vorgabe)", N, "Unabhängig vom Modellwechsel; für Projektprofile"),
+    f("Budgets", "budgets.max_turns_regular", "Max. Schritte (normal, Claude)", N, "Codex unterstützt dieses Limit nicht; dort gelten harte Zeitlimits"),
+    f("Budgets", "budgets.max_turns_complex", "Max. Schritte (complex, Claude)", N, "Codex unterstützt dieses Limit nicht; dort gelten harte Zeitlimits"),
     f("Budgets", "budgets.max_sessions", "Sitzungen je Issue", N, "Fortsetzungen nach dem Schritt-Limit"),
     f("Budgets", "budgets.max_attempts", "Versuche je Issue", N, "Danach needs-human"),
-    f("Budgets", "budgets.max_tokens_regular", "Token-Budget (normal)", N, ""),
-    f("Budgets", "budgets.max_tokens_complex", "Token-Budget (complex)", N, ""),
+    f("Budgets", "budgets.max_tokens_regular", "Token-Budget (normal)", N, "Je Issue, Prüfung nach jeder Sitzung; keine harte Grenze innerhalb eines Aufrufs"),
+    f("Budgets", "budgets.max_tokens_complex", "Token-Budget (complex)", N, "Je Issue, Prüfung nach jeder Sitzung; Projektprofil kann überschreiben"),
     f("Budgets", "budgets.max_review_rounds_regular", "Review-Runden (normal)", N, ""),
     f("Budgets", "budgets.max_review_rounds_complex", "Review-Runden (complex)", N, ""),
     f("Budgets", "budgets.reviewer_max_turns", "Max. Schritte Reviewer", N, ""),
@@ -117,7 +126,7 @@ pub const FIELDS: &[Field] = &[
 /// Read-only lines about where third-party keys come from (never the keys themselves).
 pub fn key_sources(cfg: &TeamConfig) -> Vec<(String, String)> {
     let p = &cfg.providers;
-    [("OpenRouter", &p.openrouter), ("eco", &p.eco)]
+    [("OpenRouter", &p.openrouter), ("eco", &p.eco), ("OpenAI API", &p.openai)]
         .into_iter()
         .map(|(name, e)| {
             let mut src = Vec::new();
@@ -144,7 +153,9 @@ pub fn exists(cfg: &TeamConfig, path: &str) -> bool {
 
 /// The field's current value as text.
 pub fn get(cfg: &TeamConfig, path: &str) -> String {
-    let Ok(root) = Value::try_from(cfg) else { return String::new() };
+    let Ok(root) = Value::try_from(cfg) else {
+        return String::new();
+    };
     match lookup(&root, path) {
         Some(Value::String(s)) => s.clone(),
         Some(Value::Integer(i)) => i.to_string(),
@@ -175,6 +186,21 @@ mod tests {
     const PO_PORT: &[&str] = &["product_owner.max_runs_per_day", "product_owner.backlog_min", "product_owner.max_turns", "product_owner.customer_command", "product_owner.customer_max_age_hours"];
 
     #[test]
+    fn backend_selector_round_trips_and_preserves_provider_settings() {
+        let mut cfg = TeamConfig::default();
+        cfg.providers.openrouter.key_file = "existing-secret-file".into();
+        for backend in ["claude", "codex", "openrouter", "eco", "openai"] {
+            let updated = apply(&cfg, &BTreeMap::from([("runner.backend", backend.into())])).unwrap();
+            assert_eq!(get(&updated, "runner.backend"), backend);
+            assert_eq!(updated.providers, cfg.providers);
+            let t = tempfile::tempdir().unwrap();
+            updated.save(&t.path().join("team.toml")).unwrap();
+            assert_eq!(TeamConfig::load(&t.path().join("team.toml")).unwrap(), updated);
+        }
+        assert!(FIELDS.iter().any(|f| f.path == "runner.backend" && f.kind == Kind::Backend));
+    }
+
+    #[test]
     fn every_field_exists_in_team_toml() {
         let cfg = TeamConfig::default();
         let root = Value::try_from(&cfg).unwrap();
@@ -186,7 +212,7 @@ mod tests {
             let ok = match f.kind {
                 Kind::Number => v.is_integer() || v.is_float(),
                 Kind::Toggle => v.is_bool(),
-                Kind::Text => v.is_str(),
+                Kind::Text | Kind::Backend => v.is_str(),
             };
             assert!(ok, "{} hat den falschen Typ", f.path);
         }
