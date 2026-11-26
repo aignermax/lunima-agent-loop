@@ -84,7 +84,8 @@ impl<'a> Watch<'a> {
 
     /// Runs `session` with a stop check that a background thread keeps current every
     /// `CHECK_INTERVAL`: the session loop asks it every second, and the GitHub calls behind
-    /// it (up to a minute each when GitHub hangs) must not stall its memory guard.
+    /// it (minutes, when GitHub hangs) must not stall its memory guard. When the session
+    /// ends, the thread stops within `SLICE` — or after the check it is in the middle of.
     pub fn beside<T>(&self, session: impl FnOnce(StopCheck<'_>) -> T) -> T {
         let done = AtomicBool::new(false);
         let flagged: Mutex<Option<String>> = Mutex::new(None);
@@ -97,16 +98,25 @@ impl<'a> Watch<'a> {
                     }
                 }
             });
+            // set while unwinding too: `scope` waits for the watcher before it re-raises a
+            // panic of the session, and a watcher that never ends would hang the coder
+            let _done = SetOnDrop(&done);
             let stop = || flagged.lock().unwrap_or_else(|p| p.into_inner()).clone();
-            let out = session(&stop);
-            done.store(true, Ordering::Relaxed);
-            out
+            session(&stop)
         })
     }
 }
 
 /// The reason `check_now` gives for a closed issue (the coder steps aside silently then).
 pub const CLOSED: &str = "the issue was closed";
+
+struct SetOnDrop<'a>(&'a AtomicBool);
+
+impl Drop for SetOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
 
 /// Sleeps up to `d` in short slices; `true` once `done` is set.
 fn sleep_unless(done: &AtomicBool, d: Duration) -> bool {
@@ -258,5 +268,15 @@ mod tests {
         let started = Instant::now();
         assert_eq!(watch(&quiet, 8).beside(|stop| stop()), None);
         assert!(started.elapsed() < Duration::from_secs(2), "the watcher ends with its session");
+    }
+
+    #[test]
+    fn a_panicking_session_still_ends_the_watcher_and_reaches_the_caller() {
+        let f = running(9);
+        let w = watch(&f, 9);
+        let started = Instant::now();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| w.beside(|_| -> () { panic!("session crashed") })));
+        assert!(caught.is_err(), "the panic reaches the daemon's catch_unwind");
+        assert!(started.elapsed() < Duration::from_secs(2), "no hang: {:?}", started.elapsed());
     }
 }

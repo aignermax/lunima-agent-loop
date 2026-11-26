@@ -520,3 +520,19 @@ fn a_takeover_while_paused_by_the_usage_limit_is_seen_on_resume() {
     assert_eq!(w.llm.calls(), 1, "no second session");
     assert!(w.forge.comment_bodies(28).last().unwrap().contains("the issue was assigned to `maddnik`"));
 }
+
+#[test]
+fn a_stop_shortly_before_a_crash_is_a_stop_not_a_requeue() {
+    let forge = Arc::new(FakeForge::new("o/r").with_issue(task(29, "x", &[])));
+    let human = forge.clone();
+    let llm = FakeLlm::new().then(move |_| {
+        human.add_comment(29, "/agent stop");
+        Err(LlmError::Failed("Claude hing (1800 s ohne Ausgabe) und wurde beendet".into()))
+    });
+    let w = world_arc(forge, llm);
+    assert!(coder().cycle(&w.ctx).unwrap());
+    let comments = w.forge.comment_bodies(29);
+    assert!(comments.last().unwrap().contains("asked the agent to stop"), "{comments:?}");
+    assert!(!comments.iter().any(|c| c.contains("failed")), "no failed attempt: {comments:?}");
+    assert!(!w.forge.labels(29).iter().any(|l| l == "agent-task"), "not re-queued");
+}

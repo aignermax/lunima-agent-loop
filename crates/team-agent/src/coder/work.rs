@@ -155,8 +155,10 @@ impl IssueRun<'_> {
                     return Err(RoleError::UsageLimit(backend, t));
                 }
                 Err(LlmError::Unavailable(e)) => { self.store.save(state); return Err(RoleError::Unavailable(e)); }
-                Err(LlmError::Failed(e)) => match stop_reason(&e) {
-                    Some(reason) => return Ok(self.stopped(n, state, worktree, base, reason)),
+                Err(LlmError::Failed(e)) => match stop_reason(&e).map(str::to_string).or_else(|| watch.check_now()) {
+                    // a stop posted shortly before a crash must not be undone by the re-queue
+                    // (its new claim comment would move the watch's anchor past it)
+                    Some(reason) => return Ok(self.stopped(n, state, worktree, base, &reason)),
                     None => return Ok(Flow::Fail(e)),
                 },
             };
