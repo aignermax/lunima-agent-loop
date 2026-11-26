@@ -125,7 +125,16 @@ fn role_only_provider_and_invalid_effort_cannot_bypass_allowlist() {
         .as_mut()
         .unwrap()
         .effort = Some(ReasoningEffort::High);
-    assert!(cfg.validate().unwrap_err().contains("Denkaufwand"));
+    assert!(cfg.validate().is_ok(), "Claude takes an effort level too (--effort / CLAUDE_CODE_EFFORT_LEVEL)");
+    cfg.repos[0]
+        .profile
+        .as_mut()
+        .unwrap()
+        .reviewer
+        .as_mut()
+        .unwrap()
+        .effort = Some(ReasoningEffort::Ultra);
+    assert!(cfg.validate().unwrap_err().contains("Denkaufwand"), "ultra is a Codex level");
 }
 
 #[test]

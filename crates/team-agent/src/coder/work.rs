@@ -93,6 +93,7 @@ impl IssueRun<'_> {
         }
         let base = team.unwrap_or_else(|| setup.working_branch.clone());
         let wt = setup.clone.worktree(&self.ctx.paths.worktree(&setup.repo, branch), branch, &base)?;
+        super::tooling::ensure_catalog();
         super::code_index::ensure(&wt);
         Ok(Some((wt, base)))
     }
@@ -126,6 +127,7 @@ impl IssueRun<'_> {
         let complex = prompt::is_complex(ctx, issue);
         let b = &ctx.cfg.budgets;
         let (max_turns, max_cost) = if complex { (b.max_turns_complex, b.max_cost_usd_complex) } else { (b.max_turns_regular, b.max_cost_usd_regular) };
+        let tooling = super::tooling::note(worktree, base);
         let claimed_at = pickup::claimed_at(forge, n);
         let watch = Watch::new(forge, n, &ctx.cfg.labels.running, &ctx.login, &state.branch_name, claimed_at.as_deref(), state.claim_assignees.as_deref().unwrap_or_default());
         loop {
@@ -145,7 +147,7 @@ impl IssueRun<'_> {
                 Err(e) if ctx.cfg.repo(&setup.repo).is_some_and(|r| r.profile.is_some()) => return Err(RoleError::Unavailable(e)),
                 Err(e) => return Ok(Flow::Fail(e)),
             };
-            let text = prompt::session(ctx, &setup.repo, &current, state)?;
+            let text = format!("{}{tooling}", prompt::session(ctx, &setup.repo, &current, state)?);
             let job = Job { policy: crate::llm::PolicyRequest { role: team_core::project::SessionRole::Coder, labels: labels.clone() }, repo: setup.repo.clone(), prompt: text, cwd: worktree.to_path_buf(), model: choice.model, max_turns, env: choice.env, label: label(&setup.repo, "issue", n), max_duration: None, tools: None };
             crate::log::info(&format!("#{n}: Sitzung {} ({})", state.session_count + 1, choice.why));
             let out = match watch.beside(|stop| ctx.llm.run_watched(&job, stop)) {
@@ -172,6 +174,15 @@ impl IssueRun<'_> {
                 }
             };
             state.add_session(out.num_turns, out.usage.total(), out.estimated_cost());
+            let u = &out.usage;
+            crate::log::info(&format!(
+                "#{n}: Sitzung ${:.2} — Cache-Reads {:.1} M, Cache-Writes {:.1} M, Output {:.0} K, {} Shell-Aufrufe",
+                out.estimated_cost(),
+                u.cache_read as f64 / 1e6,
+                u.cache_creation as f64 / 1e6,
+                u.output as f64 / 1e3,
+                out.bash_commands.len()
+            ));
             state.count_tools(&out.bash_commands);
             state.last_output = out.text.chars().take(5000).collect();
             // the in-session check runs every few minutes; a stop in the last ones must

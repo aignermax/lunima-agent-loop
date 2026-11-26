@@ -12,9 +12,8 @@ have already passed mechanically. Verify the PR diff is actually shippable.
    ```bash
    git diff origin/{base_branch}...origin/{branch}
    ```
-3. Optional deeper inspection: the CodeGraph tools when the worktree has an index:
-   `codegraph_explore` (the code around the changed symbols, many files in one call),
-   `codegraph_callers` / `codegraph_impact` (who else depends on a changed function).
+3. Optional deeper inspection: `codegraph_explore` with the changed symbols' names: their source,
+   callers and blast radius in one call.
    If a codegraph tool reports "not initialized", use grep instead: do not ask anyone and do not build the index yourself.
 4. Check for, in order:
    - Correctness bugs (off-by-one, null deref, unhandled error paths,

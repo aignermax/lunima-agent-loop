@@ -7,6 +7,7 @@
 //! The discovery sweep over the org runs here too (throttled).
 
 pub(crate) mod code_index;
+mod tooling;
 mod finish;
 mod pickup;
 mod prompt;

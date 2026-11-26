@@ -15,6 +15,18 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "lunima-team-agent hook bash-guard",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }
