@@ -9,23 +9,11 @@ Branch: {branch_name}{branch_note}
 
 ## Your Task
 
-Continue where you left off:
-1. Check build (use build_errors.py):
-   ```bash
-   {tools_python} {tools_dir}/build_errors.py --suggest-fixes
-   ```
-2. Run tests (use smart_test.py):
-   ```bash
-   {tools_python} {tools_dir}/smart_test.py
-   ```
-3. Continue implementing (use semantic_search.py to find examples)
-4. Fix any failures
-5. Re-read issue title:
-   - "Investigate"/"Test"/"Verify" → ONLY tests, NO UI
-   - "Add feature"/"Implement UI" → Full stack
-
-**Keep trying!** Use tools/ folder tools:
-- build_errors.py, semantic_search.py, smart_test.py
-- find_symbol.py (find definitions/usages), dotnet_deps.py (check packages)
-
-Read CLAUDE.md for conventions.
+Continue where you left off; `git status` and `git log` show what the earlier sessions did.
+1. Re-read `AGENTS.md` / `CLAUDE.md` for the build and test commands and the rules.
+2. Find your way with the CodeGraph tools (`codegraph_explore`, `codegraph_search`,
+   `codegraph_callers`) instead of grep/sed in the shell. If a codegraph tool reports "not initialized", use grep instead: do not ask anyone and do not build the index yourself.
+3. Build and run the tests of the area you changed; fix what fails. Never rerun the same
+   failing test more than twice without a change.
+4. Re-read the issue: investigate/test/verify → tests only; a feature → the full stack the
+   repository's guide describes.

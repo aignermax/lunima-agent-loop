@@ -227,7 +227,12 @@ pub struct Budgets {
     pub max_sessions: u32,
     /// a Claude session without any output for this long is killed
     pub inactivity_minutes: u64,
-    /// cumulative tokens per issue before the coder stops (third-party providers cost money)
+    /// cumulative cost per issue in USD (the CLI's own figure, else a cache-aware list-price
+    /// estimate) before the coder starts no further session
+    pub max_cost_usd_regular: f64,
+    pub max_cost_usd_complex: f64,
+    /// no longer a stop criterion: 98–99 % of a long session's tokens are cheap cache reads,
+    /// so a raw token count stopped nearly every run. Kept so existing team.toml files load.
     pub max_tokens_regular: u64,
     pub max_tokens_complex: u64,
     /// failed attempts (errors) per issue before the coder gives up
@@ -251,6 +256,8 @@ impl Default for Budgets {
             pr_feedback_max_turns: 120,
             max_sessions: 20,
             inactivity_minutes: 30,
+            max_cost_usd_regular: 40.0,
+            max_cost_usd_complex: 100.0,
             max_tokens_regular: 20_000_000,
             max_tokens_complex: 50_000_000,
             max_attempts: 3,
@@ -537,6 +544,11 @@ impl TeamConfig {
         }
         if pd.weekly_budget_usd.is_nan() || pd.weekly_budget_usd < 0.0 {
             return Err("product_discovery.weekly_budget_usd darf nicht negativ sein.".into());
+        }
+        for (name, usd) in [("max_cost_usd_regular", self.budgets.max_cost_usd_regular), ("max_cost_usd_complex", self.budgets.max_cost_usd_complex)] {
+            if !usd.is_finite() || usd <= 0.0 {
+                return Err(format!("budgets.{name} muss eine positive Zahl (USD) sein."));
+            }
         }
         if !["none", "goatcounter", "file"].contains(&pd.analytics.as_str()) {
             return Err(format!("product_discovery.analytics „{}“: none | goatcounter | file erwartet.", pd.analytics));

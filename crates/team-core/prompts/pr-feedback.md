@@ -6,14 +6,12 @@ push to the same branch.
 {comment_body}
 
 ## Your Task
-1. Read CLAUDE.md for project conventions.
+1. Read AGENTS.md / CLAUDE.md for project conventions, build and test commands. Locate code
+   with the CodeGraph tools (`codegraph_explore`, `codegraph_search`), not grep/sed.
+   If a codegraph tool reports "not initialized", use grep instead: do not ask anyone and do not build the index yourself.
 2. Implement the requested change. Stay focused — only what the feedback
    asks for (plus tests). Do not refactor unrelated code.
-3. Build and test:
-   ```bash
-   {tools_python} {tools_dir}/build_errors.py --suggest-fixes
-   {tools_python} {tools_dir}/smart_test.py
-   ```
+3. Build and run the tests of the area you changed, with the commands from the guide.
 4. **If the change affects UI:** re-render the visual walkthrough so the
    reviewer sees the new state without checking out. Using the headless
    screenshot harness (see `UnitTests/UI/UiScreenshotTests.cs` for the

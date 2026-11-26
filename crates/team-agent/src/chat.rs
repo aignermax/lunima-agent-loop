@@ -179,7 +179,7 @@ pub fn answer(paths: &Paths, role: &str, incoming: &Message) -> Result<String, S
     }
     let logs = paths.logs().join("chat");
     let _ = std::fs::create_dir_all(&logs);
-    let session = team_core::claude::Session { prompt, cwd: paths.root.clone(), model: choice.map(|c| c.model).unwrap_or_else(|| model(&cfg, role)), max_turns: 60, env, settings_file: None, log_file: Some(logs.join(format!("{}_{role}.jsonl", Local::now().format("%Y-%m-%d_%H%M%S")))), inactivity: Duration::from_secs(300), deadline: Some(Duration::from_secs(20 * 60)), on_tick: None, tools: None, memory_guard: false };
+    let session = team_core::claude::Session { prompt, cwd: paths.root.clone(), model: choice.map(|c| c.model).unwrap_or_else(|| model(&cfg, role)), max_turns: 60, env, settings_file: None, log_file: Some(logs.join(format!("{}_{role}.jsonl", Local::now().format("%Y-%m-%d_%H%M%S")))), inactivity: Duration::from_secs(300), deadline: Some(Duration::from_secs(20 * 60)), on_tick: None, tools: None, memory_guard: false, stop: None };
     let out = crate::llm::run_session(runner.backend, &session).map_err(|e| e.to_string())?;
     if let Some(until) = out.usage_limit_until {
         return Err(format!("Claude-Nutzungslimit erreicht — ich antworte ab {} wieder", until.format("%H:%M")));

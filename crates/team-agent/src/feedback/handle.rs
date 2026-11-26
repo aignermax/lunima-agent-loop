@@ -136,6 +136,7 @@ fn work(ctx: &Ctx, setup: &RepoSetup, forge: &dyn Forge, pr: &PullRequest, trigg
     values.insert("comment_body", if trigger.body.is_empty() { "(empty comment)".into() } else { trigger.body.clone() });
     values.insert("issue_number", issue_number.to_string());
     ctx.tools.insert(&mut values);
+    crate::coder::code_index::ensure(&setup.clone.dir);
     let job = Job {
         policy: crate::llm::PolicyRequest { role: team_core::project::SessionRole::Feedback, labels: labels(forge, pr, issue_number) },
         repo: setup.repo.clone(),

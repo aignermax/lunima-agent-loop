@@ -14,12 +14,11 @@ branch — QA will rerun automatically.
 {qa_details}
 
 ## Your Task
-1. Read CLAUDE.md for project conventions.
-2. Reproduce the failure locally if it is a build/test failure:
-   ```bash
-   {tools_python} {tools_dir}/build_errors.py --suggest-fixes
-   {tools_python} {tools_dir}/smart_test.py
-   ```
+1. Read AGENTS.md / CLAUDE.md for project conventions, build and test commands. Locate code
+   with the CodeGraph tools (`codegraph_explore`, `codegraph_search`), not grep/sed.
+   If a codegraph tool reports "not initialized", use grep instead: do not ask anyone and do not build the index yourself.
+2. Reproduce the failure locally if it is a build/test failure, with the guide's commands and
+   only the failing tests.
 3. Address EVERY BLOCKING finding above. NIT findings are optional.
 4. Add or update tests so the failure can't reappear silently.
 5. Commit and push to branch `{branch}`. Do NOT open a new PR — the

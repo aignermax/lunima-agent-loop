@@ -32,6 +32,9 @@ pub struct SessionState {
     pub handed_to_human: bool,
     /// python-dev-tools runs over all sessions (PR stats)
     pub tool_runs: std::collections::BTreeMap<String, usize>,
+    /// assignees other than the agent when it claimed the issue (`None` until the first
+    /// run): a later one means a human took the issue over
+    pub claim_assignees: Option<Vec<String>>,
 }
 
 impl Default for SessionState {
@@ -55,6 +58,7 @@ impl Default for SessionState {
             in_review: false,
             handed_to_human: false,
             tool_runs: Default::default(),
+            claim_assignees: None,
         }
     }
 }
@@ -95,6 +99,7 @@ impl SessionState {
         self.attempts = 0;
         self.in_review = false;
         self.handed_to_human = false;
+        self.claim_assignees = None;
         self.note("Re-queued by a human — fresh budget");
     }
 

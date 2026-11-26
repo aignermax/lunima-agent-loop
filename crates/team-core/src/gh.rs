@@ -74,6 +74,9 @@ pub struct PullRequest {
     #[serde(default)]
     pub body: Option<String>,
     pub html_url: String,
+    /// see `Comment::author_association`
+    #[serde(default)]
+    pub author_association: String,
     pub head: Ref,
     pub base: Ref,
     #[serde(default)]
@@ -106,6 +109,9 @@ pub struct Comment {
     pub user: Option<User>,
     #[serde(default)]
     pub created_at: String,
+    /// OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE … — whether the author may steer the agent
+    #[serde(default)]
+    pub author_association: String,
 }
 
 /// Low-level `gh api` call. `body` goes to stdin as JSON.

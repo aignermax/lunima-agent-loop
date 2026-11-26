@@ -1,77 +1,41 @@
 Implement issue #{issue_number}: {issue_title}
 {branch_note}
 
-## CRITICAL: Read CLAUDE.md First
-The repo has `CLAUDE.md` with full architecture guidelines. **Read it immediately.**
+## Read the repository's guide first
+Read `AGENTS.md` and `CLAUDE.md` (whichever exist) before anything else. They say how this
+repository is built and tested, its architecture rules, and what must never be touched (for example
+real hardware). They override the general advice below.
 
-## Issue Type
-- **Test/Investigation** ("test", "verify", "investigate") → ONLY tests, NO UI
-- **User feature** ("add feature", "implement UI") → Full stack (Core + ViewModel + View + Tests)
-- **Bugfix** → Fix the bug, add regression test
+## Issue type
+- **Investigate / test / verify** → tests only, no UI
+- **A user-facing feature** → the full stack the repository's guide describes, with tests
+- **A bug** → fix it and add a regression test that fails without the fix
 
-## Architecture (for NEW features)
-1. Core logic (Connect-A-Pic-Core/)
-2. ViewModel ([ObservableProperty], [RelayCommand])
-3. View/AXAML (MainWindow.axaml)
-4. Tests (UnitTests/)
+## Finding your way in the code
+This worktree has a CodeGraph index. Find your way with the codegraph tools, not with grep/sed
+in the shell: every shell call re-reads your whole context, one explore call replaces a dozen.
+- `codegraph_explore` with the symbol or file names you know: the relevant source of many files in one call
+- `codegraph_search` (where is X defined), `codegraph_callers` / `codegraph_callees` (call paths),
+  `codegraph_impact` (before changing a widely used symbol), `codegraph_node` (one symbol's source)
+Read big files by section, never whole. If a codegraph tool reports "not initialized", use grep instead: do not ask anyone and do not build the index yourself.
 
-Max 250 lines/file, SOLID principles, XML docs, no magic numbers.
-
-## Before Finishing
-1. **Build** (use build analyzer for cleaner output):
-   ```bash
-   {tools_python} {tools_dir}/build_errors.py --suggest-fixes
-   ```
-2. **Test** (use smart test tool):
-   ```bash
-   {tools_python} {tools_dir}/smart_test.py
-   ```
-3. Fix all errors/warnings
-4. **Keep trying until it works**
+## Build and test
+- Use the build and test commands from the repository's guide. Run the tests of the area you
+  changed, not the whole suite: CI runs everything on the PR.
+- Give every run a timeout. Never rerun the same failing test more than twice without changing
+  something. A failure that also happens on the base branch is not yours: name it in the PR
+  summary instead of chasing it.
+- New behaviour needs a test that fails without your change.
 
 ## Issue #{issue_number}: {issue_title}
 
 {issue_body}
 
-## YOUR TASK
-
-1. Read `CLAUDE.md` for architecture + `CODEBASE_MAP.md` for overview
-2. **ALWAYS use semantic search first** (better than glob/grep):
-   ```bash
-   {tools_python} {tools_dir}/semantic_search.py "your natural language query"
-   ```
-   Examples: "ViewModel for analysis", "test files for bounding box", "where is GDS export?"
-3. Find similar features to reuse patterns
-4. Implement:
-   - NEW FEATURES → Core + ViewModel + View + Tests
-   - TESTS/BUGFIXES → Tests or fix only (NO UI)
-5. **ALWAYS use smart test tool** (NOT `dotnet test` directly):
-   ```bash
-   {tools_python} {tools_dir}/smart_test.py [filter]
-   ```
-   Shows clean summary instead of 1000+ test results!
-6. Build/test iteratively, fix errors immediately
-7. **Keep trying until tests pass!**
-8. **BEFORE final commit:** Review your own changes:
-   - Check for code quality issues
-   - Look for potential bugs or edge cases
-   - Verify tests cover main scenarios
-   - Fix any issues you find BEFORE committing
-
-## ⚠️ CRITICAL: WiX Installer Projects need Windows
-**WiX Toolset builds MSI installers only on Windows!**
-- If this machine is not Windows and the issue involves WiX projects (.wixproj) or MSI installers:
-  - Implement the .NET/C# code changes ONLY
-  - DO NOT attempt to build WiX projects
-  - Add comment in PR: "WiX installer build requires Windows - test manually"
-  - Mark as complete after .NET code works
-- Attempting to build WiX off Windows wastes tokens and will always fail!
-
-## 🚀 IMPORTANT: Always use tools/ folder tools!
-- **build_errors.py** - Filtered build output + fix suggestions (instead of `dotnet build`)
-- **semantic_search.py** - AI code search (instead of grep)
-- **smart_test.py** - Filtered test output (instead of `dotnet test`)
-- **find_symbol.py** - Find class/method definitions + usages (when refactoring/implementing)
-- **dotnet_deps.py** - Check NuGet packages (when debugging references/conflicts)
-
-These tools save 500-5000 tokens per use! Use them frequently!
+## Your task
+1. Read the guide, then locate the code with CodeGraph and find a similar feature to follow.
+2. Implement the change, small and focused; touch only what the issue needs.
+3. Build and run the relevant tests; fix what fails.
+4. Before the final commit, review your own diff: correctness, edge cases, and whether the
+   tests assert real behaviour.
+5. If the issue lacks a number or decision you need (a threshold, a limit, a timing), say so in
+   the PR summary instead of inventing one.

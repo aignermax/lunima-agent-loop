@@ -84,6 +84,11 @@ fn args_for(s: &Session, api_url: Option<&str>) -> Vec<String> {
         for setting in crate::codex_hooks::config_overrides() {
             a.extend(["-c".into(), setting]);
         }
+        if which("codegraph").is_some() {
+            for setting in codegraph_mcp() {
+                a.extend(["-c".into(), setting]);
+            }
+        }
     }
     if !s.model.is_empty() {
         a.extend(["--model".into(), s.model.clone()]);
@@ -93,6 +98,28 @@ fn args_for(s: &Session, api_url: Option<&str>) -> Vec<String> {
     }
     a.push("-".into());
     a
+}
+
+/// The code-navigation tools of the CodeGraph index the coder prepares in each worktree.
+const CODEGRAPH_TOOLS: [&str; 9] = [
+    "codegraph_explore",
+    "codegraph_search",
+    "codegraph_context",
+    "codegraph_node",
+    "codegraph_callers",
+    "codegraph_callees",
+    "codegraph_impact",
+    "codegraph_files",
+    "codegraph_status",
+];
+
+/// The one MCP server a full session gets on top of `mcp_servers={}`: CodeGraph, read only
+/// over the worktree's own index. Personal connectors stay off. Without the approvals,
+/// `approval_policy="never"` would refuse every call.
+fn codegraph_mcp() -> Vec<String> {
+    let mut settings = vec!["mcp_servers.codegraph.command=\"codegraph\"".to_string(), "mcp_servers.codegraph.args=[\"serve\", \"--mcp\"]".to_string()];
+    settings.extend(CODEGRAPH_TOOLS.iter().map(|t| format!("mcp_servers.codegraph.tools.{t}.approval_mode=\"approve\"")));
+    settings
 }
 
 pub fn run(s: &Session) -> Result<Outcome, String> {
@@ -266,6 +293,7 @@ mod tests {
             on_tick: None,
             tools: None,
             memory_guard: false,
+            stop: None,
         }
     }
 
@@ -286,6 +314,24 @@ mod tests {
         ] {
             assert!(a.windows(2).any(|x| x == ["-c", setting]), "{setting}");
         }
+    }
+
+    #[test]
+    fn full_sessions_get_codegraph_and_nothing_else_restricted_ones_get_no_server() {
+        let full = args(&session(".".into()));
+        let codegraph: Vec<&String> = full.iter().filter(|x| x.starts_with("mcp_servers.")).collect();
+        if which("codegraph").is_some() {
+            assert!(full.windows(2).any(|x| x == ["-c", "mcp_servers.codegraph.command=\"codegraph\""]));
+            assert!(full.windows(2).any(|x| x == ["-c", "mcp_servers.codegraph.tools.codegraph_explore.approval_mode=\"approve\""]));
+            assert!(codegraph.iter().all(|x| x.starts_with("mcp_servers.codegraph.")), "no other server: {codegraph:?}");
+            assert_eq!(codegraph.len(), 2 + CODEGRAPH_TOOLS.len());
+        } else {
+            assert!(codegraph.is_empty(), "no server without the CLI");
+        }
+        assert!(full.windows(2).any(|x| x == ["-c", "mcp_servers={}"]), "personal connectors still cleared first");
+        let mut restricted = session(".".into());
+        restricted.tools = Some(vec!["Read".into()]);
+        assert!(!args(&restricted).iter().any(|x| x.starts_with("mcp_servers.")), "a sandboxed session gets no MCP server");
     }
 
     #[test]

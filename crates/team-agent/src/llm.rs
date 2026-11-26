@@ -54,8 +54,17 @@ impl std::fmt::Display for LlmError {
     }
 }
 
+/// Asked while a session runs; `Some(reason)` ends it (see `claude::Session::stop`).
+pub type StopCheck<'a> = &'a (dyn Fn() -> Option<String> + Sync);
+
 pub trait Llm: Send + Sync {
     fn run(&self, job: &Job) -> Result<Outcome, LlmError>;
+    /// `run`, ended early once `stop` returns a reason: the error is
+    /// `Failed("<claude::STOPPED_TEXT>: <reason>")`.
+    fn run_watched(&self, job: &Job, stop: StopCheck<'_>) -> Result<Outcome, LlmError> {
+        let _ = stop;
+        self.run(job)
+    }
     /// Check availability without executing tools or consuming a task attempt.
     fn admit(&self, _job: &Job) -> Result<(), LlmError> { Ok(()) }
 }
@@ -240,6 +249,16 @@ impl Llm for ClaudeCli {
     fn admit(&self, job: &Job) -> Result<(), LlmError> { self.prepare(job).map(|_| ()) }
 
     fn run(&self, job: &Job) -> Result<Outcome, LlmError> {
+        self.run_with(job, None)
+    }
+
+    fn run_watched(&self, job: &Job, stop: StopCheck<'_>) -> Result<Outcome, LlmError> {
+        self.run_with(job, Some(stop))
+    }
+}
+
+impl ClaudeCli {
+    fn run_with(&self, job: &Job, stop: Option<StopCheck<'_>>) -> Result<Outcome, LlmError> {
         let decision = self.prepare(job)?;
         let backend = decision.backend;
         let mut choice = decision.choice;
@@ -276,6 +295,7 @@ impl Llm for ClaudeCli {
             on_tick: Some(&tick),
             tools: job.tools.clone(),
             memory_guard: true,
+            stop,
         };
         let out = run_session(backend, &session).map_err(|e| LlmError::Failed(e.to_string()))?;
         if let Some(until) = out.usage_limit_until {

@@ -113,7 +113,9 @@ fn fix(ctx: &Ctx, setup: &RepoSetup, pr: &PullRequest, comments: &[Comment]) -> 
     run_git(Some(&wt), &["fetch", "origin", &format!("+refs/heads/{branch}:refs/remotes/origin/{branch}")], true)?;
     g(&["checkout", &branch])?;
     g(&["reset", "--hard", &format!("origin/{branch}")])?;
-    g(&["clean", "-fdx"])?;
+    // keeps the CodeGraph index (an ignored folder -x would delete) and builds it if missing
+    g(&["clean", "-fdx", "-e", super::code_index::KEEP_ON_CLEAN])?;
+    super::code_index::ensure(&wt);
 
     let verdict = comments.iter().rev().find(|c| c.body.starts_with(QA_COMMENT_PREFIX)).map(|c| c.body.replace('\r', "")).unwrap_or_default();
     let (summary, details) = verdict.split_once('\n').map(|(a, b)| (a.trim().to_string(), b.trim().to_string())).unwrap_or((verdict.trim().to_string(), String::new()));

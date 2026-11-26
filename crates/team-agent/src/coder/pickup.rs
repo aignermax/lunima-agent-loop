@@ -70,6 +70,11 @@ fn mark_claimed(ctx: &Ctx, forge: &dyn Forge, issue: &Issue, announce: bool) -> 
 
 const CLAIM_MARK: &str = "<!-- team-agent:claim machine=";
 
+/// GitHub's timestamp of the latest claim comment (the anchor of `watch::Watch`).
+pub fn claimed_at(forge: &dyn Forge, n: u64) -> Option<String> {
+    forge.comments(n).ok()?.into_iter().rev().find(|c| c.body.contains(CLAIM_MARK)).map(|c| c.created_at)
+}
+
 /// The machine named in the latest claim comment of an issue.
 pub fn claimed_by(forge: &dyn Forge, n: u64) -> Option<String> {
     let comments = forge.comments(n).ok()?;

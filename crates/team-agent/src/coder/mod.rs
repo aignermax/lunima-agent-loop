@@ -6,12 +6,14 @@
 //! 3. else claim the oldest free `agent-task` issue and work on it.
 //! The discovery sweep over the org runs here too (throttled).
 
+pub(crate) mod code_index;
 mod finish;
 mod pickup;
 mod prompt;
 mod qa_fix;
 mod review_loop;
 mod work;
+mod watch;
 
 #[cfg(test)]
 mod tests;
