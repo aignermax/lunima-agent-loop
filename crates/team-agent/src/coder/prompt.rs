@@ -23,8 +23,8 @@ fn workspace_note(ctx: &Ctx, repo: &str) -> String {
     let home = std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(std::path::PathBuf::from);
     let Some(ws) = home.map(|h| h.join("akhetonics-workspace")).filter(|p| p.is_dir()) else { return String::new() };
     let ws = ws.display().to_string();
-    let t = &ctx.tools;
-    format!("\n\n## 📦 IMPORTANT: Dependency Workspace Available\n**You have access to ALL dependency repositories at:**\n`{ws}`\n\nIt holds akhetonics-desktop, SAPPHIRE-Compiler, raycore-isa, raycore-assembler, phridge-blades-simulator, Phridge-Dispatcher, raycore-vulkan-icd, raycore-vulkan-layer and Lunima.\n\n**When you need NuGet-consumed source code, or need to understand a type/function that lives in one of these packages instead of in this repo:**\n1. Use `{} {}/semantic_search.py --path {ws} --query \"your search\"`\n2. `{} {}/find_symbol.py SymbolName` also accepts `--path`\n3. **DO NOT waste tokens guessing** — the source code is available locally!\n", t.python, t.dir, t.python, t.dir)
+    let _ = ctx;
+    format!("\n\n## 📦 IMPORTANT: Dependency Workspace Available\n**You have access to ALL dependency repositories at:**\n`{ws}`\n\nIt holds akhetonics-desktop, SAPPHIRE-Compiler, raycore-isa, raycore-assembler, phridge-blades-simulator, Phridge-Dispatcher, raycore-vulkan-icd, raycore-vulkan-layer and Lunima.\n\n**When you need NuGet-consumed source code, or need to understand a type/function that lives in one of these packages instead of in this repo:** search that folder with `rg` (ripgrep) or `git grep`, then read only the lines you need. **DO NOT waste tokens guessing** — the source code is available locally!\n")
 }
 
 /// The prompt for the next coder session on `issue`.

@@ -6,7 +6,7 @@
 //! 3. else claim the oldest free `agent-task` issue and work on it.
 //! The discovery sweep over the org runs here too (throttled).
 
-mod code_index;
+pub(crate) mod code_index;
 mod finish;
 mod pickup;
 mod prompt;

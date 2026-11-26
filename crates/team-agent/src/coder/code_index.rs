@@ -11,6 +11,9 @@ use team_core::proc::{command, run, which};
 /// Indexing a large repository takes a minute or two; past this the session starts without.
 const INDEX_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
+/// `git clean -e` pattern that keeps the index through a `clean -fdx`.
+pub const KEEP_ON_CLEAN: &str = ".codegraph/";
+
 /// What `codegraph init` writes into the project; never part of the agent's commits.
 const ARTIFACTS: [&str; 2] = ["/.codegraph/", "/.cursor/rules/codegraph.mdc"];
 
@@ -90,5 +93,8 @@ mod tests {
         let status = run_git(Some(repo), &["status", "--porcelain", "--untracked-files=all"], false).unwrap();
         assert!(!status.contains("codegraph"), "{status}");
         assert!(status.contains(".cursor/rules/team.mdc"), "the repo's own cursor rules stay visible: {status}");
+        run_git(Some(repo), &["clean", "-fdx", "-e", KEEP_ON_CLEAN, "-q"], false).unwrap();
+        assert!(repo.join(".codegraph").join("codegraph.db").is_file(), "the QA fix's clean -fdx keeps the index");
+        assert!(!repo.join(".cursor").join("rules").join("team.mdc").exists(), "and still removes the rest");
     }
 }

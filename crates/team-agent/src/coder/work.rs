@@ -155,12 +155,21 @@ impl IssueRun<'_> {
                     return Err(RoleError::UsageLimit(backend, t));
                 }
                 Err(LlmError::Unavailable(e)) => { self.store.save(state); return Err(RoleError::Unavailable(e)); }
-                Err(LlmError::Failed(e)) => match stop_reason(&e).map(str::to_string).or_else(|| watch.check_now()) {
+                Err(LlmError::Failed(e)) => {
                     // a stop posted shortly before a crash must not be undone by the re-queue
                     // (its new claim comment would move the watch's anchor past it)
-                    Some(reason) => return Ok(self.stopped(n, state, worktree, base, &reason)),
-                    None => return Ok(Flow::Fail(e)),
-                },
+                    let reason = stop_reason(&e).map(str::to_string).or_else(|| {
+                        let late = watch.check_now();
+                        if late.is_some() {
+                            crate::log::warn(&format!("#{n}: Sitzung scheiterte ({}), das Issue wurde inzwischen gestoppt", e.chars().take(200).collect::<String>()));
+                        }
+                        late
+                    });
+                    match reason {
+                        Some(reason) => return Ok(self.stopped(n, state, worktree, base, &reason)),
+                        None => return Ok(Flow::Fail(e)),
+                    }
+                }
             };
             state.add_session(out.num_turns, out.usage.total(), out.estimated_cost());
             state.count_tools(&out.bash_commands);

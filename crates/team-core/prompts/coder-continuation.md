@@ -12,7 +12,7 @@ Branch: {branch_name}{branch_note}
 Continue where you left off; `git status` and `git log` show what the earlier sessions did.
 1. Re-read `AGENTS.md` / `CLAUDE.md` for the build and test commands and the rules.
 2. Find your way with the CodeGraph tools (`codegraph_explore`, `codegraph_search`,
-   `codegraph_callers`) instead of grep/sed in the shell.
+   `codegraph_callers`) instead of grep/sed in the shell. If a codegraph tool reports "not initialized", use grep instead: do not ask anyone and do not build the index yourself.
 3. Build and run the tests of the area you changed; fix what fails. Never rerun the same
    failing test more than twice without a change.
 4. Re-read the issue: investigate/test/verify → tests only; a feature → the full stack the

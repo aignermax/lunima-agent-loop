@@ -15,6 +15,7 @@ You are a senior code reviewer. Review PR #{pr_number} for issue #{issue_number}
 3. For deeper inspection, use: the CodeGraph tools when the worktree has an index:
    `codegraph_explore` (the code around the changed symbols, many files in one call),
    `codegraph_callers` / `codegraph_impact` (who else depends on a changed function).
+   If a codegraph tool reports "not initialized", use grep instead: do not ask anyone and do not build the index yourself.
 4. Verify (in this order):
    - Does the diff actually solve the issue's acceptance criteria?
    - Are there obvious correctness bugs (off-by-one, null deref, unhandled error paths)?

@@ -118,7 +118,6 @@ pub fn run(paths: Paths) -> i32 {
     crate::log::init(&paths.logs());
     crate::log::info(&format!("lunima-team-agent {} startet (Daten: {})", env!("CARGO_PKG_VERSION"), paths.root.display()));
     let mut login = None;
-    let mut tools_ready = false;
     let limit: UsageLimit = Arc::new(Mutex::new(std::collections::BTreeMap::new()));
     loop {
         let drain = update_drain::Drain::new(paths.state());
@@ -135,14 +134,6 @@ pub fn run(paths: Paths) -> i32 {
             continue;
         }
         let Some(login) = login.clone() else { continue };
-        if !tools_ready {
-            let Some(_work) = drain.try_start() else { continue };
-            match Tools::ensure_installed(home()) {
-                Ok(t) => crate::log::info(&format!("python-dev-tools: {}", t.dir)),
-                Err(e) => crate::log::warn(&format!("python-dev-tools nicht verfügbar ({e}) — die Prompts verweisen trotzdem darauf")),
-            }
-            tools_ready = true;
-        }
         let mut threads = vec![crate::chat::spawn_worker(paths.clone(), drain.clone())];
         threads.extend(all_roles().into_iter().map(|role| {
             let (paths, login, limit, drain) = (paths.clone(), login.clone(), limit.clone(), drain.clone());
