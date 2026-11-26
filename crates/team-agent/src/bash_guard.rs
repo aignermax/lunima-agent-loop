@@ -44,13 +44,21 @@ pub fn deny(command: &str, cwd: &Path, session: &str, state_dir: &Path) -> bool 
 /// A recursive search through source: `grep -r`/`-R`, `rg`, `git grep`, `ag`, `find … -name`.
 /// A search limited to docs or config files (`--include=*.md`, `-g '*.json'` …) is not one.
 pub fn is_code_search(command: &str) -> bool {
+    static QUOTED: OnceLock<Regex> = OnceLock::new();
     static SEARCH: OnceLock<Regex> = OnceLock::new();
     static DOCS: OnceLock<Regex> = OnceLock::new();
+    static SHALLOW: OnceLock<Regex> = OnceLock::new();
+    // quoted text is a pattern or a message, never a command (`git commit -m "…; rg …"`)
+    let quoted = QUOTED.get_or_init(|| Regex::new(r#""(?:[^"\\]|\\.)*"|'[^']*'"#).expect("static regex"));
+    let bare = quoted.replace_all(command, "Q");
     let search = SEARCH.get_or_init(|| {
-        Regex::new(r#"(?:^|[;&|(]\s*|\bxargs\s+)(?:grep\s+(?:[^|;&]*\s)?-[A-Za-z]*[rR]|rg\b|git\s+grep\b|ag\b|find\s+[^|;&]*-i?name\b)"#).expect("static regex")
+        Regex::new(r#"(?m)(?:^\s*|[;&|(]\s*|\b(?:xargs|timeout\s+\S+|nice|time)\s+)(?:grep\s+(?:[^|;&\n]*\s)?(?:-[A-Za-z]*[rR][A-Za-z]*|--recursive|--dereference-recursive)\b|rg\b|git\s+(?:-C\s+\S+\s+)?grep\b|ag\b|find\s+[^|;&\n]*-i?name\b)"#).expect("static regex")
     });
-    let docs = DOCS.get_or_init(|| Regex::new(r#"(?:--include[= ]|-g\s+|--glob[= ])['"]?\*\.(?:md|txt|json|toml|ya?ml|ini|cfg|csv|lock)\b"#).expect("static regex"));
-    search.is_match(command) && !docs.is_match(command)
+    let docs = DOCS.get_or_init(|| {
+        Regex::new(r#"(?:--include[= ]|-g\s+|--glob[= ])['"]?\*?\.?(?:md|txt|json|toml|ya?ml|ini|cfg|csv|lock|csproj|sln|props)\b|(?:-t|--type)[= ]?\s*(?:md|markdown|json|toml|yaml|txt)\b"#).expect("static regex")
+    });
+    let shallow = SHALLOW.get_or_init(|| Regex::new(r"-maxdepth\s+[012]\b").expect("static regex"));
+    search.is_match(&bare) && !docs.is_match(command) &&!(bare.contains("find") && shallow.is_match(&bare))
 }
 
 /// The working directory or one of its parents up to the repository root holds `.codegraph/`.
@@ -74,10 +82,13 @@ mod tests {
 
     #[test]
     fn recursive_code_searches_are_recognised_and_literal_or_doc_searches_are_not() {
-        for yes in ["grep -rn \"def run\" host/", "cd host && grep -R Plan .", "rg -n Plan host", "git grep -n stop_all", "find . -name \"*.py\" | head", "ls; grep -rln lab_mode tests | head"] {
+        for yes in ["grep -rn \"def run\" host/", "cd host && grep -R Plan .", "rg -n Plan host", "git grep -n stop_all", "find . -name \"*.py\" | head", "ls; grep -rln lab_mode tests | head",
+                    "  grep -rn Plan .", "git status\ngrep -rn Plan host", "timeout 30 grep -rn Plan .", "git -C ../wt grep Plan", "grep --recursive Plan ."] {
             assert!(is_code_search(yes), "{yes}");
         }
-        for no in ["grep -n Plan host/ls/lab_mode.py", "sed -n 1,80p host/ls/lab_mode.py", "git diff --stat", "grep -rn TODO --include=*.md docs", "rg -g '*.json' ports", "cat AGENTS.md", "pytest -q tests/ls"] {
+        for no in ["grep -n Plan host/ls/lab_mode.py", "sed -n 1,80p host/ls/lab_mode.py", "git diff --stat", "grep -rn TODO --include=*.md docs", "rg -g '*.json' ports", "cat AGENTS.md", "pytest -q tests/ls",
+                   "grep -n \" -error\" log.txt", "git commit -m \"fix; rg works now\"", "find . -maxdepth 1 -name \"*.csproj\"", "rg -t md agent", "grep -rn Version --include=*.csproj .",
+                   "cargo test 2>&1 | grep -E \"error|warning\""] {
             assert!(!is_code_search(no), "{no}");
         }
     }

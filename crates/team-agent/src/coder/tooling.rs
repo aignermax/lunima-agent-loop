@@ -37,7 +37,8 @@ pub fn ensure_catalog() {
 }
 
 fn ensure(tool: &Tool) {
-    if installed_version(tool).as_deref() == Some(tool.version) {
+    // the pin is a floor: a newer machine-wide install (Max's own) is never downgraded
+    if installed_version(tool).is_some_and(|v| !older(&v, tool.version)) {
         return;
     }
     let Some(npm) = which("npm") else {
@@ -47,9 +48,19 @@ fn ensure(tool: &Tool) {
     let mut cmd = command(&npm);
     cmd.args(["install", "-g", "--no-audit", "--no-fund", &format!("{}@{}", tool.npm, tool.version)]);
     match run(cmd, None, INSTALL_TIMEOUT) {
-        Ok(out) if out.ok() && installed_version(tool).as_deref() == Some(tool.version) => crate::log::info(&format!("{} {} installiert", tool.bin, tool.version)),
+        Ok(out) if out.ok() && installed_version(tool).is_some_and(|v| !older(&v, tool.version)) => crate::log::info(&format!("{} {} installiert", tool.bin, tool.version)),
         Ok(out) => crate::log::warn(&format!("{} {} nicht installiert: {}", tool.bin, tool.version, out.stderr.trim().chars().take(300).collect::<String>())),
         Err(e) => crate::log::warn(&format!("npm nicht gestartet: {e}")),
+    }
+}
+
+/// `have` is an older release than `want` (numeric dotted versions; anything unparsable counts
+/// as older, so a broken install is repaired).
+fn older(have: &str, want: &str) -> bool {
+    let parse = |v: &str| v.trim_start_matches('v').split('.').map(|p| p.parse::<u64>().ok()).collect::<Option<Vec<_>>>();
+    match (parse(have), parse(want)) {
+        (Some(h), Some(w)) => h < w,
+        _ => true,
     }
 }
 
@@ -84,7 +95,8 @@ pub fn detect(files: &[&str]) -> Stack {
     }
 }
 
-/// The prompt block for a worktree (empty when nothing useful can be said).
+/// The prompt block for a worktree: the CodeGraph lines only with an index, a test line per
+/// detected stack.
 pub fn note(wt: &Path, base: &str) -> String {
     let listed = run_git(Some(wt), &["ls-files"], false).unwrap_or_default();
     let files: Vec<&str> = listed.lines().collect();
@@ -139,6 +151,12 @@ mod tests {
         assert!(!with.contains("cargo"), "no command for a stack the repo does not have");
         let without = render(&stack, false, "main");
         assert!(!without.contains("codegraph"), "no CodeGraph advice without an index");
+    }
+
+    #[test]
+    fn the_pin_is_a_floor_never_a_downgrade() {
+        assert!(older("0.7.12", "1.6.4") && older("1.6.3", "1.6.4") && older("garbage", "1.6.4"));
+        assert!(!older("1.6.4", "1.6.4") && !older("1.10.0", "1.6.4") && !older("v2.0.0", "1.6.4"));
     }
 
     #[test]
