@@ -16,6 +16,10 @@ use team_core::config::TeamConfig;
 use team_core::paths::Paths;
 
 fn main() {
+    // the launcher of sessions on the hidden desktop: before anything else touches the arguments
+    if let Some(code) = team_core::desktop::launch_main() {
+        std::process::exit(code);
+    }
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     // `--home <dir>` anywhere = data folder (the Control Center passes it for non-default homes)
     if let Some(i) = args.iter().position(|a| a == "--home") {

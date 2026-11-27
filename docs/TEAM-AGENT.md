@@ -80,6 +80,29 @@ Free RAM is `MemAvailable` (Linux) or `GlobalMemoryStatusEx` (Windows); on other
 the guard is off. It reacts to the whole machine, so memory used by other programs also
 stops agent work; that is intended.
 
+## Hidden desktop (Windows)
+
+Sessions run the repos' tests, and GUI tests (Tk, WPF, Avalonia …) open real windows. On
+Windows these used to pop up on the user's screen and take the focus; CI runs them under
+an invisible display (xvfb). `team_core::desktop` is the Windows counterpart: Claude/Codex
+sessions, the test gate and QA commands start on a desktop of their own
+(`LunimaAgentSessions` in the user's window station) that is never switched to. Windows
+and GDI work there as usual, and everything a session starts inherits that desktop.
+
+- The agent binary is its own launcher (`lunima-team-agent __on-hidden-desktop <program>
+  <args …>`): it starts itself again on the hidden desktop with the same command line,
+  and that second stage runs the program exactly as the agent would have (`.cmd` CLIs,
+  quoting). A timeout or the memory guard still kills the whole tree.
+- The UX review keeps the user's desktop: its tester drives the app through screenshots.
+- Screen grabs (`PIL.ImageGrab`) fail on the hidden desktop; `PrintWindow` works.
+- If the desktop cannot be created, the program runs visibly as before (stderr says why).
+- `lunima-team-agent __desktop-name` prints the desktop a process runs on.
+
+```toml
+[resources]
+show_session_windows = false   # true = windows appear on screen as before
+```
+
 ## Team chat and memory
 
 Max talks to every role in the Control Center (Team page); the roles talk to each other.

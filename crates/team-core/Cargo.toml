@@ -13,5 +13,17 @@ toml.workspace = true
 chrono.workspace = true
 regex.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# the hidden desktop of agent sessions (`desktop`); same version as the Control Center's
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_System_Console",
+    "Win32_System_Environment",
+    "Win32_System_StationsAndDesktops",
+    "Win32_System_Threading",
+] }
+
 [dev-dependencies]
 tempfile.workspace = true

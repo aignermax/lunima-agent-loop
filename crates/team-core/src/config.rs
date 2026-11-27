@@ -275,6 +275,9 @@ pub struct Resources {
     pub min_free_mb: u64,
     /// no role starts new work below this much free RAM
     pub start_free_mb: u64,
+    /// Windows: `false` = sessions, builds and tests run on a hidden desktop, so the windows
+    /// their GUI tests open never appear on screen (`crate::desktop`); `true` = as before
+    pub show_session_windows: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

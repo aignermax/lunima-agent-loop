@@ -32,20 +32,34 @@ impl CmdResult {
     }
 }
 
+/// Runs `line` on the hidden desktop when that is on (`team_core::desktop`): builds and tests
+/// may open windows, which must not land on the user's screen.
 pub fn run_shell(line: &str, cwd: &Path, timeout: Duration) -> Result<CmdResult, String> {
     run_shell_env(line, cwd, timeout, &[])
 }
 
 /// `run_shell` with extra environment variables for the command.
 pub fn run_shell_env(line: &str, cwd: &Path, timeout: Duration, env: &[(&str, &std::ffi::OsStr)]) -> Result<CmdResult, String> {
+    run_shell_on(line, cwd, timeout, env, true)
+}
+
+/// `run_shell_env` on the user's own desktop, for a command that has to be seen there (the
+/// UX tester drives the app through screenshots of it).
+pub fn run_shell_visible_env(line: &str, cwd: &Path, timeout: Duration, env: &[(&str, &std::ffi::OsStr)]) -> Result<CmdResult, String> {
+    run_shell_on(line, cwd, timeout, env, false)
+}
+
+fn run_shell_on(line: &str, cwd: &Path, timeout: Duration, env: &[(&str, &std::ffi::OsStr)], hidden: bool) -> Result<CmdResult, String> {
     #[cfg(windows)]
     let mut cmd = {
         // verbatim: Rust's argument quoting (`\"`) is not understood by cmd.exe
         use std::os::windows::process::CommandExt;
-        let mut c = command("cmd");
+        let mut c = if hidden { team_core::desktop::command_raw("cmd") } else { command("cmd") };
         c.raw_arg(format!("/S /C \"{line}\""));
         c
     };
+    #[cfg(not(windows))]
+    let _ = hidden;
     #[cfg(not(windows))]
     let mut cmd = {
         let mut c = command("sh");
