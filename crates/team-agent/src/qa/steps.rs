@@ -1,7 +1,7 @@
 //! The mechanical QA steps (`build_cmd`, `test_cmd`, `ui_test_cmd` from `.agent.toml`).
 
 use crate::agent_toml::ProjectConfig;
-use crate::shell::{run_shell, tail};
+use crate::shell::{run_shell_hidden, tail};
 use std::path::Path;
 use std::time::Duration;
 
@@ -57,7 +57,7 @@ fn run_step(name: &str, cmd: &str, dir: &Path, timeout_sec: u64) -> StepResult {
     if cmd.is_empty() {
         return StepResult::skipped(name, Skip::NoCommand);
     }
-    match run_shell(cmd, dir, Duration::from_secs(timeout_sec)) {
+    match run_shell_hidden(cmd, dir, Duration::from_secs(timeout_sec)) {
         Err(e) => StepResult::failure(name, &e),
         Ok(r) => {
             let mut out = format!("{}{}", r.stdout, r.stderr);

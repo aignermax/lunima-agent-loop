@@ -32,21 +32,23 @@ impl CmdResult {
     }
 }
 
-/// Runs `line` on the hidden desktop when that is on (`team_core::desktop`): builds and tests
-/// may open windows, which must not land on the user's screen.
+/// Runs `line` on the user's desktop. Commands that drive an app through screenshots and
+/// input (UX review, PO customer review) need that desktop.
 pub fn run_shell(line: &str, cwd: &Path, timeout: Duration) -> Result<CmdResult, String> {
     run_shell_env(line, cwd, timeout, &[])
 }
 
 /// `run_shell` with extra environment variables for the command.
 pub fn run_shell_env(line: &str, cwd: &Path, timeout: Duration, env: &[(&str, &std::ffi::OsStr)]) -> Result<CmdResult, String> {
-    run_shell_on(line, cwd, timeout, env, true)
+    run_shell_on(line, cwd, timeout, env, false)
 }
 
-/// `run_shell_env` on the user's own desktop, for a command that has to be seen there (the
-/// UX tester drives the app through screenshots of it).
-pub fn run_shell_visible_env(line: &str, cwd: &Path, timeout: Duration, env: &[(&str, &std::ffi::OsStr)]) -> Result<CmdResult, String> {
-    run_shell_on(line, cwd, timeout, env, false)
+/// A project's build or test command (`build_cmd`, `test_cmd`, `ui_test_cmd`): on the
+/// hidden desktop when that is on (`team_core::desktop`), so the windows its GUI tests open
+/// never land on the user's screen. Only for commands that need no input from the screen:
+/// clicks and screen grabs do not work there.
+pub fn run_shell_hidden(line: &str, cwd: &Path, timeout: Duration) -> Result<CmdResult, String> {
+    run_shell_on(line, cwd, timeout, &[], true)
 }
 
 fn run_shell_on(line: &str, cwd: &Path, timeout: Duration, env: &[(&str, &std::ffi::OsStr)], hidden: bool) -> Result<CmdResult, String> {
@@ -122,6 +124,14 @@ mod tests {
     fn quoted_arguments_reach_the_shell_intact() {
         let t = tempfile::tempdir().unwrap();
         let r = run_shell("echo \"a b\"> \"out file.txt\"", t.path(), Duration::from_secs(30)).unwrap();
+        assert!(r.ok(), "{r:?}");
+        assert!(std::fs::read_to_string(t.path().join("out file.txt")).unwrap().contains("a b"));
+    }
+
+    #[test]
+    fn hidden_variant_runs_the_same_line() {
+        let t = tempfile::tempdir().unwrap();
+        let r = run_shell_hidden("echo \"a b\"> \"out file.txt\"", t.path(), Duration::from_secs(30)).unwrap();
         assert!(r.ok(), "{r:?}");
         assert!(std::fs::read_to_string(t.path().join("out file.txt")).unwrap().contains("a b"));
     }

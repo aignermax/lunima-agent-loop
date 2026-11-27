@@ -168,6 +168,7 @@ pub fn current_name() -> Option<String> {
 /// What follows the first `n` arguments of a Windows command line, leading blanks removed.
 /// Only for the launcher's own arguments (its path, the marker, the program path): none of
 /// them contains a quote, so an argument is either `"…"` or runs up to the next blank.
+#[cfg(any(windows, test))]
 fn skip_args(line: &[u16], n: usize) -> Option<&[u16]> {
     let blank = |c: &u16| *c == b' ' as u16 || *c == b'\t' as u16;
     let quote = b'"' as u16;
