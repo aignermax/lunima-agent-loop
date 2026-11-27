@@ -31,7 +31,7 @@ pub struct UxReviewer {
 
 impl Default for UxReviewer {
     fn default() -> Self {
-        Self { exec: Box::new(|line, cwd, timeout, env| crate::shell::run_shell_env(line, cwd, timeout, env)), clock: Box::new(Local::now), warned: false }
+        Self { exec: Box::new(crate::shell::run_shell_env), clock: Box::new(Local::now), warned: false }
     }
 }
 

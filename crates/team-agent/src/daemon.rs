@@ -72,6 +72,7 @@ pub fn context(cfg: TeamConfig, paths: &Paths, login: &str, heartbeat: Arc<Heart
 
 fn context_with_limit(cfg: TeamConfig, paths: &Paths, login: &str, heartbeat: Arc<Heartbeat>, role: &str, limit: Option<UsageLimit>) -> Ctx {
     let inactivity = Duration::from_secs(cfg.budgets.inactivity_minutes.max(1) * 60);
+    team_core::desktop::set_hidden(!cfg.resources.show_session_windows);
     let mut llm = ClaudeCli::new(&paths.state(), paths.logs().join(role), inactivity, Some(heartbeat.clone()), &cfg);
     llm.role = role.to_string();
     llm.usage_limit = limit;

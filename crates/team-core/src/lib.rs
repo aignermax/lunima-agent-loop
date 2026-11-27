@@ -7,6 +7,7 @@ pub mod claude;
 pub mod codex;
 pub mod codex_hooks;
 pub mod config;
+pub mod desktop;
 pub mod gh;
 pub mod git;
 pub mod import;

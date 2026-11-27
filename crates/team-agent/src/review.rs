@@ -10,7 +10,7 @@
 //! ```
 
 use crate::agent_toml::ProjectConfig;
-use crate::shell::{run_shell, tail};
+use crate::shell::{run_shell_hidden, tail};
 use regex::Regex;
 use std::path::Path;
 use std::sync::OnceLock;
@@ -81,7 +81,7 @@ pub fn test_gate(worktree: &Path, project: &ProjectConfig) -> Option<Verdict> {
         return None;
     }
     let timeout = project.command_timeout_sec;
-    Some(match run_shell(cmd, worktree, Duration::from_secs(timeout)) {
+    Some(match run_shell_hidden(cmd, worktree, Duration::from_secs(timeout)) {
         Err(e) => Verdict::blocking(&format!("Test command could not be launched: {e}")),
         Ok(r) if r.timed_out => Verdict {
             verdict: "BLOCKING".into(),

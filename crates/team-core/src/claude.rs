@@ -5,7 +5,7 @@
 //! exit and could stall). Every event counts as activity; a silent session is killed with
 //! its whole process tree. Usage limits of the subscription are detected with reset time.
 
-use crate::proc::{command, kill_tree, which};
+use crate::proc::{kill_tree, which};
 use crate::provider::ChildEnv;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::PathBuf;
@@ -144,7 +144,8 @@ pub fn run(s: &Session) -> Result<Outcome, Error> {
 }
 
 pub(crate) fn run_cli(s: &Session, cli: PathBuf, args: Vec<String>, mut normalize: impl FnMut(&str) -> Vec<String>) -> Result<Outcome, Error> {
-    let mut cmd = command(&cli);
+    // its tests may open windows: on Windows they go to the hidden desktop (`crate::desktop`)
+    let mut cmd = crate::desktop::command(&cli);
     cmd.args(args).current_dir(&s.cwd).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
     // defaults a session's own env may override; no usage telemetry from the CodeGraph server
     cmd.env("BASH_MAX_OUTPUT_LENGTH", BASH_OUTPUT_CHARS).env("CODEGRAPH_TELEMETRY", "0");

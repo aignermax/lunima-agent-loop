@@ -107,6 +107,7 @@ pub const FIELDS: &[Field] = &[
     f("Budgets", "resources.min_free_mb", "RAM-Notbremse (MB frei)", N, "Darunter werden laufende Sitzungen samt Builds/Tests beendet; 0 = automatisch (10 % des RAM, 1–4 GB)"),
     f("Budgets", "resources.start_free_mb", "RAM für neue Arbeit (MB frei)", N, "Darunter wartet jede Rolle; 0 = Notbremse + Puffer (nochmal die Notbremse, höchstens 2 GB)"),
     f("Budgets", "budgets.test_gate", "Test-Gate vor dem Review", B, "test_cmd aus .agent.toml"),
+    f("Budgets", "resources.show_session_windows", "Testfenster der Sitzungen zeigen", B, "Windows: aus = Sitzungen, Builds und Tests laufen auf einem versteckten Desktop, ihre Fenster erscheinen nie"),
     f("Labels", "labels.task", "Task-Label", T, ""),
     f("Labels", "labels.pr", "Label für Coder-PRs", T, "Leer = keines"),
     f("Labels", "labels.running", "In Arbeit", T, ""),

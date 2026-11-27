@@ -80,6 +80,38 @@ Free RAM is `MemAvailable` (Linux) or `GlobalMemoryStatusEx` (Windows); on other
 the guard is off. It reacts to the whole machine, so memory used by other programs also
 stops agent work; that is intended.
 
+## Hidden desktop (Windows)
+
+Sessions run the repos' tests, and GUI tests (Tk, WPF, Avalonia …) open real windows. On
+Windows these used to pop up on the user's screen and take the focus; CI runs them under
+an invisible display (xvfb). `team_core::desktop` is the Windows counterpart: Claude/Codex
+sessions, the test gate and QA commands start on a desktop of their own
+(`LunimaAgentSessions` in the user's window station) that is never switched to. Windows
+and GDI work there as usual, and everything a session starts inherits that desktop.
+
+- The agent binary is its own launcher (`lunima-team-agent __on-hidden-desktop <program>
+  <args …>`): it starts itself again on the hidden desktop with the same command line,
+  and that second stage runs the program exactly as the agent would have (`.cmd` CLIs,
+  quoting). A timeout or the memory guard still kills the whole tree.
+- Hidden: Claude/Codex sessions and the projects' `build_cmd`/`test_cmd`/`ui_test_cmd`
+  (`shell::run_shell_hidden`). Every other shell command stays on the user's desktop, in
+  particular the UX review and the PO's `customer_command`: their testers drive the app
+  through screenshots and input, and input (`SendInput`) is refused on the hidden desktop.
+- Screen grabs (`PIL.ImageGrab`) fail on the hidden desktop; `PrintWindow` works.
+- Nobody can answer a dialog there: a modal dialog (assert, error report, a Git
+  Credential Manager login) blocks until the inactivity or session timeout kills the tree,
+  and a GUI program started detached (`start`, `Start-Process`) outside that tree lives on
+  invisibly until it exits or is ended in the Task Manager.
+- The agent's own git commands (commit, push) are not wrapped: a repo hook that runs GUI
+  tests would still show its windows.
+- If the desktop cannot be created, the program runs visibly as before (stderr says why).
+- `lunima-team-agent __desktop-name` prints the desktop a process runs on.
+
+```toml
+[resources]
+show_session_windows = false   # true = windows appear on screen as before
+```
+
 ## Team chat and memory
 
 Max talks to every role in the Control Center (Team page); the roles talk to each other.
